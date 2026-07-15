@@ -1,0 +1,96 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Quantization"
+level: expert
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "quantization"
+estReadTime: 11
+resources:
+  - type: article
+    title: "AWQ: Activation-aware Weight Quantization"
+    url: "https://arxiv.org/abs/2306.00978"
+  - type: article
+    title: "LLM.int8(): 8-bit Matrix Multiplication for Transformers"
+    url: "https://arxiv.org/abs/2208.07339"
+---
+
+## Where accuracy breaks first: outliers
+
+Naive uniform quantization assumes weight/activation values are roughly evenly
+distributed across a range. Real transformer activations aren't: a small number of
+"outlier" feature dimensions (often tied to specific attention heads or residual
+stream directions) have magnitudes 10-100x larger than the rest, especially in models
+above a few billion parameters. If you quantize the whole tensor to one shared
+scale, those outliers force the scale to be huge, which crushes the resolution
+available for every other, well-behaved value to near-zero — that's precisely why
+naive INT4 quantization can silently wreck specific layers (often early layers or
+specific attention projections) while leaving others fine. This is the core problem
+smarter schemes are built to solve:
+
+- **LLM.int8()** isolates outlier feature dimensions and keeps *those* in FP16 while
+  quantizing the rest to INT8 — a mixed-precision decomposition rather than one scale
+  for everything.
+- **GPTQ** quantizes weights layer-by-layer, greedily correcting the rounding error
+  in each weight by adjusting the weights not yet quantized, using second-order
+  (Hessian) information — an approximation of "the weight update that minimizes
+  output error," not just nearest-value rounding.
+- **AWQ** observes that a small percentage of weights are disproportionately
+  important (correlated with the same activation outliers), and protects that slice
+  with higher effective precision (via per-channel scaling) rather than treating all
+  weights as equally sensitive.
+- **GGUF k-quants** (used by llama.cpp/Ollama, e.g. `Q4_K_M`) use structured
+  block-wise mixed precision — different layers/tensors get different bit-widths
+  within one file — tuned empirically for a good quality/size trade-off.
+
+## Per-channel vs per-tensor quantization
+
+**Per-tensor**: one scale and zero-point for an entire weight matrix — simplest,
+fastest, but forces every value in the tensor through the same resolution, which is
+exactly what breaks under outliers. **Per-channel** (or per-group, quantizing in
+small blocks of e.g. 128 weights along a dimension): each channel/group gets its own
+scale, so a channel with naturally larger magnitudes doesn't degrade the resolution of
+neighboring channels. Per-channel/per-group is standard in modern quantization
+methods (GPTQ, AWQ both use group-wise quantization, typically group size 128) because
+the accuracy cost of per-tensor quantization at INT4 is usually unacceptable, while
+the extra scale/zero-point storage overhead is small (a handful of extra floats per
+group, not per weight).
+
+## Memory savings vs throughput: not the same win
+
+Quantization's memory win is straightforward — fewer bytes stored, fewer bytes moved
+from HBM to compute. Its throughput win is not automatic. If the compute path
+dequantizes each weight back to FP16/BF16 before the matmul (common with naive
+implementations), you've added a dequantization step on every forward pass — you can
+end up **slower** than FP16 despite using less memory, because you've added compute
+overhead without a corresponding compute reduction. Getting an actual speedup requires
+fused kernels that perform the matmul directly against quantized weights (e.g.
+Marlin/ExLlama kernels for GPTQ, AWQ's fused kernels), so the dequantization is folded
+into the same kernel launch rather than being a separate memory-bound pass. This is
+why "quantized model" and "faster model" are related but distinct claims — check
+whether the serving stack actually uses fused low-bit kernels before assuming a
+latency win, not just a memory one.
+
+## Comparison: precision/scheme trade-offs
+
+| Scheme | Memory savings vs FP16 | Accuracy loss | Kernel/hardware support maturity |
+|---|---|---|---|
+| BF16/FP16 (baseline) | — | — | Universal, fully mature |
+| INT8 (LLM.int8() / bitsandbytes) | ~2x | Minimal | Mature, decent kernel support |
+| INT4 naive round-to-nearest | ~4x | Noticeable, outlier-sensitive | Widely supported but suboptimal accuracy |
+| GPTQ (INT4, group-wise) | ~4x | Small with calibration | Mature; needs GPTQ-aware kernels (Marlin/ExLlama) for speed |
+| AWQ (INT4, activation-aware) | ~4x | Small, often better than GPTQ at same bit-width | Mature; fused kernels in vLLM/TGI |
+| GGUF k-quants (Q4_K_M etc.) | ~3.5-4.5x (varies by quant type) | Small-moderate, tuned empirically | Mature within llama.cpp ecosystem; less used in data-center serving stacks |
+
+## Production decision: which precision, and why
+
+INT8 is close to a free lunch for most models and is a reasonable default when GPU
+memory is merely tight rather than severely constrained. INT4 is where the real
+trade-off decisions live: naive INT4 is rarely worth the accuracy risk in production
+when GPTQ/AWQ exist and cost little extra effort; GGUF k-quants dominate local/edge
+deployment (llama.cpp/Ollama ecosystem) but see less use in high-throughput data-center
+serving, where vLLM/TensorRT-LLM's GPTQ/AWQ-fused-kernel paths are more battle-tested.
+The practical workflow at any bit-width below FP16 is the same: quantize, then
+validate against task-specific eval sets (not just perplexity, which can look fine
+while specific capabilities — instruction-following, tool-calling JSON accuracy,
+long-context retrieval — degrade disproportionately) before shipping.

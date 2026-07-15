@@ -1,0 +1,59 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Partial Derivatives"
+level: expert
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "partial-derivatives"
+estReadTime: 10
+resources:
+  - type: article
+    title: "CS231n — Backpropagation notes (Jacobians)"
+    url: "https://cs231n.github.io/optimization-2/"
+---
+
+## Vector-Jacobian products: why backprop never materializes a full Jacobian
+
+For a layer mapping a 4096-dim input to a 4096-dim output, the full Jacobian is
+4096×4096 — over 16 million entries, per layer, per example. Reverse-mode autodiff
+never actually constructs this matrix. Instead, it computes **vector-Jacobian
+products** (`vᵀJ`, where `v` is the upstream gradient) directly, exploiting the fact
+that each layer's backward function can be written to produce this product without
+ever forming `J` explicitly. This is the actual computational trick that makes
+training billion-parameter models tractable — the abstraction "compute the Jacobian,
+then multiply" is correct mathematically but would be catastrophically wasteful to
+implement literally, and no real framework does.
+
+## Partial derivatives through control flow and dynamic graphs
+
+PyTorch's define-by-run autograd builds the computation graph dynamically during the
+forward pass, meaning partial derivatives can be computed correctly even through
+Python control flow (`if` statements, loops with data-dependent iteration counts) —
+each execution builds a fresh graph reflecting exactly what operations ran. This is
+architecturally different from static-graph frameworks (early TensorFlow), which
+required control flow to be expressed via special graph ops (`tf.cond`, `tf.while_loop`)
+precisely because a static graph must represent every possible execution path ahead
+of time, not just the one actually taken.
+
+## Mixed partial derivatives and Clairaut's theorem
+
+For well-behaved (continuously differentiable) functions, mixed partial derivatives
+commute: `∂²f/∂x∂y = ∂²f/∂y∂x`. This symmetry underlies the Hessian being a symmetric
+matrix for such functions, which in turn guarantees real eigenvalues (useful for
+curvature analysis at a critical point). It breaks down for functions with
+discontinuous derivatives — a reminder that the clean intuitions from smooth calculus
+don't automatically transfer to functions with kinks, like ReLU at exactly zero, where
+the gradient is technically undefined (frameworks pick a subgradient convention,
+usually 0, and this ambiguity is a real, if minor, source of non-determinism in
+edge-case gradient computations).
+
+## Sparse and structured Jacobians in practice
+
+Many operations have Jacobians with exploitable structure rather than being dense: an
+elementwise activation function's Jacobian is diagonal (each output only depends on
+its corresponding input), and a convolution's Jacobian is a sparse, highly structured
+Toeplitz-like matrix reflecting weight sharing across spatial positions. Production
+autodiff engines special-case these operations with hand-written, structure-aware
+backward passes rather than falling back to a generic dense Jacobian computation —
+this is a large part of why op-level backward implementations exist in frameworks
+rather than deriving everything from a single generic autodiff rule.

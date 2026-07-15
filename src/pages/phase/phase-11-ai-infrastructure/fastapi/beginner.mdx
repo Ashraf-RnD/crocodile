@@ -1,0 +1,85 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "FastAPI"
+level: beginner
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "fastapi"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "FastAPI — official documentation"
+    url: "https://fastapi.tiangolo.com/"
+---
+
+## A front door for your model
+
+A trained model sitting in a Python script isn't useful to anyone else — a mobile
+app, a web frontend, or another service can't `import` your Python code directly.
+**FastAPI** is a Python web framework built specifically to expose functions
+(like "run this input through my model") as an HTTP API, with automatic request
+validation and interactive docs generated for free. It's become the default choice
+for wrapping ML/LLM models in production because it's fast, has first-class async
+support for the I/O-heavy work LLM calls involve, and uses plain Python type hints
+to validate requests instead of hand-written parsing code.
+
+## A minimal model-serving API
+
+```python
+# app.py
+from fastapi import FastAPI
+from pydantic import BaseModel
+
+app = FastAPI()
+
+class PredictRequest(BaseModel):
+    prompt: str
+    max_tokens: int = 100
+
+class PredictResponse(BaseModel):
+    completion: str
+
+def run_model(prompt: str, max_tokens: int) -> str:
+    # stand-in for a real model call
+    return f"[echo, {max_tokens} tokens max] {prompt}"
+
+@app.post("/predict", response_model=PredictResponse)
+def predict(request: PredictRequest) -> PredictResponse:
+    completion = run_model(request.prompt, request.max_tokens)
+    return PredictResponse(completion=completion)
+```
+
+Run it with:
+
+```bash
+uvicorn app:app --reload
+```
+
+`--reload` restarts the server whenever you save the file — useful for
+development, never used in production. Visit `http://127.0.0.1:8000/docs` and
+FastAPI has already built you an interactive testing UI, generated straight from
+the `PredictRequest`/`PredictResponse` type hints.
+
+## Why the `BaseModel` classes matter
+
+`PredictRequest` isn't just documentation — FastAPI actually validates incoming
+JSON against it before your function ever runs. Send `{"prompt": 123}` (a number
+instead of a string) and FastAPI rejects it with a 422 error automatically,
+without you writing a single `if` statement. This is the biggest practical win
+over a bare framework like Flask: validation, serialization, and docs all come
+from the same type hints you'd want to write anyway.
+
+## Try it yourself
+
+A client sends `POST /predict` with body `{"max_tokens": 50}` — no `prompt` field.
+What will FastAPI do, and why, given the `PredictRequest` model above?
+
+<details>
+<summary>Solution</summary>
+
+FastAPI returns a 422 Unprocessable Entity error automatically, without your
+`predict` function ever executing. `prompt: str` has no default value in
+`PredictRequest`, which makes it a required field — only `max_tokens: int = 100`
+is optional. This is exactly the kind of validation you'd otherwise have to write
+by hand with manual `if "prompt" not in body` checks.
+</details>

@@ -1,0 +1,103 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Pandas"
+level: intermediate
+phaseSlug: "phase-01-python-for-ai"
+phaseName: "Python for AI"
+topicSlug: "pandas"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "pandas — Group by: split-apply-combine"
+    url: "https://pandas.pydata.org/docs/user_guide/groupby.html"
+  - type: article
+    title: "Real Python — pandas Merge, Join, and Concatenate"
+    url: "https://realpython.com/pandas-merge-join-and-concat/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Preparing real data for a model
+
+Raw data is rarely model-ready. A typical preprocessing pass before training —
+cleaning nulls, engineering features, aggregating, joining reference tables — is
+almost entirely pandas work, and the same handful of operations cover 90% of it.
+
+## `groupby`: split-apply-combine
+
+This is the single most-used pattern for feature engineering: group rows by some
+key, compute a statistic per group, and use it as a feature.
+
+```python
+import pandas as pd
+
+orders = pd.DataFrame({
+    "customer_id": [1, 1, 2, 2, 3],
+    "amount": [50, 30, 100, 20, 75],
+})
+
+# Average order amount per customer — a classic engineered feature
+customer_avg = orders.groupby("customer_id")["amount"].mean()
+print(customer_avg)
+# customer_id
+# 1    40.0
+# 2    60.0
+# 3    75.0
+
+# Multiple aggregations at once
+summary = orders.groupby("customer_id")["amount"].agg(["mean", "sum", "count"])
+```
+
+<Mermaid client:visible code={`flowchart LR
+  Raw["Raw rows"] -->|"groupby(key)"| Split["Split into groups"]
+  Split -->|"agg(mean/sum/...)"| Apply["Apply per group"]
+  Apply -->|combine| Result["One row per group"]`} />
+
+## Merging tables — the SQL JOIN of pandas
+
+Real datasets are usually split across tables (a `users` table, an `orders` table).
+`merge` combines them, and the `how` parameter controls exactly which rows survive —
+this is the pandas equivalent of SQL's `INNER`/`LEFT`/`OUTER JOIN`.
+
+```python
+users = pd.DataFrame({"user_id": [1, 2, 3], "country": ["US", "UK", "US"]})
+orders = pd.DataFrame({"user_id": [1, 1, 2], "amount": [50, 30, 100]})
+
+merged = orders.merge(users, on="user_id", how="left")
+#    user_id  amount country
+# 0        1      50      US
+# 1        1      30      US
+# 2        2     100      UK
+```
+
+`how="left"` keeps every row from `orders` even if there's no matching user;
+`how="inner"` (the default) drops unmatched rows entirely — picking the wrong one
+silently drops or duplicates data, so always check `len(merged)` against what you
+expect after a join.
+
+## Cleaning: nulls and dtypes
+
+```python
+df.isna().sum()                       # count of missing values per column
+df["age"] = df["age"].fillna(df["age"].median())   # impute with median
+df = df.dropna(subset=["email"])      # drop rows missing a required field
+df["signup_date"] = pd.to_datetime(df["signup_date"])  # parse dates properly
+```
+
+## `apply` — and why to avoid it when you can
+
+`apply` runs a Python function row-by-row or element-by-element. It's flexible but
+loses vectorization, so it's meaningfully slower than a built-in pandas/NumPy
+operation on large data.
+
+```python
+# Works, but slow on large DataFrames — Python-level loop under the hood
+df["price_category"] = df["price"].apply(lambda p: "high" if p > 100 else "low")
+
+# Faster: vectorized with np.where, no per-row Python call
+import numpy as np
+df["price_category"] = np.where(df["price"] > 100, "high", "low")
+```
+
+Reach for `apply` when the logic genuinely can't be vectorized (complex conditional
+branching, calling an external function per row); prefer vectorized operations or
+`pd.cut`/`np.select` for anything expressible as a condition on a column.

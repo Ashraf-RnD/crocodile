@@ -1,0 +1,108 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "LoRA"
+level: intermediate
+phaseSlug: "phase-14-research-literacy"
+phaseName: "Research Literacy"
+topicSlug: "lora"
+estReadTime: 10
+resources:
+  - type: article
+    title: "LoRA: Low-Rank Adaptation of Large Language Models (original paper)"
+    url: "https://arxiv.org/abs/2106.09685"
+  - type: docs
+    title: "Hugging Face PEFT — LoRA config reference"
+    url: "https://huggingface.co/docs/peft/package_reference/lora"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+_This lesson covers the LoRA paper's mechanism and design decisions. For a
+practical fine-tuning walkthrough, see Phase 10: Fine-tuning._
+
+## The low-rank decomposition
+
+For a frozen pretrained weight matrix `W0` (shape `d x k`), LoRA represents the
+task-specific update `ΔW` as a product of two much smaller matrices:
+
+```
+ΔW = B A
+```
+
+where `B` has shape `d x r`, `A` has shape `r x k`, and the rank `r` is
+deliberately tiny — often 4, 8, or 16, versus `d`/`k` values in the thousands.
+The forward pass becomes:
+
+```
+h = W0 x + ΔW x = W0 x + B A x
+```
+
+`A` is initialized with small random values and `B` is initialized to **zero**,
+so `ΔW = 0` at the start of training — the model behaves exactly like the
+original pretrained model before any updates happen, avoiding a jarring initial
+disruption. A scaling factor `α/r` controls how much influence the update has,
+letting you tune the adapter's effective learning rate independent of `r`.
+
+```python
+import torch
+import torch.nn as nn
+
+class LoRALinear(nn.Module):
+    def __init__(self, base_layer: nn.Linear, r=8, alpha=16):
+        super().__init__()
+        self.base_layer = base_layer
+        for p in self.base_layer.parameters():
+            p.requires_grad = False          # freeze the pretrained weight
+
+        d_out, d_in = base_layer.weight.shape
+        self.A = nn.Parameter(torch.randn(r, d_in) * 0.01)
+        self.B = nn.Parameter(torch.zeros(d_out, r))  # zero init -> ΔW = 0
+        self.scaling = alpha / r
+
+    def forward(self, x):
+        base_out = self.base_layer(x)
+        lora_out = (x @ self.A.T) @ self.B.T
+        return base_out + self.scaling * lora_out
+```
+
+Only `A` and `B` (a few hundred thousand to a few million parameters, typically)
+receive gradient updates — `W0` never moves, so the optimizer state (e.g.
+Adam's `m`/`v`) only needs to be stored for the tiny adapter matrices, not the
+full model.
+
+<Mermaid client:visible code={`flowchart LR
+  X["input x"] --> W0["Frozen pretrained W0 (d x k)"]
+  X --> A["Trainable A (r x k), r << d,k"]
+  A --> B["Trainable B (d x r)"]
+  W0 --> Sum["+"]
+  B --> Sum
+  Sum --> H["output h"]`} />
+
+## Where LoRA is applied
+
+The original paper applies LoRA specifically to the **query and value
+projection matrices** in each Transformer attention layer, finding this gave
+the best quality-to-parameter trade-off among the layers tested — though later
+practice commonly extends it to key/output projections and feed-forward layers
+too, trading a larger adapter footprint for more headroom.
+
+## Merging back for zero-latency inference
+
+Because `ΔW = BA` is just a matrix, it can be **added directly into `W0`**
+after training completes:
+
+```python
+merged_weight = W0 + (alpha / r) * (B @ A)
+```
+
+Once merged, the model is architecturally identical to a fully fine-tuned
+model — no extra matrix multiplication, no added inference latency — which is
+what distinguishes LoRA from adapter methods that leave extra layers in the
+forward pass permanently.
+
+## Rank as the key hyperparameter
+
+Higher `r` gives the adapter more capacity to represent complex updates but
+increases trainable parameters and storage per task; the paper's central
+empirical finding is that even very small ranks (`r=1` to `r=8`) recover most
+of full fine-tuning's quality on the tasks tested, suggesting the "intrinsic
+rank" of the needed update is genuinely low for many adaptation tasks.

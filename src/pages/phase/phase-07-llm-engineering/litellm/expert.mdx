@@ -1,0 +1,105 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "LiteLLM"
+level: expert
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "litellm"
+estReadTime: 11
+resources:
+  - type: docs
+    title: "LiteLLM Proxy — Virtual Keys and Budgets"
+    url: "https://docs.litellm.ai/docs/proxy/virtual_keys"
+  - type: docs
+    title: "LiteLLM — Router Load Balancing Strategies"
+    url: "https://docs.litellm.ai/docs/routing#advanced---routing-strategies"
+---
+
+## Abstraction leakage: the real cost of a unified interface
+
+LiteLLM's normalization is genuinely useful but not lossless — provider-specific
+capabilities (Anthropic's explicit prompt-caching `cache_control` blocks, OpenAI's
+`strict` structured-output mode, provider-specific reasoning-effort parameters) don't
+map cleanly onto a single unified schema. LiteLLM exposes these via
+`extra_body`/provider-specific passthrough parameters, but using them means your code
+is no longer fully provider-agnostic despite going through a unified interface — a
+reminder that any abstraction over genuinely different underlying systems has to
+choose between hiding differences (simpler code, lowest-common-denominator
+capability) or exposing them (full capability access, less portability). Production
+systems that need a specific provider's advanced feature end up with provider-specific
+branches even behind LiteLLM's unified surface — the abstraction reduces but doesn't
+eliminate this.
+
+## Routing strategy selection is a reliability decision, not just cost
+
+LiteLLM's Router supports multiple load-balancing strategies, and the choice matters
+for production reliability characteristics, not just average cost:
+
+- **`simple-shuffle`** — random distribution across configured deployments; simplest,
+  but doesn't account for actual latency or error rates per deployment.
+- **`least-busy`** — routes to whichever deployment currently has the fewest
+  in-flight requests; better utilization under uneven load.
+- **`latency-based`** — actively tracks per-deployment response latency and biases
+  routing toward faster-responding deployments, adapting to a provider having a slow
+  period without manual intervention.
+- **`usage-based`** — routes to stay under per-deployment rate/token limits, useful
+  when you have multiple API keys or regional deployments each with separate quota.
+
+Choosing `simple-shuffle` for a latency-sensitive production path when a
+`latency-based` strategy is available is a real, measurable reliability gap — the
+router has the information to route around a degrading provider, but only if
+configured to use it.
+
+## Multi-tenant governance via the Proxy: virtual keys and budgets
+
+At organizational scale, the LiteLLM Proxy's virtual key system addresses a real
+governance problem: multiple teams/services sharing underlying provider credentials
+need per-team cost attribution and spend limits without each team holding the actual
+provider API key (a credential-sprawl and blast-radius concern — a leaked shared key
+compromises everyone; a leaked virtual key is scoped and revocable independently).
+
+```python
+# Admin creates a scoped virtual key with a hard budget
+import requests
+requests.post("http://localhost:4000/key/generate", json={
+    "models": ["gpt-4o-mini", "claude-sonnet"],
+    "max_budget": 50.0,       # hard USD cap
+    "budget_duration": "30d",
+    "team_id": "research-team",
+})
+```
+
+This turns "which team is burning through our OpenAI budget" from a manual billing
+reconciliation exercise into a queryable, enforced-at-request-time property of the
+gateway — the kind of control that matters once more than a couple of teams share
+provider spend.
+
+## The gateway pattern's own reliability implications
+
+Centralizing all LLM traffic through a proxy (whether LiteLLM's or a custom
+equivalent) introduces a new single point of failure and a new latency hop that
+didn't exist when services called providers directly — the proxy itself now needs the
+operational rigor (health checks, horizontal scaling, its own fallback/redundancy)
+you'd apply to any critical piece of shared infrastructure. This is the standard
+API-gateway trade-off applied to LLM traffic specifically: centralized governance and
+observability, purchased at the cost of a new dependency every request now passes
+through.
+
+## Trade-offs: LiteLLM vs. direct multi-provider SDK usage vs. framework-native multi-provider support
+
+| Approach | Provider portability | Operational features (routing, budgets, caching) | Added latency/complexity |
+|---|---|---|---|
+| Direct SDK per provider, manual switch logic | Requires custom code per provider | None built in — you build it | Lowest — no extra hop |
+| LiteLLM `completion()` (library, no proxy) | High — unified interface | Router-level fallback/load-balancing available in-process | Minimal — in-process |
+| LiteLLM Proxy (standalone gateway) | Highest — any client speaking OpenAI format works | Full: budgets, virtual keys, centralized routing/caching | Extra network hop; proxy becomes critical infrastructure |
+| Framework-native multi-provider (LangChain's `init_chat_model`, etc.) | Good within that framework's ecosystem | Limited — typically no built-in budget/governance layer | Tied to adopting that framework |
+
+## When not to reach for LiteLLM
+
+A single-provider application with no near-term multi-provider or governance
+requirement doesn't benefit from the abstraction — it adds a dependency and a layer
+of indirection for portability you're not using yet. Introduce LiteLLM (or any
+provider-abstraction layer) when there's a concrete driver: an actual fallback
+requirement for reliability, active cost comparison across providers, or
+multi-team governance needs — not preemptively, on the assumption you might switch
+providers someday.

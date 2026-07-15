@@ -1,0 +1,93 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "DVC"
+level: expert
+phaseSlug: "phase-12-mlops"
+phaseName: "MLOps"
+topicSlug: "dvc"
+estReadTime: 11
+resources:
+  - type: docs
+    title: "DVC — Data Registry Pattern"
+    url: "https://dvc.org/doc/use-cases/data-registry"
+  - type: article
+    title: "DVC vs. Git LFS vs. lakeFS — data versioning comparison"
+    url: "https://lakefs.io/blog/dvc-vs-git-lfs-vs-lakefs/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Content-addressed storage and its implications
+
+DVC's cache is content-addressed: files are stored by MD5 hash, so two
+datasets with identical content share one cached copy regardless of how many
+`.dvc` pointer files reference them. This has real consequences at scale:
+
+- **Deduplication is automatic but silent** — if a data engineer accidentally
+  regenerates a dataset that's byte-identical to a previous version, DVC
+  won't create a new cache entry, which is efficient but can mask a bug
+  where a "new" dataset generation step produced no actual change.
+- **Cache growth is unbounded by default** — `dvc gc` (garbage collect) must
+  be run deliberately to remove cache entries no longer referenced by any Git
+  branch/tag; teams that never run it accumulate every historical version of
+  every dataset forever, which is expensive for multi-GB files.
+- **Hashing large files is not free** — `dvc add` on a 50GB file computes a
+  full MD5 hash before caching, which is CPU/IO-bound and can meaningfully
+  slow down a CI pipeline that adds large artifacts on every run; teams
+  sometimes cache hashes across CI runs to avoid rehashing unchanged files.
+
+## The pipeline DAG cache invalidation model
+
+`dvc repro`'s skip-if-unchanged behavior hashes each stage's declared `deps`
+and compares against the last successful run recorded in `dvc.lock`. This is
+powerful but has a sharp edge: **only declared dependencies are tracked**. A
+training script that reads an undeclared environment variable, an
+un-pinned pip package version, or a hidden file not listed in `deps` can
+silently produce different output without triggering a rerun — DVC's
+reproducibility guarantee is only as strong as how completely the pipeline
+author declared its true inputs. This is analogous to Makefile correctness
+bugs from missing dependency edges, and the mitigation is the same:
+be exhaustive about `deps`, and treat environment/dependency pinning
+(`requirements.txt` with exact versions, or a lockfile) as part of the
+pipeline's dependency graph, not something DVC tracks for you.
+
+<Mermaid client:visible code={`flowchart TB
+  A["train.py changes"] -->|declared dep| B["dvc repro reruns train stage"]
+  C["Undeclared: env var / untracked config file changes"] -.NOT detected.-> D["dvc repro thinks nothing changed"]
+  D --> E["Stale model silently reused — false reproducibility"]`} />
+
+## DVC vs. lakeFS / Delta Lake for large-scale data versioning
+
+DVC's Git-pointer model works well up to moderate scale (thousands of files,
+individual datasets in the tens of GB) but starts to strain at data-lake
+scale:
+
+- **DVC**: file-level versioning, Git-native workflow, no query engine —
+  good fit for ML training datasets checked out as flat files
+- **lakeFS**: Git-like branching *at the object-storage layer itself* (S3/GCS),
+  designed for petabyte-scale lakes with many consumers, doesn't require
+  cloning a Git repo to access data
+- **Delta Lake / Apache Iceberg**: table-format versioning with ACID
+  transactions and time travel, optimized for structured/tabular data
+  queried by Spark/Trino rather than "downloaded as files" — different
+  consumption model entirely
+
+Choosing between these is really a question of consumption pattern: if data
+scientists check out flat files into a Python training script, DVC's model
+fits naturally. If dozens of pipelines query a shared, constantly-updated
+data lake with SQL, DVC's file-pointer model doesn't map well to that access
+pattern, and a table-format solution is the better fit.
+
+## Trade-off summary
+
+| Concern | DVC | Git LFS | lakeFS / Delta Lake |
+|---|---|---|---|
+| Mental model | Git pointers to content-addressed cache | Git pointers to LFS server | Git-like branching on object storage / table format |
+| Pipeline DAG + reproducibility | Built-in (`dvc.yaml`, `dvc repro`) | None | None (Delta Lake has time travel, not DAG orchestration) |
+| Scale sweet spot | GBs–low TBs, file-based datasets | Any size, but no ML-specific features | Petabyte-scale lakes, many consumers |
+| Query engine integration | None — plain files | None | Native (Spark, Trino, Presto) |
+| Storage backend | S3/GCS/Azure/local, any of many | Git server-specific (GitHub/GitLab LFS) | Object storage, tightly integrated |
+
+Most production ML teams that outgrow DVC don't replace it outright — they
+keep DVC for reproducible training pipelines checked out as files, while a
+separate data platform (lakeFS/Delta/Iceberg) owns the upstream data lake
+those training datasets are extracted from.

@@ -1,0 +1,88 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "MCP"
+level: expert
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "mcp"
+estReadTime: 12
+resources:
+  - type: docs
+    title: "MCP Specification — Authorization"
+    url: "https://modelcontextprotocol.io/specification/draft/basic/authorization"
+  - type: article
+    title: "Simon Willison — MCP Security Considerations"
+    url: "https://simonwillison.net/2025/Apr/9/mcp-prompt-injection/"
+---
+
+## MCP is a protocol boundary, not a trust boundary — and that's the core risk
+
+MCP standardizes *how* a client discovers and invokes a server's capabilities; it says
+nothing about whether the server, or the data it returns, is trustworthy. This
+distinction is the source of most real MCP security incidents: a server's tool
+descriptions and returned data flow directly into the model's context, and the model
+cannot reliably distinguish "instructions from my developer" from "text that happens
+to look like instructions, embedded in a tool's output." A malicious or compromised
+MCP server can smuggle prompt-injection payloads into tool descriptions themselves
+(read once, at discovery time) or into tool results (read on every call) — both are
+live attack surfaces documented in early real-world MCP exploits.
+
+## Tool poisoning and the confused deputy problem
+
+Because tool *descriptions* are provided by the server and typically trusted at face
+value by the client/model, a malicious server can write a tool description that
+instructs the model to also exfiltrate data via a *different, legitimate* tool the
+host has access to — a classic confused-deputy pattern, but automated. Mitigations
+that matter in practice:
+
+- Pin and review server source/config before connecting, especially for
+  community-published servers — treat an MCP server addition like adding a new
+  production dependency, not a config toggle.
+- Scope host-level permissions per server — a server should only ever be reachable
+  from within the specific conversation/session that needs it, not globally
+  available to every agent in a multi-agent system.
+- Log and diff tool descriptions across connections — a server that silently changes
+  its declared tool descriptions between sessions ("rug pull") is a known attack
+  pattern the protocol itself doesn't prevent.
+
+## Authorization: the OAuth layer for remote servers
+
+Local stdio servers inherit the host process's OS-level permissions implicitly.
+Remote HTTP servers need their own authorization story, and the MCP spec has
+converged on OAuth 2.1-based flows for this: the client obtains a token scoped to the
+specific server and, ideally, specific capabilities — not a blanket credential shared
+across every server the host talks to. Getting this wrong (e.g. a single long-lived
+API key shared across all MCP connections) turns any single compromised server
+integration into a compromise of every other integrated system reachable with that
+key.
+
+## Sampling: servers requesting completions from the client's model
+
+A less-discussed MCP capability is **sampling** — a server can ask the *client's* LLM
+to generate a completion on the server's behalf (useful for a server that needs some
+reasoning done without hosting its own model access/API key). This inverts the usual
+data flow and introduces its own trust question: a host implementing sampling support
+is effectively letting a third-party server consume the user's model quota and
+context. Production hosts that support sampling gate it behind explicit
+per-server opt-in and rate limits, not blanket trust.
+
+## Trade-offs: MCP vs. hand-rolled tool integrations
+
+| Dimension | Hand-rolled per-app integration | MCP |
+|---|---|---|
+| Reusability across apps/frameworks | None — rewritten per app | High — one server, many clients |
+| Trust model | Fully controlled by the integrating team | Depends on third-party server provenance |
+| Latency | Direct in-process call, minimal overhead | Extra JSON-RPC hop (subprocess or network) |
+| Discovery | Static, known at build time | Dynamic (`list_tools` at runtime) — flexible but means tool sets can change under you |
+| Ecosystem leverage | None | Growing ecosystem of pre-built servers (GitHub, Slack, databases, etc.) |
+
+## Operational concerns at scale
+
+Running many MCP servers per agent session multiplies subprocess/connection overhead
+and failure surface — a single unresponsive stdio server can hang tool discovery for
+the whole session unless the host enforces per-server timeouts. Production
+deployments increasingly move from local stdio servers (fine for single-user desktop
+apps) to centrally hosted, load-balanced HTTP MCP servers for multi-user backend
+agent systems, trading local-process simplicity for the usual distributed-systems
+concerns: connection pooling, retries, and independent versioning/rollout of each
+server without redeploying the host application.

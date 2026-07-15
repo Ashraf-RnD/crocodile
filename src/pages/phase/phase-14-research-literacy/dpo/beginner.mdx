@@ -1,0 +1,90 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "DPO"
+level: beginner
+phaseSlug: "phase-14-research-literacy"
+phaseName: "Research Literacy"
+topicSlug: "dpo"
+estReadTime: 7
+resources:
+  - type: article
+    title: "Direct Preference Optimization (original paper)"
+    url: "https://arxiv.org/abs/2305.18290"
+  - type: article
+    title: "Training language models to follow instructions (InstructGPT / RLHF)"
+    url: "https://arxiv.org/abs/2203.02155"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The problem before this paper
+
+_Note: this lesson analyzes the DPO **paper** — what it contributed and how it
+works technically. For a practical how-to guide on running DPO fine-tuning,
+see the DPO lesson under Phase 10: Fine-tuning._
+
+Making a language model helpful and safe usually requires more than just
+predicting the next word — it requires teaching it *which* of several
+plausible responses humans actually prefer. The standard approach,
+**Reinforcement Learning from Human Feedback (RLHF)**, does this in three
+stages: train a separate **reward model** to score responses the way humans
+would, then use a reinforcement learning algorithm (typically PPO) to nudge
+the language model toward generating higher-reward responses. This works, but
+it's notoriously complicated: you need to train and maintain two models
+(the policy and the reward model), the RL training loop is unstable and
+sensitive to hyperparameters, and getting it right required real
+RL expertise that most fine-tuning teams didn't have.
+
+## The core idea, in plain language
+
+DPO's authors made a mathematical observation: the entire RLHF pipeline's
+end goal — a policy that assigns higher probability to preferred responses and
+lower probability to dispreferred ones — can be reached **directly**, using a
+simple classification-style loss on pairs of (preferred, dispreferred)
+responses, with no separate reward model and no reinforcement learning loop at
+all.
+
+A useful analogy: RLHF is like training a chef by first hiring a food critic
+to build a detailed scoring rubric (the reward model), then having the chef
+repeatedly cook dishes and adjust based on the critic's scores through trial
+and error (reinforcement learning) — a slow, indirect feedback loop. DPO is
+like skipping the critic and rubric entirely, and instead directly showing the
+chef pairs of dishes — "diners preferred this one over that one" — letting
+them adjust their technique straight from the comparisons. Same end goal,
+dramatically simpler path to it.
+
+<Mermaid client:visible code={`flowchart TB
+  subgraph RLHF["RLHF (before)"]
+    P1["Preference data"] --> R1["Train reward model"]
+    R1 --> RL["PPO reinforcement learning loop"]
+    RL --> M1["Aligned model"]
+  end
+  subgraph DPO["DPO (this paper)"]
+    P2["Preference data"] --> L2["Direct classification-style loss"]
+    L2 --> M2["Aligned model"]
+  end`} />
+
+## Why it mattered
+
+DPO reaches comparable alignment quality to RLHF on the benchmarks the paper
+tested, using a training setup as simple as ordinary supervised fine-tuning —
+no reward model to train and discard, no unstable RL loop, no extensive
+RL-specific hyperparameter tuning. That simplicity made preference-based
+alignment accessible to far more teams, and DPO (or one of its close variants)
+quickly became the default way open-weight models are aligned to human
+preferences.
+
+## Try it yourself
+
+Can you explain the core idea of this paper in one sentence to a non-technical
+friend?
+
+<details>
+<summary>Solution</summary>
+
+Something like: "Instead of the complicated multi-step process of training a
+separate 'judge' model and then using trial-and-error reinforcement learning to
+satisfy it, this method directly trains the AI on pairs of 'this response was
+preferred over that one' examples — reaching the same goal in one much simpler
+step."
+
+</details>

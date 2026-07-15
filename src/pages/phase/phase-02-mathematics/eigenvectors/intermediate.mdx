@@ -1,0 +1,60 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Eigenvectors"
+level: intermediate
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "eigenvectors"
+estReadTime: 8
+resources:
+  - type: article
+    title: "StatQuest — PCA, step by step"
+    url: "https://www.youtube.com/watch?v=FgakZw6K1QQ"
+---
+
+## Orthogonality for symmetric matrices
+
+For symmetric matrices (like covariance matrices), eigenvectors corresponding to
+different eigenvalues are always **orthogonal** (perpendicular) to each other. This is
+precisely why PCA's principal components are uncorrelated with each other — they're
+literally orthogonal eigenvectors of the covariance matrix, so projecting data onto
+them decorrelates the features by construction.
+
+```python
+import numpy as np
+cov = np.array([[4, 2],
+                 [2, 3]])
+eigvals, eigvecs = np.linalg.eigh(cov)
+# check orthogonality
+print(np.dot(eigvecs[:, 0], eigvecs[:, 1]))  # ~0.0
+```
+
+## Eigenvectors as a change of basis
+
+Multiplying by `V⁻¹` (eigenvector matrix inverse) re-expresses a vector in "eigenbasis"
+coordinates — where the transformation `A` becomes a simple diagonal scaling. This is
+the conceptual heart of why decomposing a problem into eigenvectors simplifies it: a
+complicated coupled system becomes a set of independent 1D scalings, one per
+eigenvector direction.
+
+## PCA reconstruction and information loss
+
+When you keep only the top-k eigenvectors (by eigenvalue magnitude) and discard the
+rest, you're keeping the directions that explain the most variance and dropping the
+directions that explain the least. The fraction of variance retained is:
+
+```python
+explained_variance_ratio = eigvals[-k:].sum() / eigvals.sum()
+```
+
+This number — often reported as "95% of variance explained by 50 components" — is
+exactly why PCA is a *lossy* compression: the discarded eigenvector directions carried
+real (if small) signal, which is now gone.
+
+## Complex eigenvectors
+
+Not every real matrix has real eigenvectors — rotation matrices, for example, have
+complex eigenvalues/eigenvectors, because a pure rotation has no direction that stays
+fixed (every direction rotates). `np.linalg.eig` will return complex numbers in this
+case; if you were expecting real eigenvectors and get complex ones, that's usually a
+sign the matrix represents a rotation or oscillatory dynamic rather than pure scaling.

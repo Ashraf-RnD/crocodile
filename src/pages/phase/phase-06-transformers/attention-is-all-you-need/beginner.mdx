@@ -1,0 +1,77 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Attention Is All You Need"
+level: beginner
+phaseSlug: "phase-06-transformers"
+phaseName: "Transformers"
+topicSlug: "attention-is-all-you-need"
+estReadTime: 6
+resources:
+  - type: article
+    title: "Attention Is All You Need (original paper, Vaswani et al. 2017)"
+    url: "https://arxiv.org/abs/1706.03762"
+  - type: article
+    title: "Jay Alammar — The Illustrated Transformer"
+    url: "https://jalammar.github.io/illustrated-transformer/"
+---
+
+## The paper that started it all
+
+"Attention Is All You Need" (Vaswani et al., 2017) introduced the **Transformer** —
+the architecture behind essentially every major language model today (BERT, GPT,
+T5, and their descendants). Its title is a direct claim: you don't need recurrence
+(RNNs/LSTMs) or convolutions to build state-of-the-art sequence models — attention,
+used correctly, is enough on its own.
+
+### The problem it solved
+
+Before this paper, the best machine translation systems used RNNs or LSTMs, which
+process a sentence one word at a time, in order. This created two real problems:
+
+1. **Slow training** — you can't parallelize across the sequence, since word 5
+   depends on having already processed words 1-4. Training on modern GPUs (which
+   excel at parallel computation) was underutilized.
+2. **Long-range forgetting** — information from early words had to survive many
+   sequential steps to influence later predictions, and in practice it often didn't,
+   especially for long sentences.
+
+The paper's solution: throw away recurrence entirely and use **self-attention**
+(covered in its own lesson) as the core building block. Every word can directly
+"look at" every other word in a single step, regardless of distance, and — crucially
+— this computation can run in parallel across the whole sequence.
+
+### A simplified before/after picture
+
+```
+Before (RNN):  word1 -> word2 -> word3 -> word4 -> word5
+               (must process in order, one at a time)
+
+After (Transformer): word1, word2, word3, word4, word5
+                      (all processed simultaneously; each one
+                       directly attends to every other one)
+```
+
+The paper introduced this via an **encoder-decoder** architecture originally built
+for machine translation: an encoder reads the source sentence (bidirectionally), and
+a decoder generates the translated sentence one word at a time, attending back to
+the encoder's output.
+
+## Try it yourself
+
+Based on what you just read, why would translating a very long sentence (say, 50+
+words) have been especially hard for an RNN-based translation system, and why does
+the Transformer's design directly address that specific weakness?
+
+<details>
+<summary>Solution</summary>
+
+In an RNN, information from word 1 has to pass through 49 sequential processing
+steps to influence how word 50 is translated — at each step some information is
+inevitably lost or distorted, a problem often called "vanishing" long-range
+dependencies. In the Transformer, self-attention lets word 50 directly compute a
+relationship with word 1 in a single operation, regardless of how many words are in
+between — the "path length" between any two words is constant, not proportional to
+sentence length. This is precisely why Transformers handle long sequences more
+robustly than RNNs did.
+
+</details>

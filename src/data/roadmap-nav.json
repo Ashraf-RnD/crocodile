@@ -1,0 +1,956 @@
+{
+  "title": "AI Engineering Roadmap",
+  "targetRole": "Production AI Engineer",
+  "phases": [
+    {
+      "id": 1,
+      "slug": "phase-01-python-for-ai",
+      "name": "Python for AI",
+      "duration": "1 week",
+      "objective": "Learn the Python ecosystem used in AI development.",
+      "topicCount": 8,
+      "topics": [
+        {
+          "slug": "python-advanced",
+          "title": "Python Advanced",
+          "category": null
+        },
+        {
+          "slug": "numpy",
+          "title": "NumPy",
+          "category": null
+        },
+        {
+          "slug": "pandas",
+          "title": "Pandas",
+          "category": null
+        },
+        {
+          "slug": "matplotlib",
+          "title": "Matplotlib",
+          "category": null
+        },
+        {
+          "slug": "jupyter-notebook",
+          "title": "Jupyter Notebook",
+          "category": null
+        },
+        {
+          "slug": "uv",
+          "title": "uv",
+          "category": null
+        },
+        {
+          "slug": "pip",
+          "title": "pip",
+          "category": null
+        },
+        {
+          "slug": "poetry",
+          "title": "Poetry",
+          "category": null
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "slug": "phase-02-mathematics",
+      "name": "Mathematics",
+      "duration": "2-3 weeks",
+      "objective": "Learn only the math required for ML and DL.",
+      "topicCount": 15,
+      "topics": [
+        {
+          "slug": "vectors",
+          "title": "Vectors",
+          "category": "linear_algebra"
+        },
+        {
+          "slug": "matrices",
+          "title": "Matrices",
+          "category": "linear_algebra"
+        },
+        {
+          "slug": "matrix-multiplication",
+          "title": "Matrix Multiplication",
+          "category": "linear_algebra"
+        },
+        {
+          "slug": "eigenvalues",
+          "title": "Eigenvalues",
+          "category": "linear_algebra"
+        },
+        {
+          "slug": "eigenvectors",
+          "title": "Eigenvectors",
+          "category": "linear_algebra"
+        },
+        {
+          "slug": "probability",
+          "title": "Probability",
+          "category": "probability"
+        },
+        {
+          "slug": "conditional-probability",
+          "title": "Conditional Probability",
+          "category": "probability"
+        },
+        {
+          "slug": "bayes-theorem",
+          "title": "Bayes Theorem",
+          "category": "probability"
+        },
+        {
+          "slug": "distributions",
+          "title": "Distributions",
+          "category": "probability"
+        },
+        {
+          "slug": "derivatives",
+          "title": "Derivatives",
+          "category": "calculus"
+        },
+        {
+          "slug": "partial-derivatives",
+          "title": "Partial Derivatives",
+          "category": "calculus"
+        },
+        {
+          "slug": "gradient-descent",
+          "title": "Gradient Descent",
+          "category": "calculus"
+        },
+        {
+          "slug": "sgd",
+          "title": "SGD",
+          "category": "optimization"
+        },
+        {
+          "slug": "momentum",
+          "title": "Momentum",
+          "category": "optimization"
+        },
+        {
+          "slug": "adam",
+          "title": "Adam",
+          "category": "optimization"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "slug": "phase-03-machine-learning",
+      "name": "Machine Learning",
+      "duration": "3 weeks",
+      "objective": null,
+      "topicCount": 14,
+      "topics": [
+        {
+          "slug": "linear-regression",
+          "title": "Linear Regression",
+          "category": "supervised_learning"
+        },
+        {
+          "slug": "logistic-regression",
+          "title": "Logistic Regression",
+          "category": "supervised_learning"
+        },
+        {
+          "slug": "decision-trees",
+          "title": "Decision Trees",
+          "category": "supervised_learning"
+        },
+        {
+          "slug": "random-forest",
+          "title": "Random Forest",
+          "category": "supervised_learning"
+        },
+        {
+          "slug": "xgboost",
+          "title": "XGBoost",
+          "category": "supervised_learning"
+        },
+        {
+          "slug": "k-means",
+          "title": "K-Means",
+          "category": "unsupervised_learning"
+        },
+        {
+          "slug": "dbscan",
+          "title": "DBSCAN",
+          "category": "unsupervised_learning"
+        },
+        {
+          "slug": "pca",
+          "title": "PCA",
+          "category": "unsupervised_learning"
+        },
+        {
+          "slug": "accuracy",
+          "title": "Accuracy",
+          "category": "evaluation"
+        },
+        {
+          "slug": "precision",
+          "title": "Precision",
+          "category": "evaluation"
+        },
+        {
+          "slug": "recall",
+          "title": "Recall",
+          "category": "evaluation"
+        },
+        {
+          "slug": "f1-score",
+          "title": "F1 Score",
+          "category": "evaluation"
+        },
+        {
+          "slug": "roc-auc",
+          "title": "ROC-AUC",
+          "category": "evaluation"
+        },
+        {
+          "slug": "confusion-matrix",
+          "title": "Confusion Matrix",
+          "category": "evaluation"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "slug": "phase-04-deep-learning",
+      "name": "Deep Learning",
+      "duration": "4 weeks",
+      "objective": null,
+      "topicCount": 11,
+      "topics": [
+        {
+          "slug": "tensors",
+          "title": "Tensors",
+          "category": "fundamentals"
+        },
+        {
+          "slug": "gpu-computing",
+          "title": "GPU Computing",
+          "category": "fundamentals"
+        },
+        {
+          "slug": "autograd",
+          "title": "Autograd",
+          "category": "fundamentals"
+        },
+        {
+          "slug": "backpropagation",
+          "title": "Backpropagation",
+          "category": "fundamentals"
+        },
+        {
+          "slug": "dense-networks",
+          "title": "Dense Networks",
+          "category": "neural_networks"
+        },
+        {
+          "slug": "cnn",
+          "title": "CNN",
+          "category": "neural_networks"
+        },
+        {
+          "slug": "rnn",
+          "title": "RNN",
+          "category": "neural_networks"
+        },
+        {
+          "slug": "lstm",
+          "title": "LSTM",
+          "category": "neural_networks"
+        },
+        {
+          "slug": "gru",
+          "title": "GRU",
+          "category": "neural_networks"
+        },
+        {
+          "slug": "batch-normalization",
+          "title": "Batch Normalization",
+          "category": "regularization"
+        },
+        {
+          "slug": "dropout",
+          "title": "Dropout",
+          "category": "regularization"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "slug": "phase-05-natural-language-processing",
+      "name": "Natural Language Processing",
+      "duration": "2 weeks",
+      "objective": null,
+      "topicCount": 8,
+      "topics": [
+        {
+          "slug": "tokenization",
+          "title": "Tokenization",
+          "category": null
+        },
+        {
+          "slug": "text-cleaning",
+          "title": "Text Cleaning",
+          "category": null
+        },
+        {
+          "slug": "word2vec",
+          "title": "Word2Vec",
+          "category": null
+        },
+        {
+          "slug": "fasttext",
+          "title": "FastText",
+          "category": null
+        },
+        {
+          "slug": "bpe",
+          "title": "BPE",
+          "category": null
+        },
+        {
+          "slug": "sentence-embeddings",
+          "title": "Sentence Embeddings",
+          "category": null
+        },
+        {
+          "slug": "hugging-face-transformers",
+          "title": "Hugging Face Transformers",
+          "category": "libraries"
+        },
+        {
+          "slug": "spacy",
+          "title": "spaCy",
+          "category": "libraries"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "slug": "phase-06-transformers",
+      "name": "Transformers",
+      "duration": "3 weeks",
+      "objective": null,
+      "topicCount": 12,
+      "topics": [
+        {
+          "slug": "attention",
+          "title": "Attention",
+          "category": null
+        },
+        {
+          "slug": "self-attention",
+          "title": "Self-Attention",
+          "category": null
+        },
+        {
+          "slug": "multi-head-attention",
+          "title": "Multi-Head Attention",
+          "category": null
+        },
+        {
+          "slug": "positional-encoding",
+          "title": "Positional Encoding",
+          "category": null
+        },
+        {
+          "slug": "encoder",
+          "title": "Encoder",
+          "category": null
+        },
+        {
+          "slug": "decoder",
+          "title": "Decoder",
+          "category": null
+        },
+        {
+          "slug": "bert",
+          "title": "BERT",
+          "category": null
+        },
+        {
+          "slug": "gpt",
+          "title": "GPT",
+          "category": null
+        },
+        {
+          "slug": "t5",
+          "title": "T5",
+          "category": null
+        },
+        {
+          "slug": "attention-is-all-you-need",
+          "title": "Attention Is All You Need",
+          "category": "papers"
+        },
+        {
+          "slug": "bert-2",
+          "title": "BERT",
+          "category": "papers"
+        },
+        {
+          "slug": "gpt-2",
+          "title": "GPT-2",
+          "category": "papers"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "slug": "phase-07-llm-engineering",
+      "name": "LLM Engineering",
+      "duration": "4 weeks",
+      "objective": null,
+      "topicCount": 14,
+      "topics": [
+        {
+          "slug": "prompt-engineering",
+          "title": "Prompt Engineering",
+          "category": null
+        },
+        {
+          "slug": "function-calling",
+          "title": "Function Calling",
+          "category": null
+        },
+        {
+          "slug": "structured-output",
+          "title": "Structured Output",
+          "category": null
+        },
+        {
+          "slug": "tool-calling",
+          "title": "Tool Calling",
+          "category": null
+        },
+        {
+          "slug": "mcp",
+          "title": "MCP",
+          "category": null
+        },
+        {
+          "slug": "memory",
+          "title": "Memory",
+          "category": null
+        },
+        {
+          "slug": "context-management",
+          "title": "Context Management",
+          "category": null
+        },
+        {
+          "slug": "ai-agents",
+          "title": "AI Agents",
+          "category": null
+        },
+        {
+          "slug": "multi-agent-systems",
+          "title": "Multi-Agent Systems",
+          "category": null
+        },
+        {
+          "slug": "langgraph",
+          "title": "LangGraph",
+          "category": "frameworks"
+        },
+        {
+          "slug": "llamaindex",
+          "title": "LlamaIndex",
+          "category": "frameworks"
+        },
+        {
+          "slug": "langchain",
+          "title": "LangChain",
+          "category": "frameworks"
+        },
+        {
+          "slug": "openai-sdk",
+          "title": "OpenAI SDK",
+          "category": "frameworks"
+        },
+        {
+          "slug": "litellm",
+          "title": "LiteLLM",
+          "category": "frameworks"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "slug": "phase-08-retrieval-augmented-generation",
+      "name": "Retrieval-Augmented Generation",
+      "duration": "3 weeks",
+      "objective": null,
+      "topicCount": 9,
+      "topics": [
+        {
+          "slug": "chunking",
+          "title": "Chunking",
+          "category": null
+        },
+        {
+          "slug": "embeddings",
+          "title": "Embeddings",
+          "category": null
+        },
+        {
+          "slug": "retrieval",
+          "title": "Retrieval",
+          "category": null
+        },
+        {
+          "slug": "hybrid-search",
+          "title": "Hybrid Search",
+          "category": null
+        },
+        {
+          "slug": "re-ranking",
+          "title": "Re-ranking",
+          "category": null
+        },
+        {
+          "slug": "qdrant",
+          "title": "Qdrant",
+          "category": "vector_databases"
+        },
+        {
+          "slug": "milvus",
+          "title": "Milvus",
+          "category": "vector_databases"
+        },
+        {
+          "slug": "weaviate",
+          "title": "Weaviate",
+          "category": "vector_databases"
+        },
+        {
+          "slug": "pgvector",
+          "title": "pgvector",
+          "category": "vector_databases"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "slug": "phase-09-multimodal-ai",
+      "name": "Multimodal AI",
+      "duration": "3 weeks",
+      "objective": null,
+      "topicCount": 10,
+      "topics": [
+        {
+          "slug": "ocr",
+          "title": "OCR",
+          "category": "vision"
+        },
+        {
+          "slug": "paddleocr",
+          "title": "PaddleOCR",
+          "category": "vision"
+        },
+        {
+          "slug": "yolo",
+          "title": "YOLO",
+          "category": "vision"
+        },
+        {
+          "slug": "segment-anything",
+          "title": "Segment Anything",
+          "category": "vision"
+        },
+        {
+          "slug": "whisper",
+          "title": "Whisper",
+          "category": "speech"
+        },
+        {
+          "slug": "gemini-speech",
+          "title": "Gemini Speech",
+          "category": "speech"
+        },
+        {
+          "slug": "elevenlabs",
+          "title": "ElevenLabs",
+          "category": "speech"
+        },
+        {
+          "slug": "kokoro-tts",
+          "title": "Kokoro TTS",
+          "category": "speech"
+        },
+        {
+          "slug": "stable-diffusion",
+          "title": "Stable Diffusion",
+          "category": "image_generation"
+        },
+        {
+          "slug": "flux",
+          "title": "FLUX",
+          "category": "image_generation"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "slug": "phase-10-fine-tuning",
+      "name": "Fine-tuning",
+      "duration": "2 weeks",
+      "objective": null,
+      "topicCount": 9,
+      "topics": [
+        {
+          "slug": "lora",
+          "title": "LoRA",
+          "category": null
+        },
+        {
+          "slug": "qlora",
+          "title": "QLoRA",
+          "category": null
+        },
+        {
+          "slug": "peft",
+          "title": "PEFT",
+          "category": null
+        },
+        {
+          "slug": "supervised-fine-tuning",
+          "title": "Supervised Fine-Tuning",
+          "category": null
+        },
+        {
+          "slug": "rlhf-concepts",
+          "title": "RLHF Concepts",
+          "category": null
+        },
+        {
+          "slug": "dpo",
+          "title": "DPO",
+          "category": null
+        },
+        {
+          "slug": "trl",
+          "title": "TRL",
+          "category": "tools"
+        },
+        {
+          "slug": "unsloth",
+          "title": "Unsloth",
+          "category": "tools"
+        },
+        {
+          "slug": "axolotl",
+          "title": "Axolotl",
+          "category": "tools"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "slug": "phase-11-ai-infrastructure",
+      "name": "AI Infrastructure",
+      "duration": "4 weeks",
+      "objective": null,
+      "topicCount": 15,
+      "topics": [
+        {
+          "slug": "vllm",
+          "title": "vLLM",
+          "category": "inference"
+        },
+        {
+          "slug": "sglang",
+          "title": "SGLang",
+          "category": "inference"
+        },
+        {
+          "slug": "ollama",
+          "title": "Ollama",
+          "category": "inference"
+        },
+        {
+          "slug": "tensorrt-llm",
+          "title": "TensorRT-LLM",
+          "category": "inference"
+        },
+        {
+          "slug": "triton-inference-server",
+          "title": "Triton Inference Server",
+          "category": "inference"
+        },
+        {
+          "slug": "fastapi",
+          "title": "FastAPI",
+          "category": "deployment"
+        },
+        {
+          "slug": "docker",
+          "title": "Docker",
+          "category": "deployment"
+        },
+        {
+          "slug": "kubernetes",
+          "title": "Kubernetes",
+          "category": "deployment"
+        },
+        {
+          "slug": "ray-serve",
+          "title": "Ray Serve",
+          "category": "deployment"
+        },
+        {
+          "slug": "cuda-basics",
+          "title": "CUDA Basics",
+          "category": "optimization"
+        },
+        {
+          "slug": "quantization",
+          "title": "Quantization",
+          "category": "optimization"
+        },
+        {
+          "slug": "gguf",
+          "title": "GGUF",
+          "category": "optimization"
+        },
+        {
+          "slug": "gptq",
+          "title": "GPTQ",
+          "category": "optimization"
+        },
+        {
+          "slug": "awq",
+          "title": "AWQ",
+          "category": "optimization"
+        },
+        {
+          "slug": "kv-cache",
+          "title": "KV Cache",
+          "category": "optimization"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "slug": "phase-12-mlops",
+      "name": "MLOps",
+      "duration": "3 weeks",
+      "objective": null,
+      "topicCount": 11,
+      "topics": [
+        {
+          "slug": "mlflow",
+          "title": "MLflow",
+          "category": "tools"
+        },
+        {
+          "slug": "weights-biases",
+          "title": "Weights & Biases",
+          "category": "tools"
+        },
+        {
+          "slug": "dvc",
+          "title": "DVC",
+          "category": "tools"
+        },
+        {
+          "slug": "airflow",
+          "title": "Airflow",
+          "category": "tools"
+        },
+        {
+          "slug": "kubeflow",
+          "title": "Kubeflow",
+          "category": "tools"
+        },
+        {
+          "slug": "experiment-tracking",
+          "title": "Experiment Tracking",
+          "category": null
+        },
+        {
+          "slug": "model-registry",
+          "title": "Model Registry",
+          "category": null
+        },
+        {
+          "slug": "feature-store",
+          "title": "Feature Store",
+          "category": null
+        },
+        {
+          "slug": "ci-cd",
+          "title": "CI/CD",
+          "category": null
+        },
+        {
+          "slug": "monitoring",
+          "title": "Monitoring",
+          "category": null
+        },
+        {
+          "slug": "drift-detection",
+          "title": "Drift Detection",
+          "category": null
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "slug": "phase-13-ai-system-design",
+      "name": "AI System Design",
+      "duration": "3 weeks",
+      "objective": null,
+      "topicCount": 15,
+      "topics": [
+        {
+          "slug": "chatgpt",
+          "title": "ChatGPT",
+          "category": "case_studies"
+        },
+        {
+          "slug": "github-copilot",
+          "title": "GitHub Copilot",
+          "category": "case_studies"
+        },
+        {
+          "slug": "perplexity",
+          "title": "Perplexity",
+          "category": "case_studies"
+        },
+        {
+          "slug": "cursor",
+          "title": "Cursor",
+          "category": "case_studies"
+        },
+        {
+          "slug": "ocr-platform",
+          "title": "OCR Platform",
+          "category": "case_studies"
+        },
+        {
+          "slug": "voice-ai",
+          "title": "Voice AI",
+          "category": "case_studies"
+        },
+        {
+          "slug": "multi-agent-platform",
+          "title": "Multi-Agent Platform",
+          "category": "case_studies"
+        },
+        {
+          "slug": "scalability",
+          "title": "Scalability",
+          "category": "focus"
+        },
+        {
+          "slug": "streaming",
+          "title": "Streaming",
+          "category": "focus"
+        },
+        {
+          "slug": "caching",
+          "title": "Caching",
+          "category": "focus"
+        },
+        {
+          "slug": "cost-optimization",
+          "title": "Cost Optimization",
+          "category": "focus"
+        },
+        {
+          "slug": "rate-limiting",
+          "title": "Rate Limiting",
+          "category": "focus"
+        },
+        {
+          "slug": "security",
+          "title": "Security",
+          "category": "focus"
+        },
+        {
+          "slug": "observability",
+          "title": "Observability",
+          "category": "focus"
+        },
+        {
+          "slug": "multi-region-deployment",
+          "title": "Multi-Region Deployment",
+          "category": "focus"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "slug": "phase-14-research-literacy",
+      "name": "Research Literacy",
+      "duration": "Ongoing",
+      "objective": null,
+      "topicCount": 11,
+      "topics": [
+        {
+          "slug": "attention-is-all-you-need",
+          "title": "Attention Is All You Need",
+          "category": "papers"
+        },
+        {
+          "slug": "bert",
+          "title": "BERT",
+          "category": "papers"
+        },
+        {
+          "slug": "gpt-3",
+          "title": "GPT-3",
+          "category": "papers"
+        },
+        {
+          "slug": "llama",
+          "title": "LLaMA",
+          "category": "papers"
+        },
+        {
+          "slug": "lora",
+          "title": "LoRA",
+          "category": "papers"
+        },
+        {
+          "slug": "qlora",
+          "title": "QLoRA",
+          "category": "papers"
+        },
+        {
+          "slug": "rag",
+          "title": "RAG",
+          "category": "papers"
+        },
+        {
+          "slug": "dpo",
+          "title": "DPO",
+          "category": "papers"
+        },
+        {
+          "slug": "mixture-of-experts",
+          "title": "Mixture of Experts",
+          "category": "papers"
+        },
+        {
+          "slug": "deepseek-v3",
+          "title": "DeepSeek-V3",
+          "category": "papers"
+        },
+        {
+          "slug": "kimi-k2",
+          "title": "Kimi K2",
+          "category": "papers"
+        }
+      ]
+    }
+  ]
+}

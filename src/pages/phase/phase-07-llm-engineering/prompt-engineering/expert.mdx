@@ -1,0 +1,105 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Prompt Engineering"
+level: expert
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "prompt-engineering"
+estReadTime: 11
+resources:
+  - type: article
+    title: "OpenAI — Prompt Caching Guide"
+    url: "https://platform.openai.com/docs/guides/prompt-caching"
+  - type: article
+    title: "Anthropic — Prompt Engineering for Long Context"
+    url: "https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/long-context-tips"
+---
+
+## Prompt engineering is a reliability discipline, not wordsmithing
+
+At scale, the real question isn't "does this prompt produce a good answer once" but
+"does this prompt produce an *acceptable* answer across the full distribution of real
+inputs, including adversarial and malformed ones, at an acceptable cost and latency."
+That reframing changes what you optimize for.
+
+## Prompt structure and cache-aware ordering
+
+Most providers now support **prompt caching**: if the prefix of your prompt is
+byte-identical to a recent request, the provider skips re-processing it, cutting cost
+and latency substantially (OpenAI's automatic caching, Anthropic's explicit
+`cache_control` breakpoints). This means prompt *ordering* is now a performance
+decision, not just a stylistic one — put the stable content (system prompt, tool
+definitions, few-shot examples, static reference documents) first, and the
+request-specific, ever-changing content (the user's latest message) last:
+
+```python
+# Anthropic explicit cache breakpoint
+response = client.messages.create(
+    model="claude-sonnet-4-5",
+    system=[
+        {"type": "text", "text": long_static_instructions},
+        {"type": "text", "text": large_reference_doc, "cache_control": {"type": "ephemeral"}},
+    ],
+    messages=[{"role": "user", "content": dynamic_user_question}],
+)
+```
+
+Putting the user's question *before* a large static document (a common naive pattern)
+silently disables caching for every request, since the cache key depends on the exact
+prefix matching.
+
+## The failure modes prompts alone can't fix
+
+- **Prompt injection** — if any part of the prompt includes untrusted text (retrieved
+  documents, tool outputs, user uploads), that text can contain instructions that
+  override your system prompt ("ignore previous instructions and..."). No prompt
+  wording fully closes this; mitigation requires architectural controls — least-privilege
+  tool scopes, output validation, and treating retrieved content as data, never as
+  instructions, reinforced with explicit framing (`<untrusted_data>` tags) plus
+  monitoring, not prompt wording alone.
+- **Instruction position bias** — models weight instructions near the beginning and
+  end of a long context more heavily than the middle ("lost in the middle"). For long
+  documents, restate critical constraints *after* the content, not only before it.
+- **Format drift under load** — a prompt that reliably returns valid JSON in testing
+  can still occasionally emit malformed output in production; this is why structured
+  output guarantees at the API level (see the Structured Output lesson) are strictly
+  more reliable than prompting alone for anything you plan to parse programmatically.
+
+## Prompt versioning and evaluation as engineering practice
+
+Treat every meaningful prompt as a deployable artifact: pin it (with the model version
+it was tuned against) in version control, attach an eval set with expected behaviors
+(exact-match, rubric-graded, or LLM-as-judge), and gate prompt changes behind that eval
+suite the same way you'd gate a code change behind tests. This matters because prompts
+are not portable across model versions or providers by default — a prompt tuned
+against `gpt-4o` may need re-tuning against `gpt-4o-mini` or a Claude model, since
+different models respond differently to the same phrasing, delimiter style, and
+instruction density.
+
+## Positive vs. negative instructions
+
+Telling a model what *not* to do ("don't mention pricing") is measurably less reliable
+than telling it what *to* do instead ("if asked about pricing, redirect the user to
+the sales team"). Negative constraints leave the model to improvise a replacement
+behavior, which is exactly where inconsistency creeps in; positive constraints specify
+the actual behavior you want, removing that ambiguity.
+
+## Trade-offs across prompting strategies
+
+| Strategy | Reliability gain | Cost |
+|---|---|---|
+| Zero-shot (plain instruction) | Lowest, task-dependent | Cheapest, fastest |
+| Few-shot examples | High for format/style consistency | More input tokens per call |
+| Chain-of-thought | High for multi-step reasoning tasks | More output tokens, added latency |
+| Structured system/user separation | Improves maintainability, injection resistance | Requires disciplined prompt architecture |
+| Prompt caching (static-content-first ordering) | No accuracy change, large cost/latency win at scale | Requires stable, byte-identical prefixes |
+
+## When to stop prompt-engineering and start fine-tuning
+
+Prompting has a ceiling: if you're stacking dozens of edge-case instructions and
+few-shot examples into every request just to nudge behavior a model resists by
+default, you're paying that overhead (tokens, latency, fragility) on every single call.
+Fine-tuning bakes the desired behavior into the weights once, at training time, and is
+usually the better trade when the same behavioral correction is needed on a very high
+volume of requests, or when the correction can't be reliably expressed in a
+reasonably-sized prompt at all.

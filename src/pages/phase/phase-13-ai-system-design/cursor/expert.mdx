@@ -1,0 +1,105 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Cursor"
+level: expert
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "cursor"
+estReadTime: 12
+resources:
+  - type: docs
+    title: "Cursor Docs — Codebase Indexing"
+    url: "https://docs.cursor.com/context/codebase-indexing"
+  - type: article
+    title: "vLLM / PagedAttention paper — Efficient Memory Management for LLM Serving"
+    url: "https://arxiv.org/abs/2309.06180"
+---
+
+## A note on sourcing
+
+Cursor has published some detail on codebase indexing and privacy modes but
+not a full internal architecture. What follows reasons from those docs and
+from the hard constraints any in-editor AI coding tool at this speed and
+correctness bar must satisfy — treat specifics as plausible engineering.
+
+## Problem 1: fast, correct diffing under a tight latency budget
+
+Tab completions need to feel instantaneous, but the harder constraint is
+**correctness of the diff**, not just speed: a suggestion that looks
+plausible but silently breaks a brace-matching or introduces a syntax error
+is worse than no suggestion, because it erodes trust fast. This pushes
+toward:
+
+- **Structural validation before showing a suggestion**: parsing the proposed
+  edit against the surrounding AST (or at least balancing brackets/indentation)
+  to reject suggestions that would leave the file syntactically broken, before
+  the user ever sees them — this adds latency to every suggestion attempt, so
+  it has to be cheap (a fast parser, not a full compile).
+- **Prefix-based KV-cache reuse**, same as inline code completion generally:
+  since consecutive keystrokes share most of their prompt, reusing cached
+  attention state for the shared prefix turns most completion requests into
+  cheap incremental work rather than full re-inference.
+
+## Problem 2: context assembly is a ranking problem, not a retrieval problem
+
+With a large codebase, the hard part isn't finding *some* relevant code, it's
+picking the *right* handful of chunks out of thousands of plausible matches
+within a token budget that's shared with the rest of the prompt (system
+instructions, recent edits, chat history). Pure semantic similarity search
+over-indexes on topical relevance and under-weights structural relevance —
+e.g. "this function calls the one you're editing" is often a stronger signal
+than "this function's docstring uses similar words." Production-grade context
+assembly typically blends multiple signals (semantic similarity, symbol-graph
+proximity, recency of edits, explicit user-opened files) with a learned or
+heuristic ranker, rather than relying on embedding similarity alone.
+
+## Problem 3: staleness between the index and the working tree
+
+The vector/symbol index is built asynchronously; the actual files on disk can
+change (your edits, a git pull, another agent's file writes) faster than
+re-indexing completes. An agent that reasons over a stale index can propose
+an edit against code that no longer exists, or duplicate a helper function
+that was just added. Mitigations:
+
+- **Read-before-write on the hot path**: agent tool calls that modify a file
+  re-read the current on-disk content immediately before diffing/applying,
+  rather than trusting the last-indexed version, sacrificing some latency for
+  correctness on the operation that actually has side effects.
+- **Debounced, priority-aware re-indexing**: files the user has open or has
+  recently touched get bumped to the front of the re-index queue, since
+  staleness there is most likely to cause a visible bad suggestion.
+
+## Problem 4: privacy and trust boundary for proprietary code
+
+Indexing code for semantic search generally means sending it (or embeddings
+derived from it) to infrastructure the customer doesn't fully control, which
+is a hard blocker for many enterprises. This forces an architecture decision
+with real cost implications: a fully cloud-hosted index is simplest to build
+and fastest to query, while a **local-only or customer-VPC-hosted index**
+avoids the data-exfiltration concern but requires shipping and operating
+retrieval infrastructure (embedding models, vector search) inside the
+customer's environment — meaningfully more complex to build, deploy, and
+keep up to date across many customer environments than a single managed
+service.
+
+## Problem 5: bounding agent-mode blast radius
+
+Agent mode chains multiple tool calls (edit files, run shell commands) with
+each step's output feeding the next decision. Left unconstrained, this can
+loop indefinitely, run destructive commands, or drift far from the user's
+actual intent over many steps. Necessary guardrails: a hard cap on iterations
+per task, sandboxing for command execution, and an explicit
+review-before-apply gate for the cumulative diff — none of which are free;
+each adds either latency, infrastructure cost, or user friction, and the
+right point on that trade-off differs for "fix this typo" vs. "refactor this
+module."
+
+## Trade-off summary
+
+| Concern | Cheap/simple approach | Higher-fidelity approach | Cost |
+|---|---|---|---|
+| Suggestion correctness | Show raw model output | Structural/AST validation before display | Extra latency per suggestion |
+| Context ranking | Pure embedding similarity | Blend semantic + symbol-graph + recency signals | Ranker complexity, tuning effort |
+| Index freshness | Periodic full re-index | Incremental, priority-aware re-indexing | Background compute, eventual consistency |
+| Code privacy | Cloud-hosted index for everyone | Local/VPC-hosted index option | Deployment & ops complexity per environment |
+| Agent autonomy | Unbounded tool-call loop | Iteration caps + sandboxing + review gate | Latency/friction vs. safety |

@@ -1,0 +1,61 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Momentum"
+level: intermediate
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "momentum"
+estReadTime: 8
+resources:
+  - type: article
+    title: "Nesterov Accelerated Gradient explained"
+    url: "https://jlmelville.github.io/mize/nesterov.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Momentum as an exponential moving average of gradients
+
+The velocity term is exactly an exponential moving average (EMA) of past gradients,
+weighted so recent gradients matter more but old ones never fully vanish:
+
+```
+velocity_t = momentum * velocity_{t-1} + gradient_t
+           = gradient_t + momentum*gradient_{t-1} + momentum²*gradient_{t-2} + ...
+```
+
+This framing — momentum as a smoothing/averaging filter on a noisy gradient signal —
+is the same underlying idea reused (with different specifics) in Adam's first-moment
+estimate, and in EMA-based model weight averaging used for more stable evaluation
+checkpoints.
+
+<Mermaid client:visible code={`flowchart LR
+  G1["gradient t"] --> V["velocity: EMA of gradients"]
+  G2["gradient t-1 (discounted)"] --> V
+  G3["gradient t-2 (more discounted)"] --> V
+  V --> Update["weight update uses smoothed direction"]`} />
+
+## Nesterov Accelerated Gradient: looking ahead before computing
+
+Standard momentum computes the gradient at the *current* position, then applies
+velocity. **Nesterov momentum** instead computes the gradient at the position you'd
+already reach *after* applying the current velocity — a "look-ahead" correction:
+
+```python
+def nesterov_step(weight, grad_fn, velocity, lr=0.1, momentum=0.9):
+    lookahead_weight = weight - lr * momentum * velocity
+    gradient = grad_fn(lookahead_weight)     # gradient at the lookahead point
+    velocity = momentum * velocity + gradient
+    weight = weight - lr * velocity
+    return weight, velocity
+```
+
+This small change gives Nesterov momentum a theoretical edge in convergence rate for
+convex problems, and empirically it's often a modest, close-to-free improvement over
+standard momentum — `torch.optim.SGD(..., nesterov=True)`.
+
+## Choosing the momentum coefficient
+
+`momentum=0.9` is the near-universal default, but higher values (0.99) create longer
+"memory," useful for very noisy gradients but riskier for overshooting; lower values
+(0.5-0.8) behave closer to plain SGD. Unlike learning rate, momentum rarely needs
+careful per-problem tuning — it's one of the more forgiving optimizer hyperparameters.

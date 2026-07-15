@@ -1,0 +1,99 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "BPE"
+level: expert
+phaseSlug: "phase-05-natural-language-processing"
+phaseName: "Natural Language Processing"
+topicSlug: "bpe"
+estReadTime: 12
+resources:
+  - type: article
+    title: "Gage — A New Algorithm for Data Compression (original BPE, 1994)"
+    url: "http://www.pennelynn.com/Documents/CUJ/HTML/94HTML/19940045.HTML"
+  - type: article
+    title: "Radford et al. — GPT-2 paper (introduces byte-level BPE for LMs)"
+    url: "https://cdn.openai.com/better-language-models/language_models_unlimited_language_model_are_unsupervised_multitask_learners.pdf"
+---
+
+## BPE was a compression algorithm before it was a tokenizer
+
+Philip Gage's original 1994 BPE was a general-purpose byte-sequence compression
+technique, unrelated to NLP — it iteratively replaced the most frequent byte pair with
+an unused byte. Sennrich et al. (2015) repurposed the exact same greedy-merge
+mechanism for subword segmentation in neural machine translation, and it stuck as the
+dominant tokenization scheme for nearly every major LLM since. This lineage matters:
+BPE's merge rule (greedy, frequency-based, no likelihood objective) is inherited
+compression-algorithm behavior, not something purpose-designed for linguistic
+segmentation — which explains why its splits are sometimes linguistically odd (see
+below) even though they're statistically efficient.
+
+## Greedy merges produce linguistically inconsistent splits
+
+Because BPE merges are learned greedily from corpus frequency with no linguistic
+awareness, semantically related words can be tokenized completely differently
+depending on incidental frequency statistics:
+
+```python
+from transformers import AutoTokenizer
+tokenizer = AutoTokenizer.from_pretrained("gpt2")
+
+print(tokenizer.tokenize(" dog"))     # [' dog']       -- one token
+print(tokenizer.tokenize(" dogs"))    # [' dogs']      -- also one token, unrelated to 'dog'
+print(tokenizer.tokenize(" doggy"))   # [' dogg', 'y']  -- split differently again
+```
+
+`"dog"` and `"dogs"` sharing no explicit morphological relationship in the token
+stream forces the model to learn their relatedness purely through training, rather
+than the tokenizer surfacing it structurally. This is a real, measurable weakness
+versus more linguistically-informed segmentation, traded off against BPE's speed and
+simplicity — the field has generally judged that trade-off worth it given how much
+compute-scale can compensate.
+
+## Byte-level BPE's numeric and whitespace pathologies
+
+GPT-2-style byte-level BPE encodes leading whitespace as part of the following token
+(`" the"` is a different token than `"the"`), which has real downstream
+consequences: prompts with inconsistent spacing tokenize differently and can shift
+model behavior in subtle ways, and numbers merge inconsistently based on training
+corpus statistics rather than positional digit structure —
+`"2023"` might be one token while `"2024"` splits into `"20"` + `"24"`, purely
+because of how frequently each 4-digit sequence appeared during BPE training. This is
+the direct, well-documented cause of LLMs' notoriously unreliable arithmetic: the
+model never sees numbers as a consistent sequence of individual digits, so it can't
+learn positional digit-place reasoning the way it learns most other patterns. Several
+newer tokenizers (e.g. Llama 3's, GPT-4's) explicitly special-case digits — splitting
+every number into single-digit tokens — specifically to fix this failure mode.
+
+## Regex pre-tokenization prevents pathological merges
+
+Naive byte-level BPE run over raw text without any pre-splitting can learn merges that
+cross word and punctuation boundaries in ways that hurt downstream quality (e.g.
+merging a word with trailing punctuation as a single token). GPT-2 introduced a
+regex-based pre-tokenization step that splits text into rough word-like chunks
+*before* BPE ever runs, so merges never form across those boundaries. This is a
+worked example of why tokenizer quality can't be judged from the core algorithm
+alone — the pre- and post-processing choices around BPE materially change output
+quality as much as the merge algorithm itself.
+
+## Vocabulary size scaling law considerations at LLM scale
+
+Vocabulary size interacts directly with total training compute in ways that only
+became apparent at LLM scale: a larger vocabulary shortens the average sequence
+length for the same text (less attention compute, since attention scales quadratically
+with sequence length), but grows the embedding and LM-head matrices linearly with
+vocabulary size — and for very large vocabularies, softmax computation over the output
+layer becomes a non-trivial fraction of total forward-pass cost. Modern large
+multilingual models (100k-256k vocab) accept this larger embedding-table cost
+specifically because it reduces sequence length disparity across languages, partially
+addressing the tokenizer-inequity problem where non-English text otherwise requires
+far more tokens per semantic unit than English.
+
+## Trade-off summary
+
+| Aspect | Character-level BPE | Byte-level BPE (GPT-2+) | WordPiece (BERT) | Unigram (SentencePiece) |
+|---|---|---|---|---|
+| `[UNK]` tokens possible | Yes, for out-of-alphabet chars | Never — full byte coverage | Yes, more commonly | Rare, with subword regularization |
+| Segmentation determinism | Deterministic (merge order) | Deterministic (merge order) | Deterministic (longest-match) | Probabilistic, sampleable |
+| Linguistic consistency | Low — frequency-driven, not morpheme-aware | Same, plus whitespace/digit artifacts | Slightly better via likelihood objective | Best — trained to maximize a language-model likelihood |
+| Non-English token efficiency | Poor if trained on English-heavy corpus | Poor, plus extra bytes-per-character overhead for non-Latin scripts | Similar to char-level BPE | Comparable, mitigated by balanced multilingual training |
+| Dominant use today | Rare standalone | GPT-family, most modern LLMs | BERT-family encoder models | T5, ALBERT, many multilingual models |

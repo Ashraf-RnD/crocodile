@@ -1,0 +1,122 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "PEFT"
+level: intermediate
+phaseSlug: "phase-10-fine-tuning"
+phaseName: "Fine-tuning"
+topicSlug: "peft"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "Hugging Face PEFT — API reference"
+    url: "https://huggingface.co/docs/peft/package_reference/peft_model"
+  - type: article
+    title: "Hugging Face — PEFT method comparison guide"
+    url: "https://huggingface.co/docs/peft/conceptual_guides/prompting"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## One config type per method, one shared workflow
+
+The `peft` library's core design is that every method — LoRA, prompt tuning, prefix
+tuning, IA3 — plugs into the same `get_peft_model()` / `PeftModel` workflow. Switching
+methods is mostly a matter of swapping the config object:
+
+```python
+from transformers import AutoModelForCausalLM
+from peft import (
+    get_peft_model,
+    LoraConfig,
+    PromptTuningConfig,
+    PromptTuningInit,
+    IA3Config,
+    TaskType,
+)
+
+model = AutoModelForCausalLM.from_pretrained("mistralai/Mistral-7B-v0.1")
+
+# Option A: LoRA — adapts attention/MLP weight matrices
+lora_config = LoraConfig(task_type=TaskType.CAUSAL_LM, r=16, target_modules=["q_proj", "v_proj"])
+
+# Option B: Prompt tuning — learns virtual tokens prepended to the input, zero weight changes
+prompt_config = PromptTuningConfig(
+    task_type=TaskType.CAUSAL_LM,
+    num_virtual_tokens=20,
+    prompt_tuning_init=PromptTuningInit.TEXT,
+    prompt_tuning_init_text="Classify the sentiment of this review:",
+    tokenizer_name_or_path="mistralai/Mistral-7B-v0.1",
+)
+
+# Option C: IA3 — learns per-channel rescaling vectors, even smaller than LoRA
+ia3_config = IA3Config(task_type=TaskType.CAUSAL_LM, target_modules=["k_proj", "v_proj", "down_proj"])
+
+model = get_peft_model(model, lora_config)  # swap in whichever config fits the task
+```
+
+<Mermaid client:visible code={`flowchart TB
+  Model["Frozen base model"] --> Choice{Which PEFT method?}
+  Choice -->|LoRA| A["Low-rank matrices on weight layers"]
+  Choice -->|Prompt tuning| B["Learned virtual tokens on the input"]
+  Choice -->|IA3| C["Per-channel scaling vectors"]
+  A --> Train["Same get_peft_model + Trainer workflow"]
+  B --> Train
+  C --> Train`} />
+
+## Why LoRA-family methods dominate in practice
+
+Prompt and prefix tuning were historically appealing because they add *even* fewer
+parameters than LoRA, but in practice they tend to be harder to optimize (more
+sensitive to initialization and learning rate) and consume part of the context window
+with virtual tokens, which cuts into your usable sequence length. This is why LoRA and
+its variants (QLoRA, DoRA) have become the default recommendation for most production
+fine-tuning, with prompt/prefix tuning and IA3 reserved for narrower cases — very
+constrained parameter budgets, or tasks where you specifically want to avoid touching
+any weight matrices at all (e.g. multi-tenant setups with extremely strict adapter
+size limits).
+
+## Checkpoint size in practice
+
+```python
+model.save_pretrained("./my-adapter")
+```
+
+```
+my-adapter/
+├── adapter_config.json      # ~1KB — method, rank, target_modules, etc.
+└── adapter_model.safetensors # a few MB to ~100MB depending on method/rank
+```
+
+Compare this to a full fine-tuned checkpoint of a 7B model, which is roughly 14-28GB.
+This size difference is why teams version-control or ship PEFT adapters casually (even
+committing small ones to a model registry per experiment) in a way that would be
+completely impractical for full model checkpoints.
+
+## Combining PEFT with quantization and distributed training
+
+PEFT composes with other efficiency techniques rather than replacing them:
+
+```python
+from peft import prepare_model_for_kbit_training
+
+# quantized base (QLoRA) + LoRA config, as covered in the QLoRA lesson
+model = prepare_model_for_kbit_training(quantized_model)
+model = get_peft_model(model, lora_config)
+```
+
+- **+ quantization** → QLoRA (covered in its own lesson)
+- **+ DeepSpeed ZeRO or FSDP** → shards the (usually already small) optimizer state
+  further, useful mainly when the base model itself doesn't fit on one GPU even
+  frozen
+- **+ gradient checkpointing** → trades compute for activation memory, commonly
+  combined with PEFT since PEFT training is often memory-bound on activations, not
+  weights
+
+## Practical gotchas
+
+- **`modules_to_save`**: if you add new tokens or change the output head (e.g. a new
+  classification head), you need to explicitly tell PEFT to keep those fully trainable
+  and saved: `LoraConfig(..., modules_to_save=["classifier"])`. Otherwise they stay
+  frozen at their random or pretrained initialization.
+- **Adapter and base model version drift**: an adapter trained against one base model
+  checkpoint may not merge cleanly if the base model is later updated or quantized
+  differently — always pin the exact base model revision alongside a saved adapter.

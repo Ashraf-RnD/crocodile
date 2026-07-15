@@ -1,0 +1,105 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "LoRA"
+level: expert
+phaseSlug: "phase-10-fine-tuning"
+phaseName: "Fine-tuning"
+topicSlug: "lora"
+estReadTime: 13
+resources:
+  - type: article
+    title: "LoRA Learns Less and Forgets Less (Biderman et al., 2024)"
+    url: "https://arxiv.org/abs/2405.09673"
+  - type: docs
+    title: "PEFT — LoRA variants (rsLoRA, DoRA, LoRA+)"
+    url: "https://huggingface.co/docs/peft/developer_guides/lora"
+---
+
+## Rank choice is a bias-variance trade-off, not a "bigger is better" knob
+
+The intuitive assumption — higher rank means strictly better fine-tuning — doesn't hold
+in practice. Biderman et al. (2024) found LoRA consistently underperforms full
+fine-tuning on tasks requiring substantial new knowledge (e.g. code or math domains far
+from the pretraining distribution), but *matches or exceeds* full fine-tuning on
+instruction-following and chat-style tasks, and critically, **forgets less** of the
+base model's original capabilities. This makes rank selection a real trade-off: low
+rank acts as a strong regularizer that constrains how much the model can drift from its
+pretrained behavior, which is a feature when you want targeted adaptation without
+catastrophic forgetting, and a limitation when the target task genuinely requires new
+capability the base model lacks.
+
+## Why `lora_alpha / r` scaling matters more than either number alone
+
+The LoRA update is scaled by `alpha / r`, not by `alpha` or `r` independently. This
+means `r=8, alpha=16` and `r=32, alpha=64` produce the *same effective scaling factor*
+(2.0) but very different adapter capacities. Two implications follow:
+
+1. **Rank sweeps require holding the scaling factor fixed** (typically by scaling
+   `alpha` proportionally with `r`), otherwise you're confounding "more capacity" with
+   "different effective learning rate" — a common source of misleading LoRA ablations
+   in practice.
+2. **rsLoRA** (rank-stabilized LoRA) changes the scaling to `alpha / sqrt(r)` instead of
+   `alpha / r`, because empirically the `1/r` scaling causes gradient magnitudes to
+   collapse at high rank, making large-rank LoRA training unstable without a learning
+   rate increase. This is why PEFT exposes `use_rslora=True` as an option — it's not
+   just an alternative parameterization, it changes what rank values are even usable.
+
+## DoRA: decomposing magnitude from direction
+
+**DoRA (Weight-Decomposed LoRA)** splits the frozen weight into a magnitude vector and
+a direction matrix, applying LoRA only to the directional component while learning the
+magnitude separately:
+
+```python
+from peft import LoraConfig
+config = LoraConfig(r=16, lora_alpha=32, use_dora=True, target_modules=["q_proj", "v_proj"])
+```
+
+The motivation: standard LoRA updates couple magnitude and direction changes together
+through a single low-rank delta, whereas full fine-tuning naturally decouples them.
+DoRA's ablations show closer-to-full-fine-tuning learning dynamics at the same
+parameter budget, at the cost of a small additional forward-pass overhead from
+computing the magnitude norm — a real but usually acceptable trade for quality-critical
+deployments.
+
+## Initialization and the zero-start guarantee
+
+`B` is initialized to zero (and `A` to small random values) specifically so that
+`A @ B = 0` at step zero — the adapted model is mathematically identical to the base
+model before any gradient steps happen. This matters for two practical reasons: it
+guarantees training starts from a known-good point (no risk of an unlucky random init
+immediately degrading generation quality), and it means adapter checkpoints saved very
+early in training are safe fallbacks, unlike full fine-tuning where random-noise
+gradients can be applied to the entire weight matrix from step one.
+
+## Why LoRA composes poorly across multiple sequential adaptations
+
+Merging adapter A into the base model, then training and merging adapter B on top,
+is *not* equivalent to jointly training A and B, or to a single higher-rank adapter
+covering both. Each merge folds a fixed low-rank correction into the full-rank weight,
+after which further LoRA training sees a different effective starting point than either
+adapter was trained against — errors and interference can compound across sequential
+merges. This is why production systems that need many task-specific adaptations
+typically keep adapters **unmerged and swappable** (loading whichever adapter matches
+the request) rather than chaining merges, and why "continual LoRA fine-tuning" across
+many tasks is an active research problem rather than a solved pattern.
+
+## Trade-off summary
+
+| Approach | Trainable params | Catastrophic forgetting | Peak quality on far-OOD tasks | Serving flexibility |
+|---|---|---|---|---|
+| Full fine-tuning | 100% | High risk | Best | One model per task |
+| LoRA (standard) | ~0.1–1% | Low | Good on near-distribution tasks, weaker on far-OOD | Swappable adapters, shared base |
+| LoRA + rsLoRA | ~0.1–1% | Low | Slightly better at high rank | Same as LoRA |
+| DoRA | ~0.1–1% + small overhead | Low | Closer to full fine-tuning | Same as LoRA |
+| QLoRA (LoRA + quantized base) | ~0.1–1% | Low | Comparable to LoRA | Requires dequant at merge time |
+
+## The production decision in practice
+
+Choosing LoRA over full fine-tuning is rarely purely an accuracy decision — it's an
+infrastructure decision. If you need to serve many customer- or task-specific variants
+of the same base model, LoRA's swappable adapters and shared-base-weight memory
+footprint dominate even when full fine-tuning would nudge accuracy up a point or two.
+Conversely, when a task requires the model to absorb genuinely new knowledge at scale
+(e.g. domain-specific continual pretraining), teams increasingly reach for full
+fine-tuning or higher-rank DoRA rather than fighting LoRA's inherent capacity ceiling.

@@ -1,0 +1,90 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "MCP"
+level: beginner
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "mcp"
+estReadTime: 7
+resources:
+  - type: docs
+    title: "Model Context Protocol — Introduction"
+    url: "https://modelcontextprotocol.io/introduction"
+  - type: video
+    title: "Anthropic — Model Context Protocol Explained"
+    url: "https://www.youtube.com/watch?v=kQmXtrmQ5Zg"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Think of it as USB-C for AI tools
+
+Before USB-C, every device needed its own cable. **MCP (Model Context Protocol)**
+solves the equivalent problem for AI apps: instead of every app writing custom,
+one-off integration code for every tool or data source it wants an LLM to use, MCP
+defines one standard protocol. A tool built as an "MCP server" once can be plugged
+into any MCP-compatible app (Claude Desktop, Claude Code, IDEs, custom agents) without
+custom glue code for each one.
+
+<Mermaid client:visible code={`flowchart LR
+  subgraph Before["Before MCP"]
+    App1[App A] --> Custom1[Custom integration] --> Tool1[GitHub]
+    App2[App B] --> Custom2[Custom integration] --> Tool1
+    App3[App C] --> Custom3[Custom integration] --> Tool1
+  end
+  subgraph After["With MCP"]
+    AppX[App A] --> MCP[MCP client/server protocol]
+    AppY[App B] --> MCP
+    AppZ[App C] --> MCP
+    MCP --> Tool2[GitHub MCP server]
+  end`} />
+
+### The three things an MCP server can expose
+
+1. **Tools** — functions the model can call (like `create_issue`, `search_files`).
+2. **Resources** — data the app can read and feed into context (like a file, a
+   database record, a webpage).
+3. **Prompts** — reusable prompt templates the server provides for common tasks.
+
+### A minimal MCP server
+
+```python
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP("weather-server")
+
+@mcp.tool()
+def get_weather(city: str) -> str:
+    """Get the current weather for a city."""
+    return f"It's sunny and 22°C in {city}."  # pretend API call
+
+if __name__ == "__main__":
+    mcp.run()
+```
+
+That's it — this small script is a complete MCP server. Any MCP-compatible client
+(Claude Desktop, an agent framework) can connect to it, discover the `get_weather`
+tool automatically, and call it — no custom integration code needed on the client
+side, because the protocol itself defines how tools are discovered and invoked.
+
+### Try it yourself
+
+You want to expose a `roll_dice(sides: int) -> int` function as an MCP tool. What
+decorator and docstring would you add so an MCP client can discover and call it
+correctly?
+
+<details>
+<summary>Solution</summary>
+
+```python
+@mcp.tool()
+def roll_dice(sides: int) -> int:
+    """Roll a die with the given number of sides and return the result."""
+    import random
+    return random.randint(1, sides)
+```
+
+The `@mcp.tool()` decorator registers the function; the docstring becomes the
+tool's description that the client (and ultimately the model) sees when deciding
+whether to call it — just like the `description` field in a function-calling schema.
+
+</details>

@@ -1,0 +1,67 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "LSTM"
+level: beginner
+phaseSlug: "phase-04-deep-learning"
+phaseName: "Deep Learning"
+topicSlug: "lstm"
+estReadTime: 7
+resources:
+  - type: docs
+    title: "PyTorch — LSTM documentation"
+    url: "https://pytorch.org/docs/stable/generated/torch.nn.LSTM.html"
+  - type: article
+    title: "Understanding LSTM Networks (colah's blog)"
+    url: "https://colah.github.io/posts/2015-08-Understanding-LSTMs/"
+---
+
+## A conveyor belt with valves
+
+A plain RNN's memory tends to get overwritten at every step, so it "forgets" things
+that happened many steps ago — like trying to remember a phone number while a dozen
+new facts get shouted at you in between. An **LSTM (Long Short-Term Memory)** fixes
+this with a separate **cell state** — think of it as a conveyor belt running the
+length of the sequence — plus small "valves" (gates) that control what gets added to
+the belt, what gets removed, and what gets read off it at each step.
+
+Because information on the conveyor belt can flow through mostly untouched unless a
+gate specifically decides to change it, LSTMs are much better than plain RNNs at
+carrying important information across long sequences.
+
+```python
+import torch
+import torch.nn as nn
+
+lstm = nn.LSTM(input_size=5, hidden_size=8, batch_first=True)
+
+sequence = torch.randn(1, 10, 5)   # 1 sample, 10 time steps, 5 features
+output, (hidden, cell) = lstm(sequence)
+
+print(output.shape)   # torch.Size([1, 10, 8]) -> output at every time step
+print(hidden.shape)   # torch.Size([1, 1, 8])  -> final hidden state
+print(cell.shape)     # torch.Size([1, 1, 8])  -> final cell state (the "belt")
+```
+
+Notice an LSTM returns *two* states instead of an RNN's one — the hidden state
+(what gets passed to the next layer/output) and the cell state (the long-term
+memory belt).
+
+### Try it yourself
+
+Create an `nn.LSTM` with input size 4 and hidden size 6, run it on a batch of 3
+sequences of length 5, and print the shape of the returned cell state.
+
+<details>
+<summary>Solution</summary>
+
+```python
+import torch
+import torch.nn as nn
+
+lstm = nn.LSTM(input_size=4, hidden_size=6, batch_first=True)
+x = torch.randn(3, 5, 4)
+output, (hidden, cell) = lstm(x)
+print(cell.shape)   # torch.Size([1, 3, 6])
+```
+
+</details>

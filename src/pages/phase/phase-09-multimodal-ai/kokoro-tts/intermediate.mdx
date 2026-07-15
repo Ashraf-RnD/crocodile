@@ -1,0 +1,66 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Kokoro TTS"
+level: intermediate
+phaseSlug: "phase-09-multimodal-ai"
+phaseName: "Multimodal AI"
+topicSlug: "kokoro-tts"
+estReadTime: 8
+resources:
+  - type: docs
+    title: "Kokoro GitHub repository"
+    url: "https://github.com/hexgrad/kokoro"
+  - type: docs
+    title: "FastAPI documentation"
+    url: "https://fastapi.tiangolo.com/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Why teams self-host Kokoro instead of using a cloud TTS API
+
+At high request volume, per-character cloud TTS pricing adds up fast. Kokoro's small
+size (82M parameters, versus billions for many competitors) means it runs comfortably
+on CPU in near-real-time, and easily on a modest GPU with plenty of headroom — making
+it a realistic option for teams that want TTS cost to scale with owned compute instead
+of per-character billing.
+
+<Mermaid client:visible code={`flowchart LR
+  A[Input text] --> B["Grapheme-to-phoneme\n(text to sound units)"]
+  B --> C["Acoustic model\n(phonemes to mel spectrogram)"]
+  C --> D["Vocoder\n(spectrogram to waveform)"]
+  D --> E[Audio output]`} />
+
+## Serving Kokoro behind an API
+
+Production usage typically wraps Kokoro in a small FastAPI service so multiple parts
+of an application can request TTS over HTTP, same as they would call a cloud provider:
+
+```python
+from fastapi import FastAPI
+from kokoro import KPipeline
+import soundfile as sf
+import io
+
+app = FastAPI()
+pipeline = KPipeline(lang_code="a")
+
+@app.post("/tts")
+def synthesize(text: str, voice: str = "af_heart"):
+    generator = pipeline(text, voice=voice)
+    audio = next(generator)[2]  # first chunk's audio array
+    buf = io.BytesIO()
+    sf.write(buf, audio, 24000, format="WAV")
+    return {"audio_base64": buf.getvalue().hex()}
+```
+
+This mirrors exactly how you'd call ElevenLabs or a cloud TTS API from the rest of the
+application — only the backend implementation changes, which makes Kokoro a realistic
+drop-in for cost-sensitive deployments without rearchitecting the calling code.
+
+## On-device and offline use cases
+
+Because Kokoro's weights are small and it has no external dependency at inference
+time, it fits use cases hosted APIs fundamentally can't: TTS inside an app that must
+work fully offline (accessibility tools, embedded devices, air-gapped environments),
+or latency-critical local applications where a network round trip to a cloud API adds
+unacceptable delay.

@@ -1,0 +1,95 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "AWQ"
+level: expert
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "awq"
+estReadTime: 11
+resources:
+  - type: article
+    title: "AWQ: Activation-aware Weight Quantization for LLM Compression"
+    url: "https://arxiv.org/abs/2306.00978"
+  - type: docs
+    title: "AutoAWQ — GitHub"
+    url: "https://github.com/casper-hansen/AutoAWQ"
+---
+
+## The scaling-equivalence trick
+
+AWQ's central mechanism is a mathematical identity that lets it protect salient
+channels *without* keeping them in higher precision. For a linear layer computing
+`y = Wx`, scaling a weight channel up by `s` and the corresponding input activation
+down by the same `s` leaves the output mathematically unchanged:
+
+```
+y = (W · diag(s)) · (diag(s)^-1 · x) = W · x
+```
+
+Applied per-channel: multiply the weight columns for salient channels by `s > 1`
+(making them larger in magnitude relative to quantization's fixed step size, so
+proportionally *less* of their precision is lost to rounding), and divide the
+corresponding activations by the same `s` (folded into the previous layer's output
+or an inserted scaling op, so the net computation is unchanged). After scaling,
+uniform 4-bit quantization is applied to the whole weight matrix — but the salient
+channels now survive rounding much better because they occupy a larger portion of
+the quantization grid's dynamic range. AWQ searches a small set of candidate `s`
+values (typically via a fast grid search minimizing calibration-set output error)
+rather than solving for it exactly, which is a big part of why it stays fast.
+
+## Why activation-based salience beats weight-magnitude salience
+
+An earlier, simpler heuristic quantizes based on raw weight magnitude — protect the
+weights with the largest absolute values. AWQ's ablations show this is a weaker
+signal than activation magnitude: a weight can be modest in size but consistently
+multiplied by large activations (common in outlier-heavy channels that emerge in
+transformer training), making its actual contribution to the layer's output far
+larger than its raw magnitude suggests. Conversely, a numerically large weight
+multiplied by near-zero activations barely affects the output. Since quantization
+error ultimately damages the *output*, not the weight tensor in isolation, salience
+defined on `weight × activation` is the more causally correct target — and it's
+cheap to estimate because it only requires forward passes (collecting activation
+stats), not backward passes or per-layer reconstruction.
+
+## AWQ vs GPTQ
+
+| Axis | AWQ | GPTQ |
+|---|---|---|
+| Calibration data needs | Small, generic (~128 samples), only forward passes | Small, but used for iterative per-layer reconstruction |
+| Quantization time (7B model) | Minutes | Tens of minutes to ~1 hour, depending on settings |
+| Method | Per-channel scale search + uniform round-to-nearest | Per-layer/column iterative least-squares reconstruction with error correction |
+| Accuracy at 4-bit | Strong, especially at low group sizes | Strong, sometimes marginally better on some benchmarks with `act-order` |
+| Sensitivity to calibration set | Lower — only needs representative activation statistics | Higher — reconstruction quality tracks calibration set fidelity more closely |
+| Kernel/runtime support | vLLM, TGI, AutoAWQ, TensorRT-LLM | vLLM, TGI, AutoGPTQ/GPTQModel, TensorRT-LLM |
+| Best fit | Fast turnaround, many models/variants to quantize | Squeezing maximum accuracy when quantization time isn't a constraint |
+
+Neither is universally more accurate — differences are typically within a point or
+two of perplexity or task accuracy and vary by model family and bit-width. The
+decisive factor in practice is usually operational: how many models need
+quantizing and how often.
+
+## Production note: quantization turnaround as a fleet-scale concern
+
+Once quantization time is measured in minutes instead of an hour-plus, it stops
+being a one-off preprocessing step and becomes something you can run routinely —
+e.g. as a CI step every time a fine-tuned checkpoint is produced. Teams that ship
+many task-specific or customer-specific fine-tunes (rather than one shared base
+model) feel this most: quantizing 20 GPTQ variants overnight on a shared GPU
+queue is a real scheduling and cost problem, while the same 20 AWQ variants can
+often finish before the next training run even completes. This turnaround
+advantage is frequently a bigger practical driver of AWQ adoption than the (usually
+small) accuracy differences versus GPTQ.
+
+## Edge cases
+
+- **Extreme low-bit regimes (below 4-bit, e.g. 3-bit)**: AWQ's accuracy advantage
+  over naive quantization grows, but absolute accuracy degradation from any 4-bit
+  method accelerates non-linearly below 4-bit — validate task-specific accuracy
+  rather than trusting general benchmarks.
+- **Group size trade-off**: smaller `q_group_size` (e.g. 32 or 64) improves
+  accuracy but increases the storage/compute overhead of per-group scale factors,
+  partially eating into the memory savings — 128 is a common default balance.
+- **Kernel maturity for GEMV/low-batch serving**: AWQ's GEMM kernels are well
+  optimized for batched throughput; single-request/low-latency (GEMV) paths have
+  historically had less kernel tuning attention across some serving stacks than
+  GPTQ's equivalents, worth benchmarking rather than assuming.

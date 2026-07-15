@@ -1,0 +1,114 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "TRL"
+level: expert
+phaseSlug: "phase-10-fine-tuning"
+phaseName: "Fine-tuning"
+topicSlug: "trl"
+estReadTime: 12
+resources:
+  - type: docs
+    title: "TRL — distributed training with DeepSpeed and FSDP"
+    url: "https://huggingface.co/docs/trl/main/en/distributing_training"
+  - type: docs
+    title: "TRL — reducing memory usage guide"
+    url: "https://huggingface.co/docs/trl/main/en/reducing_memory_usage"
+---
+
+## TRL as an opinionated orchestration layer, not a novel training system
+
+TRL's real engineering value isn't new training math — the DPO loss, PPO update rule,
+and reward model loss are all published, well-understood objectives. TRL's value is
+consistent, well-tested plumbing: dataset format normalization across trainers, correct
+loss masking for chat-formatted data, reference-model memory management, and
+integration with `accelerate`/`deepspeed`/PEFT that would otherwise require nontrivial
+custom implementation per fine-tuning method. Understanding this distinction matters
+when debugging: a "TRL bug" is frequently a dataset-formatting or config mismatch
+issue, not an issue with the underlying algorithm — reading the trainer's internal
+`_prepare_dataset` / loss computation code is often more productive than assuming the
+published method itself is misbehaving.
+
+## Reference model memory management is the biggest practical lever
+
+For DPO and PPO, TRL must maintain a reference (or value/reward) model alongside the
+trainable policy. Naively, this doubles (or more) memory usage. TRL offers several
+concrete mitigations:
+
+```python
+from trl import DPOConfig
+
+# Option 1: PEFT-only reference model — reuse the base weights, toggle the adapter off
+config = DPOConfig(output_dir="./out")  # with peft_config set and ref_model=None,
+                                          # TRL disables the adapter to emulate the reference model
+
+# Option 2: precompute reference log-probabilities once, discard the reference model
+config_precomputed = DPOConfig(
+    output_dir="./out",
+    precompute_ref_log_probs=True,   # runs the reference model once over the dataset upfront
+)
+```
+
+`precompute_ref_log_probs=True` trades disk/preprocessing time for a real memory and
+compute win during training — the reference model only needs to exist transiently
+during a preprocessing pass, not resident in GPU memory for the entire training run.
+This is the difference between "DPO on a 70B model needs 2x the memory" and "DPO on a
+70B model needs roughly 1x memory plus a one-time preprocessing pass," which is often
+the deciding factor in whether a given hardware budget can run the job at all.
+
+## Distributed training: DeepSpeed ZeRO vs. FSDP trade-offs in TRL
+
+TRL delegates distributed training entirely to `accelerate`, which supports both
+DeepSpeed ZeRO and PyTorch FSDP as backends. The choice has real consequences
+specifically for RLHF/DPO workloads with multiple resident models:
+
+- **DeepSpeed ZeRO-3**: shards optimizer state, gradients, and parameters across GPUs;
+  mature support for offloading to CPU/NVMe, which matters when running multiple large
+  models (policy + reference + reward) that collectively exceed aggregate GPU memory.
+- **FSDP**: tighter native PyTorch integration, often simpler to debug for standard
+  training, but historically had less mature support for the "multiple large models
+  simultaneously" pattern RLHF requires — TRL's PPO trainer documentation specifically
+  calls out DeepSpeed as the more battle-tested option for that workload.
+
+```yaml
+# accelerate config for DeepSpeed ZeRO-3, used with `accelerate launch`
+compute_environment: LOCAL_MACHINE
+distributed_type: DEEPSPEED
+deepspeed_config:
+  zero_stage: 3
+  offload_optimizer_device: cpu
+  offload_param_device: none
+```
+
+## The PPOTrainer's departure from a "simple config swap" mental model
+
+Unlike SFT/DPO, where switching between trainers is close to a drop-in config change,
+`PPOTrainer` genuinely requires different usage patterns — you drive the generation and
+reward-scoring loop yourself, calling `trainer.step()` per batch rather than a single
+`trainer.train()` call. This reflects the underlying algorithmic reality (PPO is an
+online RL loop needing fresh rollouts each iteration, not a fixed dataset pass) more
+than an inconsistency in TRL's API design — teams that assume all TRL trainers share
+identical calling conventions frequently get tripped up moving from DPO to PPO
+experiments.
+
+## Version stability and production pinning
+
+TRL has moved quickly through breaking API changes (trainer argument renames,
+`tokenizer` to `processing_class` migration, dataset format expectations shifting
+between "conversational" and "standard" formats). For production training
+infrastructure, this argues for:
+
+- **Pinning an exact TRL version** in requirements, not a loose range — minor version
+  bumps have broken argument names in practice.
+- **Testing training scripts against version upgrades in isolation** before rolling
+  them into scheduled training jobs, rather than assuming semantic-versioning
+  guarantees across TRL releases the way you might for a more API-stable library.
+
+## Trade-off summary
+
+| Concern | Lean on TRL defaults | Custom implementation |
+|---|---|---|
+| SFT / DPO on a fixed dataset | Yes — trainer covers the full loop well | Rarely worth it |
+| PPO / online RLHF | Partial — still need to drive the rollout loop | Sometimes, for nonstandard reward signals |
+| Multi-GPU scaling | Yes — via `accelerate`/DeepSpeed integration | Rarely worth reimplementing |
+| Custom loss variants (IPO, KTO, SimPO) | Yes — exposed via `loss_type` in DPOConfig | Only for genuinely novel objectives |
+| Non-text-generation RL tasks | No — TRL is scoped to language model fine-tuning | Necessary outside this domain |

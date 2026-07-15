@@ -1,0 +1,104 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Attention"
+level: expert
+phaseSlug: "phase-06-transformers"
+phaseName: "Transformers"
+topicSlug: "attention"
+estReadTime: 11
+resources:
+  - type: article
+    title: "FlashAttention: Fast and Memory-Efficient Exact Attention"
+    url: "https://arxiv.org/abs/2205.14135"
+  - type: docs
+    title: "PyTorch — scaled_dot_product_attention backend selection"
+    url: "https://pytorch.org/docs/stable/backends.html#torch.backends.cuda.sdp_kernel"
+---
+
+## The quadratic bottleneck
+
+Standard attention computes an `n × n` score matrix for a sequence of length `n`,
+costing `O(n²·d)` time and, naively, `O(n²)` memory to materialize the attention
+matrix itself. This is the single biggest scalability constraint on context length —
+doubling context length quadruples compute and memory for the attention layers
+specifically (the feed-forward layers stay linear in `n`). It's why "long context"
+windows were an active systems-engineering problem long after the Transformer
+architecture itself was settled.
+
+## FlashAttention: same math, different memory access pattern
+
+FlashAttention doesn't change *what* attention computes — it changes *how* it's
+computed on GPU hardware. The key insight: GPU compute (FLOPs) is cheap relative to
+GPU memory bandwidth (HBM reads/writes). Standard implementations write the full
+`n × n` score matrix to HBM, then read it back for softmax, then again for the
+weighted sum — three expensive round trips.
+
+FlashAttention **tiles** the computation: it processes blocks of `Q`, `K`, `V` that
+fit in fast on-chip SRAM, computes partial softmax statistics incrementally (an
+online softmax), and never materializes the full attention matrix in HBM. The result
+is mathematically identical output with dramatically lower memory traffic — this is
+an I/O-aware algorithm, not an approximation, which is why it doesn't trade off
+accuracy for speed the way sparse/linear attention variants do.
+
+```python
+import torch.nn.functional as F
+
+# On modern PyTorch + supported hardware, this call transparently dispatches
+# to a FlashAttention-family kernel — no manual tiling code required.
+out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+```
+
+## KV cache: the inference-time trade-off
+
+During autoregressive generation, recomputing `K` and `V` for the entire prefix at
+every new token would be wasteful — those vectors don't change once computed. The
+**KV cache** stores past `K`/`V` projections so each new token only computes
+attention against the cached history plus its own new `K`/`V`.
+
+This shifts the bottleneck at inference time from compute to **memory bandwidth**:
+for a 70B-parameter model at long context, the KV cache itself can occupy tens of GB,
+often becoming the limiting factor on batch size (and therefore throughput) before
+compute does. This is precisely the problem **Multi-Query Attention (MQA)** and
+**Grouped-Query Attention (GQA)** address — by sharing key/value heads across
+multiple query heads, they shrink the cache size at a modest quality cost, which is
+why most production LLMs (Llama 2 70B, Mistral) ship with GQA rather than full
+multi-head attention.
+
+## Sparse and linear attention: when approximation is worth it
+
+Several architectures trade exactness for sub-quadratic scaling:
+
+- **Sparse attention** (Longformer, BigBird) — restrict each token to attend only to
+  a local window plus a few global tokens, reducing cost to roughly `O(n)`.
+- **Linear attention** (Performer, linear transformers) — reformulate the softmax
+  kernel so attention can be computed without ever forming the `n × n` matrix,
+  at the cost of approximating the true softmax distribution.
+- **State-space models** (Mamba) — abandon attention's explicit pairwise comparison
+  entirely in favor of a recurrent-but-parallelizable formulation, achieving linear
+  scaling with a genuinely different inductive bias.
+
+None of these have fully displaced dense attention for general-purpose LLMs — the
+quality gap on tasks requiring precise long-range retrieval (needle-in-a-haystack
+style tasks) has kept dense (FlashAttention-accelerated) attention dominant, with
+sparse/linear variants seeing more traction in specialized long-document or
+resource-constrained settings.
+
+## Trade-off summary
+
+| Approach | Complexity | Memory | Exactness | Where it's used |
+|---|---|---|---|---|
+| Standard dense attention | O(n²) time, O(n²) memory | High | Exact | Short-to-medium context, research baselines |
+| FlashAttention | O(n²) time, O(n) memory | Low (no materialized matrix) | Exact | Default in nearly all modern LLM training/inference |
+| MQA / GQA | O(n²) time (attention itself unchanged) | Much lower KV cache | Exact attention, approximated head diversity | Llama 2/3, Mistral, most production LLMs |
+| Sparse (Longformer/BigBird) | O(n) | Low | Approximate (structured sparsity) | Long-document encoders |
+| Linear / SSM (Performer, Mamba) | O(n) | Low | Approximate / different formulation | Long-context research, some production SSM hybrids |
+
+## The practical engineering takeaway
+
+At the model-architecture level, "attention" is a simple, fixed formula. Nearly all
+the ongoing engineering effort against it is about **making the same math cheaper to
+execute at scale** — via kernel fusion (FlashAttention), cache compression
+(GQA/MQA, quantized KV cache), or restructuring what gets compared (sparse/linear
+variants). Understanding which lever a given optimization pulls — compute, memory
+bandwidth, or cache size — is usually the fastest way to reason about why a specific
+technique was adopted in a specific production system.

@@ -1,0 +1,110 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Precision"
+level: expert
+phaseSlug: "phase-03-machine-learning"
+phaseName: "Machine Learning"
+topicSlug: "precision"
+estReadTime: 11
+resources:
+  - type: docs
+    title: "scikit-learn: precision_recall_curve"
+    url: "https://scikit-learn.org/stable/modules/generated/sklearn.metrics.precision_recall_curve.html"
+  - type: article
+    title: "The Relationship Between Precision-Recall and ROC Curves"
+    url: "https://www.biostat.wisc.edu/~page/rocpr.pdf"
+---
+
+## Precision as a function of threshold, not a fixed property
+
+Precision isn't a fixed property of a model — it's a property of a model *at a specific
+decision threshold*. Reporting a single precision number without stating the threshold it
+was measured at (and the class balance it was measured on) is close to meaningless in
+isolation. The full picture is the **precision-recall curve**: precision and recall at
+every possible threshold, traced out together.
+
+```python
+from sklearn.metrics import precision_recall_curve, average_precision_score
+
+probs = clf.predict_proba(X_test)[:, 1]
+precisions, recalls, thresholds = precision_recall_curve(y_test, probs)
+
+# average_precision_score summarizes the whole curve into one number —
+# the area under the precision-recall curve, computed without interpolation
+ap = average_precision_score(y_test, probs)
+print(f"Average precision: {ap:.3f}")
+```
+
+`average_precision_score` (AP) is the threshold-independent analogue of ROC-AUC, but for
+the precision-recall curve specifically. It's the metric to report when you want to
+compare *ranking quality* across models before committing to an operating threshold.
+
+## Cost-sensitive framing
+
+Precision only becomes an actionable target once you attach a real cost to a false
+positive. The right question isn't "what precision should we hit?" in the abstract — it's
+"what does one false positive cost us, and what does one false negative cost us?" Given a
+cost matrix, the optimal threshold minimizes expected cost, not any single metric in
+isolation:
+
+```python
+import numpy as np
+
+cost_fp = 5      # e.g. $5 wasted reviewer time per false flag
+cost_fn = 50     # e.g. $50 cost of a missed fraud case
+
+best_threshold, best_cost = None, np.inf
+for t in np.linspace(0.01, 0.99, 99):
+    preds = (probs >= t).astype(int)
+    fp = ((preds == 1) & (y_test == 0)).sum()
+    fn = ((preds == 0) & (y_test == 1)).sum()
+    cost = fp * cost_fp + fn * cost_fn
+    if cost < best_cost:
+        best_threshold, best_cost = t, cost
+
+print(f"Cost-optimal threshold: {best_threshold:.2f}, expected cost: {best_cost}")
+```
+
+This is how production thresholds are actually set in cost-sensitive domains — not by
+picking a round number like 0.5, and not by chasing a target precision in isolation, but
+by minimizing the business cost the confusion matrix implies at each candidate threshold.
+
+## Precision at k
+
+In ranking and recommendation systems (search results, candidate lists, top-N alerts),
+there often isn't a meaningful global threshold at all — only a fixed budget of items you
+can act on. **Precision at k** measures precision among only the top-k ranked predictions,
+which better reflects how these systems are actually consumed:
+
+```python
+def precision_at_k(y_true, scores, k):
+    top_k_idx = np.argsort(scores)[::-1][:k]
+    return y_true[top_k_idx].sum() / k
+
+# "Of the top 10 items we'd actually show/act on, how many are correct?"
+print(precision_at_k(np.array(y_test), probs, k=10))
+```
+
+This is the standard metric for search relevance, fraud-review queues with fixed analyst
+capacity, and recommendation systems where only the top few results are ever seen.
+
+## Trade-off summary
+
+| Metric | What it optimizes for | Threshold-dependent? | Best used when |
+|---|---|---|---|
+| Precision (at fixed threshold) | Quality of positive predictions at one operating point | Yes | You've already committed to a deployment threshold |
+| Average Precision (AP / PR-AUC) | Ranking quality across all thresholds | No | Comparing models before choosing a threshold, especially under class imbalance |
+| Precision at k | Quality of the top-k ranked items only | No (k replaces threshold) | Fixed-capacity review queues, search, recommendations |
+| Cost-weighted threshold selection | Expected business cost, using precision and recall jointly | Threshold is the *output*, not an input | Any system where FP and FN costs are known and unequal |
+
+## Production concerns
+
+Precision computed on a validation set can silently drift once deployed if the underlying
+positive-class base rate shifts — a fraud model trained when fraud was 2% of traffic will
+see its real-world precision degrade if fraud rates rise or fall, even with the exact same
+threshold and the exact same model. This is why production monitoring for precision-
+sensitive systems should track the *live* positive predicted rate and periodically
+recompute precision on freshly labeled data, rather than trusting the number measured at
+training time indefinitely. Pairing precision with recall (or reporting the full PR curve)
+in dashboards is standard practice specifically to catch the "high precision via near-zero
+recall" degenerate case before it reaches a stakeholder report.

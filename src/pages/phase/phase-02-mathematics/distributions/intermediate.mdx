@@ -1,0 +1,66 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Distributions"
+level: intermediate
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "distributions"
+estReadTime: 8
+resources:
+  - type: docs
+    title: "PyTorch — nn.init methods"
+    url: "https://pytorch.org/docs/stable/nn.init.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Weight initialization distributions matter
+
+Initializing all weights to the same value (or all zero) makes every neuron in a layer
+learn an identical, redundant function — a failure called **symmetry**. Random
+initialization from a distribution breaks this symmetry, but the *scale* of that
+distribution matters enormously:
+
+- Too large → activations/gradients explode as they pass through layers
+- Too small → activations/gradients vanish toward zero
+
+**Xavier/Glorot initialization** and **Kaiming/He initialization** are specific
+distribution scalings (variance chosen based on layer fan-in/fan-out) designed to keep
+activation variance roughly stable across layers:
+
+```python
+import torch.nn as nn
+layer = nn.Linear(256, 128)
+nn.init.kaiming_normal_(layer.weight, nonlinearity="relu")  # scaled for ReLU
+```
+
+<Mermaid client:visible code={`flowchart LR
+  Bad["Naive init: variance grows/shrinks each layer"] --> Explode["Exploding or vanishing activations"]
+  Good["Kaiming/Xavier init: variance-preserving"] --> Stable["Stable signal through deep networks"]`} />
+
+## The Bernoulli and categorical distributions
+
+- **Bernoulli**: a single yes/no outcome with probability `p` — the distribution
+  behind binary classification and dropout masks
+- **Categorical**: a distribution over K discrete classes — exactly what softmax
+  produces, and what you sample from when generating the next token in text generation
+
+```python
+import torch
+logits = torch.tensor([2.0, 1.0, 0.1])
+dist = torch.distributions.Categorical(logits=logits)
+next_token = dist.sample()  # samples according to the softmax probabilities
+```
+
+## Why "temperature" reshapes a distribution
+
+Dividing logits by a temperature `T` before softmax changes the distribution's
+"peakedness" without changing its ranking:
+
+```python
+def temperature_softmax(logits, T):
+    return torch.softmax(logits / T, dim=-1)
+```
+
+`T < 1` sharpens the distribution (more deterministic, greedy-like sampling); `T > 1`
+flattens it (more random, diverse sampling). This single scalar is the main lever for
+controlling creativity vs. predictability in LLM text generation.

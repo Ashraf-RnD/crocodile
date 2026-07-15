@@ -1,0 +1,85 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "LangChain"
+level: beginner
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "langchain"
+estReadTime: 7
+resources:
+  - type: docs
+    title: "LangChain — Get Started"
+    url: "https://python.langchain.com/docs/introduction/"
+  - type: docs
+    title: "LangChain — LCEL (Expression Language)"
+    url: "https://python.langchain.com/docs/concepts/lcel/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Think of it as standardized plumbing for LLM apps
+
+Every LLM app needs the same basic plumbing: format a prompt, call a model, parse the
+result, maybe look something up first. You *could* write all of this by hand for
+every provider — but the code looks almost identical whether you're calling OpenAI,
+Anthropic, or a local model. **LangChain** standardizes that plumbing so you write it
+once and swap pieces (the model, the prompt, the output format) without rewriting
+everything else.
+
+<Mermaid client:visible code={`flowchart LR
+  Prompt[Prompt template] --> Model[Chat model]
+  Model --> Parser[Output parser]
+  Parser --> Result[Final result]`} />
+
+### A minimal chain
+
+```python
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+
+model = ChatOpenAI(model="gpt-4o-mini")
+prompt = ChatPromptTemplate.from_template("Explain {topic} in one simple sentence for a beginner.")
+parser = StrOutputParser()
+
+chain = prompt | model | parser
+result = chain.invoke({"topic": "recursion"})
+print(result)
+```
+
+The `|` operator (called **LCEL**, LangChain Expression Language) pipes one piece's
+output into the next piece's input — exactly like Unix pipes. `prompt` formats your
+template, `model` sends it to the LLM, `parser` extracts plain text from the model's
+response object.
+
+### Swapping the model without touching anything else
+
+```python
+from langchain_anthropic import ChatAnthropic
+
+model = ChatAnthropic(model="claude-sonnet-4-5")  # only this line changes
+chain = prompt | model | parser
+result = chain.invoke({"topic": "gradient descent"})
+```
+
+The `prompt` and `parser` don't know or care which provider `model` is — that's the
+core value LangChain provides: a consistent interface across providers, so switching
+models is a one-line change instead of a rewrite.
+
+### Try it yourself
+
+Build a chain that takes a `{language}` variable and asks the model to say "hello" in
+that language, returning just the plain text greeting.
+
+<details>
+<summary>Solution</summary>
+
+```python
+prompt = ChatPromptTemplate.from_template("Say hello in {language}. Respond with only the greeting.")
+chain = prompt | model | parser
+print(chain.invoke({"language": "Japanese"}))  # "こんにちは"
+```
+
+The pattern is always the same: a prompt template with placeholders, piped into a
+model, piped into a parser that shapes the final output.
+
+</details>

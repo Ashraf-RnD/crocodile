@@ -1,0 +1,91 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Attention Is All You Need"
+level: expert
+phaseSlug: "phase-14-research-literacy"
+phaseName: "Research Literacy"
+topicSlug: "attention-is-all-you-need"
+estReadTime: 12
+resources:
+  - type: article
+    title: "Attention Is All You Need (original paper)"
+    url: "https://arxiv.org/abs/1706.03762"
+  - type: article
+    title: "FlashAttention: Fast and Memory-Efficient Exact Attention"
+    url: "https://arxiv.org/abs/2205.14135"
+---
+
+## What the paper actually contributed vs. prior work
+
+Attention itself was not new — Bahdanau et al. (2014) and Luong et al. (2015) had
+already added attention mechanisms on top of RNN encoder-decoders for machine
+translation. The genuinely novel claim of this paper, as its title insists, is that
+**recurrence is unnecessary** — attention alone, with no sequential state, is
+sufficient to reach state-of-the-art translation quality. That single architectural
+subtraction is what unlocked full parallelization across the sequence dimension
+during training, which in turn is what made it feasible to scale models to the
+sizes we now take for granted. The paper also introduced multi-head attention (running
+several attention "subspaces" in parallel) and demonstrated it on WMT
+English-German and English-French translation, beating prior best results at a
+fraction of the training cost (3.5 days on 8 GPUs for the base model).
+
+## Limitations, then and now
+
+- **Quadratic complexity.** Self-attention costs `O(n²)` in sequence length, both in
+  compute and memory, because every token attends to every other token. This is the
+  single biggest limitation that shaped a decade of follow-up work — it's why
+  "long context" was a hard problem for years.
+- **No inherent notion of order.** The fixed sinusoidal positional encoding is a
+  reasonable but ad hoc patch; it doesn't extrapolate well to sequence lengths much
+  longer than what the model was trained on.
+- **Purely supervised, translation-specific evaluation.** The paper only
+  demonstrated the architecture on machine translation and constituency parsing —
+  its generality as a foundation for essentially all of NLP (and later vision,
+  audio, biology) wasn't the paper's own claim; that emerged from years of follow-up
+  work applying the same block to new problems.
+
+## What came after: the two-decade compressed timeline
+
+- **BERT (2018)** kept only the encoder stack and pretrained it with masked language
+  modeling, showing the block could learn general-purpose representations, not just
+  translation.
+- **GPT series (2018 onward)** kept only the decoder stack (autoregressive, masked
+  self-attention) and showed that scaling this block plus data plus compute produces
+  increasingly general capability — the now-dominant architecture for LLMs.
+- **Efficient attention variants** (Linformer, Performer, Longformer, and eventually
+  **FlashAttention**) attacked the `O(n²)` cost directly — FlashAttention in
+  particular didn't change the math at all, just reorganized the computation to be
+  I/O-aware on GPU memory hierarchies, and is now the de facto standard attention
+  kernel in virtually every production LLM stack.
+- **Positional encoding evolved**: sinusoidal encodings gave way to **RoPE**
+  (rotary position embeddings, used in LLaMA, GPT-NeoX, and most modern open models)
+  and **ALiBi**, both of which extrapolate to longer sequences far better than the
+  original fixed encoding.
+- **Multi-Query Attention (MQA) and Grouped-Query Attention (GQA)** reduced the
+  memory cost of the key/value cache at inference time by sharing key/value
+  projections across heads — a direct response to the fact that autoregressive
+  decoding, not training, dominates real-world serving cost.
+
+## How it's actually used in production today
+
+No production LLM uses the paper's architecture verbatim. What survives
+essentially unchanged is the *scaled dot-product attention formula* and the
+*residual + normalization* pattern around each sub-layer. Everything else has been
+re-engineered for serving efficiency: FlashAttention (or FlashAttention-2/3) kernels
+compute the attention operation, GQA/MQA reduce KV-cache size, RoPE handles
+position, and pre-norm (LayerNorm/RMSNorm before, not after, each sub-layer) replaced
+the original post-norm placement because it trains far more stably at depth. The
+encoder-decoder structure itself is now a minority pattern — most LLMs you interact
+with (GPT-4, Claude, LLaMA, DeepSeek) are decoder-only, a simplification the
+original paper didn't propose but that fell naturally out of its building blocks.
+
+## Comparison: RNN/LSTM seq2seq vs. the Transformer
+
+| Dimension | RNN/LSTM + attention (pre-2017) | Transformer (this paper) |
+|---|---|---|
+| Sequential dependency | Strict — token *t* needs token *t-1*'s hidden state | None — all tokens processed in parallel |
+| Long-range dependency path length | `O(n)` — information decays over distance | `O(1)` — any two tokens are one attention hop apart |
+| Training parallelism | Poor (sequential by construction) | Excellent (fully parallel across sequence) |
+| Compute/memory cost | `O(n)` per step, `O(n)` steps | `O(n²)` for full self-attention |
+| Position information | Implicit, via recurrence order | Explicit, injected (sinusoidal / RoPE / ALiBi) |
+| Dominant modern successor | Effectively obsolete for NLP at scale | Backbone of essentially all LLMs |

@@ -1,0 +1,110 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Kubernetes"
+level: expert
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "kubernetes"
+estReadTime: 11
+resources:
+  - type: docs
+    title: "KEDA — GPU / Custom Metrics Autoscaling"
+    url: "https://keda.sh/docs/latest/scalers/"
+  - type: docs
+    title: "KServe Documentation"
+    url: "https://kserve.github.io/website/latest/"
+---
+
+## Why autoscaling GPU workloads is genuinely hard
+
+CPU-based web services scale gracefully because a new Pod is schedulable and
+serving traffic within seconds. GPU-backed LLM serving breaks nearly every assumption
+that makes that fast:
+
+- **Cold start cost**: loading an 8B-16B parameter model from disk/network storage
+  into GPU memory routinely takes 30-120+ seconds, and larger models (70B+, sharded
+  across GPUs) can take several minutes. A reactive autoscaler that spins up a
+  replica *after* load spikes will always be too slow to help with that spike.
+- **GPU bin-packing**: unlike CPU/memory, most clusters can't fractionally share a
+  GPU across Pods by default, so the scheduler needs a node with a genuinely free GPU
+  — if your GPU node pool is already fully packed, a new Pod stays `Pending` no matter
+  how urgently it's needed.
+- **Node pool provisioning lag**: if no GPU node has room, the cluster autoscaler has
+  to provision an entirely new GPU node from the cloud provider — often 2-5 minutes
+  for the VM to boot, join the cluster, and pull the (large) container image, on top
+  of the model load time above. A traffic spike can be over before capacity arrives.
+
+## Metrics that actually reflect load
+
+CPU-based HPA is close to useless for GPU inference because CPU usage stays low even
+when the GPU (and the request queue) is saturated. **KEDA** (Kubernetes Event-Driven
+Autoscaling) lets you scale on external, workload-relevant metrics instead:
+
+```yaml
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: vllm-scaledobject
+spec:
+  scaleTargetRef:
+    name: vllm-llama3-8b
+  minReplicaCount: 2
+  maxReplicaCount: 8
+  cooldownPeriod: 300
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus.monitoring:9090
+        metricName: vllm_num_requests_waiting
+        query: sum(vllm:num_requests_waiting)
+        threshold: "5"
+```
+
+Scaling on **queue depth** (requests waiting, exposed by vLLM's Prometheus metrics)
+or **GPU utilization** (via DCGM exporter) reacts to the thing that's actually
+saturated, rather than a proxy metric that barely moves under GPU-bound load. A long
+`cooldownPeriod` (300s here) matters too — scaling down too eagerly means paying the
+full cold-start cost again minutes later when traffic returns.
+
+## PodDisruptionBudgets
+
+```yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: vllm-pdb
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: vllm-llama3-8b
+```
+
+A **PodDisruptionBudget** stops voluntary disruptions (node drains during cluster
+upgrades, autoscaler node consolidation) from taking down more replicas than your
+budget allows at once. Given how slow a GPU Pod is to replace, an upgrade that
+casually drains 3 of your 4 replicas simultaneously — perfectly fine for a stateless
+CPU service — can cause a real availability gap for a model-serving fleet.
+
+## Raw Kubernetes vs managed ML serving platforms
+
+| Axis | Raw Kubernetes (Deployment/Service/HPA) | KServe | Ray Serve on Kubernetes | SageMaker / Vertex AI endpoints |
+|---|---|---|---|---|
+| Control over serving internals | Full | High (still K8s-native, adds InferenceService CRD) | High (Python-native scaling logic) | Low — mostly configuration, not code |
+| Ops burden | High — you build health checks, autoscaling, canary rollout yourself | Medium — scale-to-zero, canary, and GPU autoscaling built in | Medium — cluster ops still yours, serving logic simplified | Low — provider manages the cluster entirely |
+| GPU-aware autoscaling out of the box | No — requires KEDA/custom metrics setup | Yes (built-in, including scale-to-zero) | Partial (Ray autoscaler, needs tuning) | Yes, fully managed |
+| Cost | Cluster cost only, but engineering time is real cost | Cluster cost + moderate setup time | Cluster cost + moderate setup time | Higher per-inference cost, near-zero setup time |
+| Time to production | Slowest — weeks of platform work for a robust setup | Days — opinionated defaults for ML serving specifically | Days to weeks — flexible but more DIY than KServe | Fastest — hours |
+| Best fit | Teams needing full control, unusual serving requirements, or already deep in K8s | Teams wanting Kubernetes-native ML serving without reinventing autoscaling/canary | Teams with complex multi-model/pipeline serving logic in Python | Teams prioritizing speed to production over infra control |
+
+## The practical trade-off
+
+Raw Kubernetes gives maximum control but means you're personally responsible for
+solving cold-start-aware autoscaling, GPU bin-packing, and rollout safety — all
+genuinely hard, mostly-solved-elsewhere problems. KServe and similar platforms exist
+specifically because "run an LLM reliably on Kubernetes" turned out to need enough
+specialized logic (scale-to-zero for idle models, GPU-aware scheduling, canary
+rollouts that account for load time) that most teams are better served adopting it
+than rebuilding it, reserving raw Deployments/Services for cases with genuinely
+unusual requirements or where a team is already deeply invested in custom Kubernetes
+tooling.

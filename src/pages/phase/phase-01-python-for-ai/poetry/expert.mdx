@@ -1,0 +1,96 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Poetry"
+level: expert
+phaseSlug: "phase-01-python-for-ai"
+phaseName: "Python for AI"
+topicSlug: "poetry"
+estReadTime: 11
+resources:
+  - type: docs
+    title: "Poetry — Dependency resolution details"
+    url: "https://python-poetry.org/docs/dependency-specification/"
+  - type: article
+    title: "Poetry FAQ — Why is the dependency resolution process slow?"
+    url: "https://python-poetry.org/docs/faq/#why-is-the-dependency-resolution-process-slow"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Why Poetry's resolver is slow on heavy ML stacks
+
+Poetry's resolver is a SAT-style solver that needs each candidate package's exact
+metadata (its own dependency constraints) to check compatibility. When a package
+doesn't publish rich enough metadata upfront, Poetry has to actually download the
+package (or its metadata) to inspect it — and for large ML wheels (`torch` CUDA
+builds are gigabytes), this makes resolution slow, especially when the resolver
+needs to backtrack through several candidate versions of a huge package to find a
+combination that satisfies every constraint.
+
+```bash
+# A poetry add/lock on a project with torch + transformers + accelerate + peft
+# can take minutes, because the resolver may need to inspect metadata for
+# several candidate versions of very large packages before converging
+poetry add torch transformers accelerate peft
+```
+
+This is Poetry's most commonly cited pain point in ML projects specifically — pip's
+looser, per-command resolution and uv's Rust-based resolver both tend to be
+noticeably faster in this exact scenario.
+
+<Mermaid client:visible code={`flowchart TB
+  Add["poetry add torch transformers"] --> Solve["SAT-style resolver"]
+  Solve --> Meta{"Enough metadata published?"}
+  Meta -->|No| Download["Download candidate wheel to inspect (slow, GBs)"]
+  Meta -->|Yes| Fast["Resolve from metadata directly"]
+  Download --> Backtrack["Backtrack if conflict found"]
+  Backtrack --> Solve`} />
+
+## `poetry.lock` cross-platform resolution
+
+`poetry.lock` resolves for *all* platforms your `pyproject.toml` supports by
+default (Linux/macOS/Windows, multiple Python versions), which means the lock file
+contains entries you'll never actually install on any single machine — this is
+deliberate (so a shared repo installs correctly for every teammate's OS) but adds
+real resolution time and lock file size, and is a common point of confusion when
+`poetry.lock` shows packages/platforms unrelated to your own machine.
+
+## Poetry's build backend vs. PEP 517/518 standardization
+
+Poetry predates (and partially conflicts with) some of the now-standardized Python
+packaging ecosystem. Modern Poetry (`poetry-core`) does implement the standard
+PEP 517 build backend interface, so `pip install .` on a Poetry project works
+correctly — but Poetry's own dependency *specification* syntax (`^1.26` carets,
+dependency groups) is Poetry-specific, not a PEP standard, whereas `uv` and modern
+pip tooling increasingly converge on PEP 621's plain `[project]` table in
+`pyproject.toml` for dependency declarations. This matters if you're deciding on a
+tool for a library meant to interoperate cleanly across the ecosystem versus an
+internal application where Poetry's own conventions are fine.
+
+## pip vs. Poetry vs. uv
+
+| | pip | Poetry | uv |
+|---|---|---|---|
+| Language / runtime | Python | Python | Rust (compiled binary) |
+| Lock file | No (manual) | Yes (`poetry.lock`) | Yes (`uv.lock`) |
+| Resolver speed on large ML stacks | Fast (loose, per-command) | Slow (SAT solver, metadata-hungry) | Fast (parallel, Rust, aggressive caching) |
+| Project/package management | No | Yes, mature | Yes, newer but expanding fast |
+| Dependency spec format | Loose (`==`, `>=`) | Poetry-specific (`^`, `~`) | PEP 621-aligned `[project]` table |
+| Publishing to PyPI | No (needs `twine`/`build`) | Built in (`poetry publish`) | Built in (`uv publish`) |
+| Ecosystem maturity | Universal baseline | Established, widely adopted | Newer, fast-growing adoption |
+
+**When Poetry is the right call**: you're building a library or application that
+benefits from mature dependency-group management, built-in publishing, and don't
+need raw resolver speed to be the deciding factor — Poetry's tooling and community
+plugins (version bumping, monorepo support) are more battle-tested than uv's as of
+now. **When to reconsider**: heavy ML dependency stacks where `poetry lock`
+resolution time becomes a real friction point in CI or local iteration — this is
+the scenario where teams most often migrate to uv.
+
+## Trade-off summary
+
+| Decision | Gains | Costs |
+|---|---|---|
+| Poetry over raw pip | Lock file, dependency groups, built-in publishing | Slower resolver, extra abstraction layer |
+| Caret (`^`) version constraints | Automatic safe minor/patch updates | Trusts semver discipline the package may not follow |
+| Cross-platform lock resolution | One lock file works for every teammate's OS | Slower lock generation, larger lock file |
+| Poetry-specific dependency syntax | Nice ergonomics (`poetry add`) | Less standardized than PEP 621, some tooling friction |

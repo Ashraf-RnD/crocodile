@@ -1,0 +1,74 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Whisper"
+level: intermediate
+phaseSlug: "phase-09-multimodal-ai"
+phaseName: "Multimodal AI"
+topicSlug: "whisper"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "faster-whisper GitHub repository"
+    url: "https://github.com/SYSTRAN/faster-whisper"
+  - type: docs
+    title: "Silero VAD"
+    url: "https://github.com/snakers4/silero-vad"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Why raw Whisper isn't production-ready as-is
+
+The reference `openai-whisper` implementation is optimized for correctness and
+simplicity, not throughput. Two problems show up fast at production scale:
+
+- Inference is comparatively slow, especially on CPU.
+- Whisper has no built-in awareness of silence — it happily spends compute
+  "transcribing" dead air, and can hallucinate text during long silent stretches.
+
+## The production pipeline: VAD + faster-whisper
+
+<Mermaid client:visible code={`flowchart LR
+  A[Raw audio] --> B["VAD\n(detect speech segments)"]
+  B --> C[Skip silence]
+  C --> D["faster-whisper\n(CTranslate2 inference)"]
+  D --> E[Transcribed segments]
+  E --> F[Merge + timestamp align]`} />
+
+**Voice Activity Detection (VAD)** trims silence before it ever reaches Whisper,
+cutting both wasted compute and hallucination risk:
+
+```python
+from faster_whisper import WhisperModel
+
+model = WhisperModel("base", device="cuda", compute_type="float16")
+
+segments, info = model.transcribe(
+    "meeting.mp3",
+    vad_filter=True,          # skip silence automatically
+    vad_parameters=dict(min_silence_duration_ms=500),
+)
+
+print(f"detected language: {info.language} (p={info.language_probability:.2f})")
+for segment in segments:
+    print(f"[{segment.start:.1f}s] {segment.text}")
+```
+
+`faster-whisper` re-implements Whisper's inference on top of CTranslate2, typically
+4x faster than the reference implementation on the same hardware with no accuracy
+loss — it's the library most production transcription services actually deploy.
+
+## Streaming long audio
+
+Whisper's own attention mechanism was trained on 30-second audio windows, so long
+files (a 2-hour podcast) need to be chunked before transcription — both `whisper` and
+`faster-whisper` do this internally, but understanding it matters when you see
+occasional repeated or dropped words at chunk boundaries: that's a seam between two
+30-second windows, not a model failure on that specific audio.
+
+## Real-time transcription needs a different trade-off
+
+For live captioning (a video call, a live stream), you can't wait for a full audio file
+— you need partial transcripts every second or two. This typically means running
+Whisper on short rolling windows (e.g. 2-5 seconds) with overlap, accepting lower
+accuracy on words split across window boundaries in exchange for low latency — a
+different tuning target than batch transcription of a finished recording.

@@ -1,0 +1,124 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Kubeflow"
+level: intermediate
+phaseSlug: "phase-12-mlops"
+phaseName: "MLOps"
+topicSlug: "kubeflow"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "Kubeflow Pipelines SDK v2"
+    url: "https://www.kubeflow.org/docs/components/pipelines/v2/"
+  - type: docs
+    title: "Katib — Hyperparameter Tuning on Kubeflow"
+    url: "https://www.kubeflow.org/docs/components/katib/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Resource requests: GPUs per pipeline step
+
+The reason teams choose Kubeflow over a simpler orchestrator for ML
+specifically is fine-grained, per-step resource control — each component can
+declare exactly what compute it needs:
+
+```python
+from kfp import dsl
+
+@dsl.component(base_image="pytorch/pytorch:2.1-cuda12.1")
+def train_model(data_path: str, epochs: int) -> str:
+    import torch
+    # ... training loop using torch.cuda ...
+    return "model.pt"
+
+@dsl.pipeline(name="gpu-training-pipeline")
+def my_pipeline(data_path: str = "s3://bucket/data.parquet"):
+    train_task = train_model(data_path=data_path, epochs=50)
+    train_task.set_cpu_limit("4")
+    train_task.set_memory_limit("16Gi")
+    train_task.set_accelerator_type("nvidia-tesla-v100")
+    train_task.set_accelerator_limit("1")
+```
+
+The preprocessing step upstream can request a fraction of a CPU core while
+the training step requests a full GPU node — Kubernetes' scheduler places
+each container accordingly, and you only pay for the GPU while `train_task`
+is actually running.
+
+<Mermaid client:visible code={`flowchart LR
+  A["preprocess — 0.5 CPU, no GPU"] --> B["train — 4 CPU + 1 GPU"]
+  B --> C["evaluate — 1 CPU, no GPU"]
+  subgraph Cluster["Kubernetes Cluster"]
+    N1["CPU node pool"]
+    N2["GPU node pool (autoscaled)"]
+  end
+  A -.scheduled to.-> N1
+  B -.scheduled to.-> N2
+  C -.scheduled to.-> N1`} />
+
+## Katib: hyperparameter tuning as a Kubernetes-native job
+
+Kubeflow's **Katib** component runs hyperparameter search trials as
+parallel Kubernetes jobs, similar in spirit to W&B Sweeps but running
+natively on your own cluster:
+
+```yaml
+apiVersion: kubeflow.org/v1beta1
+kind: Experiment
+metadata:
+  name: lr-search
+spec:
+  objective:
+    type: maximize
+    goal: 0.95
+    objectiveMetricName: accuracy
+  algorithm:
+    algorithmName: bayesianoptimization
+  parameters:
+    - name: learning_rate
+      parameterType: double
+      feasibleSpace: { min: "0.0001", max: "0.01" }
+    - name: batch_size
+      parameterType: int
+      feasibleSpace: { min: "16", max: "128" }
+  trialTemplate:
+    trialSpec:
+      apiVersion: batch/v1
+      kind: Job
+      spec:
+        template:
+          spec:
+            containers:
+              - name: training-container
+                image: myregistry/train:latest
+                command: ["python", "train.py", "--lr=${trialParameters.learningRate}"]
+```
+
+Each trial is a real Kubernetes Job, so it benefits from the same node
+autoscaling and GPU scheduling as any other pipeline step — useful when a
+sweep needs to run 50 trials and you want the cluster to scale GPU nodes up
+and back down automatically rather than maintaining a fixed pool.
+
+## Pipeline versioning and recurring runs
+
+Kubeflow Pipelines tracks every compiled pipeline as a versioned artifact,
+and supports scheduling recurring runs directly (or via an external
+orchestrator like Airflow triggering pipeline runs through the KFP API):
+
+```python
+import kfp
+
+client = kfp.Client(host="https://kubeflow.mycompany.internal")
+
+client.create_recurring_run(
+    experiment_id=experiment.experiment_id,
+    job_name="nightly-retrain",
+    pipeline_id=pipeline.pipeline_id,
+    cron_expression="0 3 * * *",
+)
+```
+
+In practice, many teams still use Airflow as the top-level scheduler and have
+an Airflow task trigger a Kubeflow pipeline run via the KFP client — combining
+Airflow's mature scheduling/alerting with Kubeflow's Kubernetes-native,
+GPU-aware execution model for the actual training step.

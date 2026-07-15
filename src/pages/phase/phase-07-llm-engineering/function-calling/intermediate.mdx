@@ -1,0 +1,128 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Function Calling"
+level: intermediate
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "function-calling"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "OpenAI — Function Calling with Pydantic"
+    url: "https://platform.openai.com/docs/guides/function-calling"
+  - type: docs
+    title: "Anthropic — Parallel Tool Use"
+    url: "https://docs.anthropic.com/en/docs/build-with-claude/tool-use/overview"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Generating schemas from real code, not by hand
+
+Hand-writing JSON schemas is error-prone and drifts from your actual function
+signatures. In production, schemas are almost always generated from typed Python
+functions, usually via Pydantic:
+
+```python
+from pydantic import BaseModel, Field
+import openai
+
+class GetWeatherArgs(BaseModel):
+    city: str = Field(description="City name, e.g. 'Paris'")
+    units: str = Field(default="celsius", description="'celsius' or 'fahrenheit'")
+
+def get_weather(city: str, units: str = "celsius") -> dict:
+    ...  # real API call
+
+# openai's newer SDKs and libraries like `instructor` can derive the JSON schema
+# directly from GetWeatherArgs.model_json_schema()
+tool_schema = {
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "Get current weather for a city.",
+        "parameters": GetWeatherArgs.model_json_schema(),
+    },
+}
+```
+
+This keeps the schema and the actual function signature from silently drifting apart —
+a common source of runtime errors when a function is refactored but its manually
+written schema isn't updated to match.
+
+## The full agentic loop with multiple tools
+
+Real systems expose several tools and let the model call them repeatedly until it has
+enough information to answer:
+
+```python
+import json
+
+TOOLS = {"get_weather": get_weather, "search_flights": search_flights}
+tool_schemas = [weather_schema, flight_schema]
+
+messages = [{"role": "user", "content": "Should I bring an umbrella to my flight to Paris tomorrow?"}]
+
+while True:
+    response = client.chat.completions.create(
+        model="gpt-4o", messages=messages, tools=tool_schemas
+    )
+    msg = response.choices[0].message
+    messages.append(msg)
+
+    if not msg.tool_calls:
+        print(msg.content)
+        break
+
+    for call in msg.tool_calls:
+        fn = TOOLS[call.function.name]
+        args = json.loads(call.function.arguments)
+        result = fn(**args)
+        messages.append({
+            "role": "tool", "tool_call_id": call.id, "content": json.dumps(result)
+        })
+```
+
+<Mermaid client:visible code={`flowchart TB
+  A[User message] --> B[Model call with tool schemas]
+  B --> C{Model returned tool_calls?}
+  C -->|Yes| D[Run each function in code]
+  D --> E[Append tool results to messages]
+  E --> B
+  C -->|No| F[Return final text answer]`} />
+
+## Parallel tool calls
+
+Models can request multiple tool calls in a single turn when the calls are
+independent (e.g. checking weather in three cities at once). Both OpenAI and Anthropic
+support this — `msg.tool_calls` is a list, not a single call — so your loop should
+handle and execute all of them (ideally concurrently) before sending results back,
+rather than assuming exactly one call per turn.
+
+## Handling errors and letting the model self-correct
+
+Tool execution fails in the real world — bad arguments, downstream API errors, timeouts.
+Rather than crashing, feed the error back as the tool result and let the model decide
+what to do next (retry with different arguments, ask the user for clarification, or
+give up gracefully):
+
+```python
+try:
+    result = fn(**args)
+except Exception as e:
+    result = {"error": str(e)}
+
+messages.append({"role": "tool", "tool_call_id": call.id, "content": json.dumps(result)})
+```
+
+Models are surprisingly good at recovering from a clear error message ("city not
+found, did you mean 'Paris, France'?") if you give them one, instead of silently
+failing or crashing the whole request.
+
+## Forcing or restricting tool use
+
+Both APIs let you control whether the model *must* call a tool (`tool_choice="required"`),
+must call a *specific* tool, or is free to respond in plain text
+(`tool_choice="auto"`, the default). This matters for reliability: if a step in your
+pipeline should never proceed without a tool call (e.g. always validating input through
+a `validate_order` function before checkout), force it explicitly rather than trusting
+the model to always choose to call it.

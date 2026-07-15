@@ -1,0 +1,89 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Pandas"
+level: beginner
+phaseSlug: "phase-01-python-for-ai"
+phaseName: "Python for AI"
+topicSlug: "pandas"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "pandas — 10 minutes to pandas"
+    url: "https://pandas.pydata.org/docs/user_guide/10min.html"
+  - type: video
+    title: "Pandas Tutorial for Beginners — Corey Schafer"
+    url: "https://www.youtube.com/watch?v=ZyhVh-qRZPA"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Think of it as Excel, but code
+
+If NumPy is for grids of raw numbers, **pandas** is for grids of *labeled, mixed-type*
+data — the kind you get from a CSV, a database export, or a spreadsheet. Every dataset
+you load for training or analysis (customer records, sensor logs, chat transcripts
+with metadata) starts life as a pandas `DataFrame` before it becomes model input.
+
+```python
+import pandas as pd
+
+df = pd.DataFrame({
+    "name": ["Alice", "Bob", "Carla"],
+    "age": [25, 31, 29],
+    "score": [88.5, 72.0, 95.5],
+})
+
+print(df)
+#     name  age  score
+# 0  Alice   25   88.5
+# 1    Bob   31   72.0
+# 2  Carla   29   95.5
+```
+
+A `DataFrame` is a table: rows have an **index**, columns have **names**, and each
+column can hold a different type (text, numbers, dates).
+
+### Reading real data
+
+```python
+df = pd.read_csv("customers.csv")
+
+df.head()        # first 5 rows — always look at your data first
+df.info()        # column types, null counts — catches surprises early
+df.describe()    # count/mean/std/min/max for numeric columns
+```
+
+`.head()` and `.info()` should be the first two things you run on any new dataset —
+they catch wrong data types, unexpected nulls, and misparsed columns before they
+become a confusing bug three steps later.
+
+### Selecting and filtering
+
+```python
+df["age"]                  # a single column (a Series)
+df[["name", "age"]]        # multiple columns (a DataFrame)
+df[df["age"] > 27]         # rows where age > 27 — boolean filtering, same idea as NumPy
+df.loc[0, "name"]          # "Alice" — label-based access: row label, column name
+```
+
+<Mermaid client:visible code={`flowchart LR
+  CSV["customers.csv"] -->|"pd.read_csv"| DF["DataFrame"]
+  DF -->|"df[df.age > 27]"| Filtered["Filtered rows"]
+  DF -->|"df['age']"| Col["Single column (Series)"]`} />
+
+## Try it yourself
+
+Given the `df` above, write one line that returns only the rows where `score` is 85
+or higher.
+
+<details>
+<summary>Solution</summary>
+
+```python
+high_scorers = df[df["score"] >= 85]
+print(high_scorers)
+#     name  age  score
+# 0  Alice   25   88.5
+# 2  Carla   29   95.5
+```
+
+</details>

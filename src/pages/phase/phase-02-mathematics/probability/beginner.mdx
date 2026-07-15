@@ -1,0 +1,70 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Probability"
+level: beginner
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "probability"
+estReadTime: 6
+resources:
+  - type: video
+    title: "StatQuest — Probability vs Likelihood"
+    url: "https://www.youtube.com/watch?v=pYxNSUDSFH4"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## A model's output is a probability
+
+When a classifier says "87% cat," that number is a probability — a value between 0
+and 1 representing how confident the model is. Understanding probability is really
+about understanding what that number means and how to combine several of them.
+
+## The basics
+
+- A probability is always between 0 (impossible) and 1 (certain)
+- All possible outcomes' probabilities sum to 1
+- `P(A)` means "the probability of event A happening"
+
+```python
+# a classifier's output over 3 classes
+probs = {"cat": 0.87, "dog": 0.10, "bird": 0.03}
+sum(probs.values())  # 1.0 — always true for a valid probability distribution
+```
+
+<Mermaid client:visible code={`flowchart LR
+  Img["Input image"] --> Model["Neural network"]
+  Model --> P["Probability distribution"]
+  P --> Cat["cat: 0.87"]
+  P --> Dog["dog: 0.10"]
+  P --> Bird["bird: 0.03"]`} />
+
+## Independent events
+
+Two events are **independent** if one doesn't affect the other's probability. For
+independent events, you multiply probabilities to get the chance both happen:
+
+```python
+p_rain = 0.3
+p_traffic = 0.4
+# if independent:
+p_both = p_rain * p_traffic  # 0.12
+```
+
+Most real events in AI (word sequences, pixel values) are **not** independent — this
+is exactly why conditional probability (next lesson) matters so much.
+
+## Try it yourself
+
+A spam filter is right 95% of the time on any single email. If it checks 3 unrelated
+emails, what's the probability it gets all 3 right (assuming independence)?
+
+<details>
+<summary>Solution</summary>
+
+```python
+p = 0.95 ** 3   # 0.857 — about 85.7%
+```
+
+Notice how quickly compounding "small" error rates add up — this is why a "95%
+accurate" model can still get sequences of decisions wrong surprisingly often.
+</details>

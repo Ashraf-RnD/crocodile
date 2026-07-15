@@ -1,0 +1,75 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "GitHub Copilot"
+level: beginner
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "github-copilot"
+estReadTime: 6
+resources:
+  - type: article
+    title: "GitHub Blog — Inside GitHub: Working with the LLMs behind Copilot"
+    url: "https://github.blog/ai-and-ml/github-copilot/inside-github-working-with-the-llms-behind-github-copilot/"
+  - type: docs
+    title: "GitHub Docs — About GitHub Copilot"
+    url: "https://docs.github.com/en/copilot/about-github-copilot/what-is-github-copilot"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## An autocomplete that reads the whole file
+
+Think of GitHub Copilot as a much smarter version of your editor's
+autocomplete. Regular autocomplete matches words you've already typed
+elsewhere; Copilot reads the code around your cursor — the current file,
+often nearby open files — and asks a language model "given all of this, what
+comes next?" The model was trained on huge amounts of public code, so it has
+learned common patterns: how a function named `parse_date` probably starts,
+what a test for a `Stack` class probably checks, and so on.
+
+<Mermaid client:visible code={`flowchart LR
+  You["You start typing code"] --> Gather["Editor gathers surrounding code as context"]
+  Gather --> Send["Sent to Copilot's servers"]
+  Send --> Model["LLM predicts the most likely next lines"]
+  Model --> Show["Suggestion shown as greyed-out ghost text"]
+  Show --> Decision{"You press Tab or keep typing?"}
+  Decision -->|Tab| Accept["Suggestion inserted"]
+  Decision -->|keep typing| Discard["Suggestion discarded, new one requested"]`} />
+
+## Why it has to be fast
+
+Unlike ChatGPT, where you expect to wait a moment for an answer, Copilot's
+suggestion has to appear **while you're still typing**, or it feels broken —
+most people won't wait more than a few hundred milliseconds for a ghost-text
+suggestion before they've already typed past it. This single constraint
+shapes almost everything about how a coding assistant is built: it needs
+smaller/faster models than a chat product can get away with, and it needs to
+throw away outdated suggestions the instant you type another character.
+
+## Context is the whole game
+
+Copilot's suggestions are only as good as what it can see. A plain
+autocomplete of `def add(` in an empty file has almost nothing to go on; the
+same line in a file full of well-named, well-typed functions gives the model
+much stronger signal. This is why Copilot Chat (the conversational sidebar,
+as opposed to inline suggestions) can pull in more context deliberately —
+open tabs, the repo's structure, even search results from your codebase —
+because it's not racing the same sub-second clock as inline completions.
+
+## Try it yourself
+
+If Copilot's inline suggestions must return in a few hundred milliseconds but
+Copilot Chat answers can take several seconds, what does that suggest about
+whether they're likely running the same size of model?
+
+<details>
+<summary>Solution</summary>
+
+Probably not. A latency budget of a few hundred milliseconds strongly favors
+a smaller, faster model (or a lighter-weight version of a larger model) for
+inline completions, while the chat sidebar — which behaves more like a
+ChatGPT-style conversation — has room for a larger, more capable model since
+users already expect to wait for a written explanation. This is a concrete
+example of routing different requests to different models based on their
+latency budget, a pattern you'll see again in the "Scalability" and "Cost
+Optimization" topics in this phase.
+</details>

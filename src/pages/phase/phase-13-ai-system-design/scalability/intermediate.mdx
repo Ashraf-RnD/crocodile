@@ -1,0 +1,95 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Scalability"
+level: intermediate
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "scalability"
+estReadTime: 9
+resources:
+  - type: article
+    title: "NVIDIA — Mastering LLM Techniques: Inference Optimization"
+    url: "https://developer.nvidia.com/blog/mastering-llm-techniques-inference-optimization/"
+  - type: article
+    title: "vLLM / PagedAttention paper — Efficient Memory Management for LLM Serving"
+    url: "https://arxiv.org/abs/2309.06180"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## What makes LLM serving different from scaling a normal API
+
+Scaling a stateless CRUD API mostly means adding more identical, cheap
+instances behind a load balancer. Scaling LLM inference has three
+complications a typical backend doesn't: requests are expensive and
+variable-length, GPU memory (not just CPU/network) is the binding
+constraint, and cold starts are slow because loading model weights onto a
+GPU takes real time.
+
+<Mermaid client:visible code={`flowchart TB
+  Traffic["Incoming request traffic"] --> Router["Load-aware router<br/>tracks per-GPU queue depth, not just round robin"]
+  Router --> Pool1["GPU pool: model A replicas"]
+  Router --> Pool2["GPU pool: model B replicas (smaller/cheaper)"]
+  Pool1 --> Batcher1["Continuous batching engine"]
+  Pool2 --> Batcher2["Continuous batching engine"]
+  Batcher1 --> GPU1[("GPU memory: weights + KV cache")]
+  Batcher2 --> GPU2[("GPU memory: weights + KV cache")]
+  Autoscaler["Autoscaler"] -.->|adds/removes replicas| Pool1
+  Autoscaler -.-> Pool2`} />
+
+## Continuous batching
+
+A single GPU is wasted running one request at a time — modern inference
+servers batch multiple concurrent requests together so the GPU processes
+them in parallel, which dramatically improves throughput. **Continuous (or
+dynamic) batching** goes further than fixed-size batching: instead of
+waiting for a full batch to accumulate before starting, new requests join an
+in-progress batch as soon as a slot frees up (e.g. a shorter request in the
+batch finishes), keeping GPU utilization consistently high rather than
+oscillating between full and idle.
+
+## Horizontal scaling with load-aware routing
+
+Round-robin load balancing — which works fine for uniform, fast requests —
+breaks down for LLM serving because request cost varies wildly (a 50-token
+answer vs. a 2000-token answer) and a GPU that's mid-generation on several
+long requests is meaningfully more loaded than one that just started. Real
+systems route based on actual load signals (queue depth, estimated
+remaining generation time per in-flight request) rather than blind
+round-robin, to avoid piling more work onto an already-saturated node.
+
+```python
+# Simplified load-aware routing decision
+def pick_replica(replicas):
+    return min(replicas, key=lambda r: r.queue_depth + r.estimated_completion_time)
+```
+
+## Autoscaling on the right signal
+
+CPU utilization — the default autoscaling metric for most web services — is
+a poor signal for GPU inference; a GPU can be fully saturated on compute
+while host CPU sits idle. Practical autoscaling for LLM serving triggers on
+GPU utilization, queue depth, or p95 latency directly, and has to account
+for the fact that a new replica isn't useful the instant it's provisioned —
+model weights (often tens of gigabytes) still need to load into GPU memory,
+which can take a meaningful fraction of a minute, so autoscaling needs to
+react *before* saturation, not at the moment it happens.
+
+## Model-tier routing as a scaling lever
+
+Not every request needs the largest, most capable model. Routing simpler
+requests (short, low-complexity queries) to a smaller/faster model tier, and
+reserving the largest model for requests that need it, increases effective
+throughput per GPU-dollar without touching model quality for the requests
+that actually need the big model — this is as much a scaling strategy as
+adding more hardware.
+
+## Graceful degradation under overload
+
+When demand outpaces capacity despite autoscaling (a sudden spike, a
+provisioning delay), the alternative to failing requests outright is
+**degrading gracefully**: shorter default response lengths, routing to a
+smaller model temporarily, or queuing with an honest wait-time estimate
+rather than silently dropping requests. Which degradation strategy is
+acceptable is a product decision as much as an engineering one, but the
+system needs to support at least one such fallback rather than only
+"succeed at full quality or fail."

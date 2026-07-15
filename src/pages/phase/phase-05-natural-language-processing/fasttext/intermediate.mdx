@@ -1,0 +1,95 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "FastText"
+level: intermediate
+phaseSlug: "phase-05-natural-language-processing"
+phaseName: "Natural Language Processing"
+topicSlug: "fasttext"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "fastText — Text classification tutorial"
+    url: "https://fasttext.cc/docs/en/supervised-tutorial.html"
+  - type: docs
+    title: "fastText — Python API reference"
+    url: "https://fasttext.cc/docs/en/python-module.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## How sub-word vectors are actually built
+
+FastText represents each word as the sum of vectors for its character n-grams
+(typically length 3-6), plus a vector for the whole word itself. The word's final
+vector is the average of all these pieces:
+
+<Mermaid client:visible code={`flowchart TB
+  W["word: 'where'"] --> NG["n-grams (n=3): <wh, whe, her, ere, re>"]
+  NG --> V1[vector: whe]
+  NG --> V2[vector: her]
+  NG --> V3[vector: ere]
+  NG --> V4["vector: <wh"]
+  NG --> V5["vector: re>"]
+  V1 & V2 & V3 & V4 & V5 --> Sum[Sum + average]
+  Sum --> Out["final vector for 'where'"]`} />
+
+The angle brackets `<` and `>` mark word boundaries, so `"her"` as a standalone word
+and `"her"` as a substring of `"where"` end up as distinct n-gram entries — this
+prevents the model from conflating unrelated short substrings.
+
+## Training your own model with the fastText CLI/Python API
+
+```python
+import fasttext
+
+# Unsupervised: learn word vectors from raw text (one document per line)
+model = fasttext.train_unsupervised(
+    "corpus.txt",
+    model="skipgram",     # or "cbow"
+    dim=100,
+    minn=3, maxn=6,        # n-gram size range
+    epoch=5,
+    thread=4,
+)
+model.save_model("custom_fasttext.bin")
+
+# Supervised: train a text classifier directly
+# (each line: "__label__positive great product, highly recommend")
+clf = fasttext.train_supervised(
+    "labeled_data.txt",
+    lr=1.0,
+    epoch=25,
+    wordNgrams=2,           # use word bigrams as extra features
+)
+print(clf.predict("this product broke after one day"))
+# (('__label__negative',), array([0.87]))
+```
+
+FastText's built-in supervised mode is notable in production: it trains a linear
+classifier over averaged (word + subword) n-gram features, achieving accuracy close
+to more complex deep learning models on many text classification tasks, while
+training in seconds to minutes on commodity CPUs — no GPU required. This makes it a
+common choice for fast baselines, spam/language-ID filters, and any setting where
+sub-second CPU-only inference matters more than squeezing out the last percentage
+point of accuracy.
+
+## Handling morphologically rich languages
+
+Languages with heavy inflection — Finnish, Turkish, Arabic — generate huge numbers of
+distinct word forms from a single root (a single Finnish verb can have dozens of
+conjugated forms). A word-level model like Word2Vec sees each form as an unrelated
+token and needs to see every one in training data separately. FastText's n-gram
+sharing means related word forms automatically share sub-word features, so the model
+generalizes across inflected forms it has never directly encountered — this is why
+FastText's pretrained vectors (available for 157 languages) are disproportionately
+more useful, relative to Word2Vec, for morphologically rich languages than for
+English.
+
+## Trade-offs versus plain Word2Vec
+
+FastText is a strict superset of Word2Vec's capability (setting `minn=maxn=0`
+effectively reproduces Word2Vec-style whole-word vectors), but it isn't free:
+training is slower and vectors need more memory, because each word now trains
+multiple n-gram vectors instead of one. In practice this is rarely a blocker — the
+official pretrained FastText vectors are widely available and the training-time cost
+is a one-time expense — but it's worth knowing FastText is doing meaningfully more
+work per word than Word2Vec, not just a drop-in replacement.

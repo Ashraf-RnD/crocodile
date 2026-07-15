@@ -1,0 +1,132 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Triton Inference Server"
+level: intermediate
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "triton-inference-server"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "Triton — Model Configuration (config.pbtxt reference)"
+    url: "https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/user_guide/model_configuration.html"
+  - type: docs
+    title: "Triton — Architecture and Ensemble Models"
+    url: "https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/user_guide/architecture.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The model repository layout
+
+Triton discovers models by scanning a directory tree with a fixed structure — each
+model gets its own folder, a config file, and versioned subfolders for the actual
+weights:
+
+```
+model_repository/
+├── text_classifier/
+│   ├── config.pbtxt
+│   ├── 1/
+│   │   └── model.onnx
+│   └── 2/
+│       └── model.onnx
+└── llama_backend/
+    ├── config.pbtxt
+    └── 1/
+        └── model.plan   # TensorRT-LLM engine
+```
+
+Multiple version folders (`1/`, `2/`) let you roll out a new model version alongside
+the old one, controlled entirely by config — no code deploy, no separate service.
+
+## A real `config.pbtxt`
+
+```protobuf
+name: "text_classifier"
+platform: "onnxruntime_onnx"
+max_batch_size: 32
+
+input [
+  {
+    name: "INPUT_IDS"
+    data_type: TYPE_INT64
+    dims: [ -1 ]
+  }
+]
+output [
+  {
+    name: "LOGITS"
+    data_type: TYPE_FP32
+    dims: [ 2 ]
+  }
+]
+
+dynamic_batching {
+  preferred_batch_size: [ 8, 16, 32 ]
+  max_queue_delay_microseconds: 5000
+}
+
+instance_group [
+  {
+    count: 2
+    kind: KIND_GPU
+    gpus: [ 0 ]
+  }
+]
+```
+
+`dynamic_batching` is the key production feature: Triton holds incoming requests for
+up to `max_queue_delay_microseconds` (here, 5ms) to accumulate a batch close to
+`preferred_batch_size`, trading a small amount of added latency for dramatically
+better GPU utilization versus processing each request one at a time.
+`instance_group` with `count: 2` runs two copies of the model on GPU 0, letting
+Triton serve two requests genuinely concurrently instead of queueing behind one
+instance.
+
+## Launching Triton
+
+```bash
+docker run --gpus all --rm \
+  -p 8000:8000 -p 8001:8001 -p 8002:8002 \
+  -v $(pwd)/model_repository:/models \
+  nvcr.io/nvidia/tritonserver:24.09-py3 \
+  tritonserver --model-repository=/models
+```
+
+Ports 8000 (HTTP), 8001 (gRPC), and 8002 (metrics, Prometheus-compatible) are all
+exposed by a single Triton process serving every model in the repository.
+
+## Ensembles: multi-step pipelines as config
+
+A common real pipeline — tokenize/preprocess, run the model, decode/postprocess — can
+be expressed as a Triton **ensemble**: a virtual "model" that's really a DAG of other
+models, defined declaratively rather than in a client-side orchestration script:
+
+<Mermaid client:visible code={`flowchart LR
+  Req["Client request"] --> Pre["Preprocess (Python backend)"]
+  Pre --> TRT["TensorRT-LLM backend"]
+  TRT --> Post["Postprocess (Python backend)"]
+  Post --> Resp["Response"]`} />
+
+```protobuf
+name: "llm_pipeline"
+platform: "ensemble"
+
+ensemble_scheduling {
+  step [
+    { model_name: "preprocess", model_version: -1,
+      input_map { key: "TEXT" value: "TEXT" }
+      output_map { key: "INPUT_IDS" value: "INPUT_IDS" } },
+    { model_name: "llama_backend", model_version: -1,
+      input_map { key: "INPUT_IDS" value: "INPUT_IDS" }
+      output_map { key: "OUTPUT_IDS" value: "OUTPUT_IDS" } },
+    { model_name: "postprocess", model_version: -1,
+      input_map { key: "OUTPUT_IDS" value: "OUTPUT_IDS" }
+      output_map { key: "TEXT_OUT" value: "TEXT_OUT" } }
+  ]
+}
+```
+
+The client calls one endpoint (`llm_pipeline`); Triton internally routes data through
+each step. This keeps pipeline logic server-side and versioned alongside the model,
+instead of scattered across client applications.

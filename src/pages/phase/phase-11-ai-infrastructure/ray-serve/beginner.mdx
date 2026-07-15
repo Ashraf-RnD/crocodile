@@ -1,0 +1,85 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Ray Serve"
+level: beginner
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "ray-serve"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "Ray Serve — Getting Started"
+    url: "https://docs.ray.io/en/latest/serve/getting_started.html"
+---
+
+## Turning a Python function into a web service
+
+Normally, serving a model means writing a Flask/FastAPI app, wiring up routes, and
+handling scaling yourself. **Ray Serve** takes a Python class or function and turns it
+into a running, scalable service with a decorator and one function call — it's built
+on top of [Ray](https://www.ray.io/), the distributed computing framework, so it
+inherits Ray's ability to spread work across many machines without you writing
+distributed-systems code by hand.
+
+Think of `@serve.deployment` as "wrap this class as a service" and `serve.run()` as
+"start it up and give me an HTTP endpoint" — the same mental model as a web framework,
+but with scaling built in from the start.
+
+## A minimal deployment
+
+```python
+from starlette.requests import Request
+from transformers import pipeline
+from ray import serve
+
+@serve.deployment
+class SentimentModel:
+    def __init__(self):
+        self.classifier = pipeline("sentiment-analysis")
+
+    async def __call__(self, request: Request):
+        data = await request.json()
+        return self.classifier(data["text"])
+
+app = SentimentModel.bind()
+```
+
+```bash
+serve run sentiment:app
+```
+
+```python
+import requests
+
+resp = requests.post("http://localhost:8000/", json={"text": "Ray Serve is neat!"})
+print(resp.json())
+```
+
+The model loads once in `__init__` (not on every request), and Ray Serve handles
+routing HTTP requests to your `__call__` method — the same pattern you'd hand-roll in
+Flask, but Ray Serve also gives you replica scaling and GPU assignment for free once
+you need them.
+
+## Why not just use Flask?
+
+Flask alone gives you one process handling requests one (or a few) at a time — scaling
+means you manage your own load balancer, process pool, and GPU assignment. Ray Serve
+gives you multiple **replicas** of your deployment out of the box, with request
+routing across them handled automatically, which matters the moment your model gets
+enough traffic that one process can't keep up.
+
+## Try it yourself
+
+You have a deployment class whose `__init__` loads a 2GB model. If Ray Serve created a
+fresh instance of your class for *every* incoming request instead of reusing
+long-lived replicas, what would go wrong under real traffic?
+
+<details>
+<summary>Solution</summary>
+
+You'd reload the 2GB model from disk on every single request — adding seconds of
+latency and I/O load per request instead of milliseconds. This is exactly why
+`__init__` runs once per replica, not once per request: expensive setup (loading
+weights, opening connections) happens once, and replicas stay warm to serve many
+requests.
+</details>

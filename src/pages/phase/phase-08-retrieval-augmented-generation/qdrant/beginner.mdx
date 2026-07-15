@@ -1,0 +1,93 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Qdrant"
+level: beginner
+phaseSlug: "phase-08-retrieval-augmented-generation"
+phaseName: "Retrieval-Augmented Generation"
+topicSlug: "qdrant"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "Qdrant — Quickstart"
+    url: "https://qdrant.tech/documentation/quickstart/"
+  - type: docs
+    title: "Qdrant — Python client"
+    url: "https://python-client.qdrant.tech/"
+---
+
+## A database built specifically for vectors
+
+You've seen how embeddings let you find similar text by comparing vectors. **Qdrant**
+is a database purpose-built to store millions (or billions) of those vectors and
+search them fast, instead of you writing that comparison loop yourself. It's one of
+the most popular open-source vector databases, with a simple Python client and a free
+local mode for learning.
+
+## Running Qdrant locally
+
+```python
+# pip install qdrant-client
+from qdrant_client import QdrantClient
+from qdrant_client.models import VectorParams, Distance, PointStruct
+
+client = QdrantClient(":memory:")  # in-memory, great for learning/testing
+
+client.create_collection(
+    collection_name="articles",
+    vectors_config=VectorParams(size=384, distance=Distance.COSINE),
+)
+```
+
+A **collection** is Qdrant's term for a table — a named group of vectors that share
+the same dimensionality and distance metric. `size=384` matches the output dimension
+of a small embedding model like `all-MiniLM-L6-v2`.
+
+## Storing and searching vectors
+
+```python
+from sentence_transformers import SentenceTransformer
+
+model = SentenceTransformer("all-MiniLM-L6-v2")
+
+texts = [
+    "Our refund policy allows returns within 30 days.",
+    "To reset your password, go to Settings.",
+    "Standard shipping takes 5-7 business days.",
+]
+vectors = model.encode(texts)
+
+client.upsert(
+    collection_name="articles",
+    points=[
+        PointStruct(id=i, vector=vectors[i].tolist(), payload={"text": texts[i]})
+        for i in range(len(texts))
+    ],
+)
+
+query_vector = model.encode("How long until my order ships?")
+results = client.query_points(collection_name="articles", query=query_vector, limit=2)
+
+for hit in results.points:
+    print(hit.score, hit.payload["text"])
+```
+
+Each stored vector carries a **payload** — arbitrary metadata (here, the original
+text) that comes back attached to search results, so you don't need a separate lookup
+to know what a matching vector actually represents.
+
+## Try it yourself
+
+If you wanted to only search articles tagged `category: "shipping"`, would you filter
+the results *after* calling `query_points`, or is there a better way? (Hint: think
+about what happens if 99 of your top 100 nearest vectors aren't shipping-related.)
+
+<details>
+<summary>Solution</summary>
+
+Filtering after the search runs risks getting far fewer than the results you wanted —
+if most of the nearest vectors aren't shipping-related, post-filtering could leave you
+with just 1 or 2 results instead of the `limit` you asked for. Qdrant supports passing
+a `query_filter` directly into `query_points`, so the filter is applied *during* the
+search itself, guaranteeing you get up to `limit` results that already satisfy the
+filter, not just the top-k unfiltered results with irrelevant ones later discarded.
+</details>

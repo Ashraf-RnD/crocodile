@@ -1,0 +1,89 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Batch Normalization"
+level: expert
+phaseSlug: "phase-04-deep-learning"
+phaseName: "Deep Learning"
+topicSlug: "batch-normalization"
+estReadTime: 12
+resources:
+  - type: article
+    title: "How Does Batch Normalization Help Optimization? (Santurkar et al.)"
+    url: "https://arxiv.org/abs/1805.11604"
+  - type: article
+    title: "Group Normalization (Wu & He)"
+    url: "https://arxiv.org/abs/1803.08494"
+---
+
+## The original explanation, and why it was later challenged
+
+The original BatchNorm paper attributed its benefits to reducing **internal
+covariate shift** — the idea that each layer's input distribution shifts as
+earlier layers' weights change during training, forcing later layers to constantly
+readapt. Santurkar et al. (2018) empirically challenged this: they showed BatchNorm
+still helps even when internal covariate shift is *artificially reintroduced* via
+injected noise after normalization, and that networks without BatchNorm don't
+actually show dramatically worse covariate shift than networks with it. Their
+alternative explanation is that BatchNorm smooths the **loss landscape** — it
+provably bounds the Lipschitz constants of the loss and its gradients, making
+gradient descent more predictable and allowing safely larger learning rates. This
+matters practically: it means BatchNorm's real value is optimization stability,
+not "fixing" a distributional shift problem — a distinction that clarifies why
+alternatives (LayerNorm, GroupNorm) that don't address covariate shift in the same
+way can still deliver comparable training stability benefits.
+
+## The math: normalization plus a learned affine transform
+
+For a mini-batch, BatchNorm computes:
+
+```
+mu_B = mean(x) over the batch
+sigma_B^2 = variance(x) over the batch
+x_hat = (x - mu_B) / sqrt(sigma_B^2 + eps)
+y = gamma * x_hat + beta          # learned scale (gamma) and shift (beta)
+```
+
+The learned `gamma`/`beta` are crucial: without them, BatchNorm would force every
+layer's output into a fixed mean-0/std-1 distribution, which can *destroy*
+representational capacity (e.g., a sigmoid needs to see values away from 0 to avoid
+its linear regime). `gamma`/`beta` let the network undo the normalization entirely
+if that's optimal — normalization is a reparameterization the network can learn
+around, not a hard constraint on what it can represent.
+
+## Alternatives and when they're actually better
+
+| Normalization | Statistics computed over | Batch-size dependent | Typical domain |
+|---|---|---|---|
+| BatchNorm | Batch dimension (per channel) | Yes — degrades at small batch | CNNs with large batch sizes |
+| LayerNorm | Feature dimension (per sample) | No | Transformers, RNNs, variable batch sizes |
+| GroupNorm | Channel groups (per sample) | No | CNNs with small batch sizes (detection, segmentation) |
+| InstanceNorm | Per-sample, per-channel spatial stats | No | Style transfer, generative image models |
+| RMSNorm | Feature dimension, no mean subtraction | No | Modern LLMs (LLaMA, etc.) — cheaper than LayerNorm |
+
+LayerNorm's independence from batch size is precisely why it, not BatchNorm, became
+standard in transformers: NLP batches routinely mix variable-length sequences and
+run with small effective batch sizes during generation, exactly the regime where
+BatchNorm's statistics become unreliable.
+
+## The inference-time cost of getting `eval()` wrong
+
+Because BatchNorm swaps its normalization source between training and eval modes,
+a model shipped to production with `model.train()` accidentally left on will
+silently normalize using single-batch (often single-sample) statistics at serving
+time — batch statistics computed from one sample are close to meaningless,
+producing degraded and non-deterministic predictions that vary run to run for
+identical input. This class of bug is notoriously hard to catch in code review
+because the model still runs without error; it only surfaces as unexplained
+accuracy degradation or non-reproducibility in production, which is why
+`model.eval()` (or better, a context manager/lint rule enforcing it) is treated as a
+release-blocking checklist item on serious ML teams.
+
+## Fused BatchNorm for inference
+
+At inference time, since `running_mean`/`running_var`/`gamma`/`beta` are all fixed
+constants, BatchNorm's affine transform can be mathematically folded directly into
+the preceding convolution or linear layer's weights and bias — eliminating the
+BatchNorm op entirely with zero change in output. This "BN folding" is a standard
+step in inference-optimization toolchains (TensorRT, ONNX Runtime, TFLite) and is a
+free latency win specifically because BatchNorm's inference-time behavior is just a
+fixed affine transform, not a genuinely dynamic computation.

@@ -1,0 +1,75 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Gemini Speech"
+level: beginner
+phaseSlug: "phase-09-multimodal-ai"
+phaseName: "Multimodal AI"
+topicSlug: "gemini-speech"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "Gemini API — Audio understanding"
+    url: "https://ai.google.dev/gemini-api/docs/audio"
+  - type: docs
+    title: "Gemini API — Live API (real-time audio)"
+    url: "https://ai.google.dev/gemini-api/docs/live"
+---
+
+## A model that can listen and talk, not just read
+
+Most of the AI systems you've used so far take text in, text out. **Gemini** (Google's
+multimodal model family) can take *audio* directly as input, and — through its native
+audio capabilities — generate spoken audio directly as output too. No separate
+"transcribe, then run the LLM, then synthesize speech" pipeline required.
+
+Think of it like talking to a person instead of typing to a chatbot: it hears your
+tone and words together, and can respond in a natural spoken voice, all inside one
+model.
+
+### Sending audio to Gemini
+
+```python
+from google import genai
+
+client = genai.Client(api_key="YOUR_API_KEY")
+
+with open("question.wav", "rb") as f:
+    audio_bytes = f.read()
+
+response = client.models.generate_content(
+    model="gemini-2.0-flash",
+    contents=[
+        "Answer the question asked in this audio clip.",
+        {"mime_type": "audio/wav", "data": audio_bytes},
+    ],
+)
+print(response.text)
+```
+
+Gemini transcribes and *understands* the audio in one step — no separate speech-to-text
+call needed before you can reason about what was said.
+
+## Try it yourself
+
+Ask Gemini to summarize a longer audio clip (e.g. a 5-minute recorded meeting) into
+three bullet points instead of transcribing it verbatim.
+
+<details>
+<summary>Solution</summary>
+
+```python
+response = client.models.generate_content(
+    model="gemini-2.0-flash",
+    contents=[
+        "Summarize this meeting recording in exactly 3 bullet points.",
+        {"mime_type": "audio/wav", "data": audio_bytes},
+    ],
+)
+print(response.text)
+```
+
+Because Gemini processes the audio natively, it can reason about content, tone, and
+structure in the same pass — you're not limited to "transcribe then summarize" as two
+separate steps.
+
+</details>

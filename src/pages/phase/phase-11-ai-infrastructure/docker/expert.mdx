@@ -1,0 +1,113 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Docker"
+level: expert
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "docker"
+estReadTime: 11
+resources:
+  - type: docs
+    title: "NVIDIA NGC Catalog — PyTorch Container"
+    url: "https://catalog.ngc.nvidia.com/orgs/nvidia/containers/pytorch"
+  - type: article
+    title: "Docker Docs — Run as a non-root user"
+    url: "https://docs.docker.com/engine/security/rootless/"
+---
+
+## The real cost of an LLM-serving image
+
+A production LLM-serving image is dominated by three things: the CUDA runtime, `torch`
+(often 2-4 GB with its bundled CUDA/cuDNN/NCCL shared libraries), and the model server
+framework (`vllm`, `transformers`, `tensorrt-llm`). It is not unusual for a finished
+image to be 8-15 GB. At that size, image size stops being a cosmetic concern and
+becomes an operational one: pulling a 12 GB image to a fresh node before a pod can
+start serving traffic can dominate your cold-start latency, especially during
+autoscaling events when new nodes are spinning up under load.
+
+Three build strategies you'll actually choose between in production:
+
+1. **Build your own from `nvidia/cuda:*-runtime`** — full control over exactly what's
+   installed, smallest possible surface area, but you own compatibility (matching CUDA
+   runtime version to the `torch` wheel's expected CUDA version, matching cuDNN/NCCL
+   versions for multi-GPU work).
+2. **Start from an official PyTorch image (`pytorch/pytorch:*-cuda*-cudnn*-runtime`)**
+   — dependency versions are pre-validated to work together, saves you the
+   compatibility matrix headache, but you inherit whatever else is in that image.
+3. **Start from an NVIDIA NGC container** (`nvcr.io/nvidia/pytorch:*` or a
+   framework-specific NGC image) — NVIDIA-tuned builds (fused kernels, optimized
+   NCCL), validated against specific driver/hardware combos, best raw performance on
+   NVIDIA hardware, but larger images and a slower NVIDIA release cadence than PyPI.
+
+## Layer caching strategy at scale
+
+For large images, caching discipline is the difference between a 90-second CI rebuild
+and a 20-minute one. The rule generalizes from the intermediate lesson: order layers
+from least-to-most frequently changing, and separate expensive, rarely-changing
+installs (CUDA base, system packages, `torch` itself) from your actual application
+code and frequently-updated small dependencies.
+
+```dockerfile
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04 AS base
+RUN apt-get update && apt-get install -y python3.11 python3-pip && rm -rf /var/lib/apt/lists/*
+
+# Heavy, stable layer — rebuilt only when torch/CUDA version bumps
+RUN pip install --no-cache-dir torch==2.4.0 --index-url https://download.pytorch.org/whl/cu124
+
+# Medium layer — app-level deps, changes occasionally
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Cheap, frequently-changing layer — your code
+COPY . .
+CMD ["python3", "serve.py"]
+```
+
+In CI, pair this with a registry-based cache (`docker buildx build --cache-from
+type=registry,ref=myrepo/image:cache --cache-to type=registry,ref=myrepo/image:cache`)
+so cold CI runners can still reuse the `torch` layer instead of re-downloading a
+multi-GB wheel on every build.
+
+## Security: don't run inference as root
+
+Model-serving containers accept untrusted-ish input (user prompts, uploaded files) and
+often run with network access to fetch model weights — running as root inside the
+container is an unnecessary escalation of blast radius if the process is ever
+compromised or a dependency has a vulnerability.
+
+```dockerfile
+FROM python:3.11-slim
+RUN useradd --create-home --uid 1000 appuser
+WORKDIR /app
+COPY --chown=appuser:appuser . .
+USER appuser
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+Combine this with a minimal base image (`slim` or `distroless` where feasible) to
+shrink the attack surface further — fewer installed packages means fewer CVEs to
+patch and track. Distroless is harder to pull off for CUDA workloads since you often
+need `apt` to install driver-adjacent system libraries, which is one reason GPU images
+tend to stay on `-slim` or full Ubuntu bases rather than distroless.
+
+## Comparison: base image strategies for GPU serving images
+
+| Strategy | Image size | Build/maintenance burden | GPU driver compat | Best for |
+|---|---|---|---|---|
+| `nvidia/cuda:*-runtime` + manual install | Smallest achievable, fully custom | High — you track CUDA/cuDNN/NCCL/torch version matrix yourself | You must match versions manually; easy to get wrong | Teams that need tight control over image size/cost and have infra expertise |
+| Official `pytorch/pytorch:*-cuda*` image | Medium-large, pre-bundled | Low — versions pre-validated by PyTorch maintainers | Good, PyTorch team tests the combos they ship | Most teams; best default for general PyTorch serving |
+| NVIDIA NGC container | Largest, feature-rich | Low for compatibility, but NGC release cadence lags PyPI | Best — NVIDIA-validated against specific driver/hardware | Performance-critical serving on NVIDIA GPUs (fused kernels, tuned NCCL) |
+| Slim Python + no GPU (CPU-only serving) | Smallest overall | Low | N/A | Small models, embeddings, or edge cases where GPU isn't worth the image bloat |
+
+## Registry pull time as a latency budget item
+
+When an autoscaler adds a node to serve a traffic spike, that node typically has no
+layers cached — it has to pull the full image before the pod can even start loading
+model weights. A 10 GB image at typical registry throughput can add minutes to
+time-to-first-token during a scale-up event, which is often a larger contributor to
+tail latency than model load time itself. Mitigations used in production: pre-pulling
+images onto node pools ahead of expected traffic (via a `DaemonSet` or node image
+cache), using a registry mirror colocated with the compute region, and aggressively
+trimming unused layers (dev tools, test dependencies, unused CUDA components like
+`nvidia/cuda:*-devel` when you only need `*-runtime`) since `-devel` images ship
+compilers and headers that are dead weight at inference time.

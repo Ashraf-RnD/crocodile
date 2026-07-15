@@ -1,0 +1,123 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Kubernetes"
+level: intermediate
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "kubernetes"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "Kubernetes Docs — Configure Liveness, Readiness and Startup Probes"
+    url: "https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/"
+  - type: docs
+    title: "NVIDIA — GPU Scheduling in Kubernetes"
+    url: "https://docs.nvidia.com/datacenter/cloud-native/kubernetes/latest/index.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## A real vLLM Deployment + Service
+
+Serving an LLM on Kubernetes means requesting GPU resources explicitly and being
+careful about health checks, since loading a multi-gigabyte model can take minutes —
+far longer than a typical web app's startup.
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-llama3-8b
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: vllm-llama3-8b
+  template:
+    metadata:
+      labels:
+        app: vllm-llama3-8b
+    spec:
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai:latest
+          args: ["--model", "meta-llama/Meta-Llama-3-8B-Instruct"]
+          ports:
+            - containerPort: 8000
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+              nvidia.com/gpu: 1
+            limits:
+              cpu: "8"
+              memory: "24Gi"
+              nvidia.com/gpu: 1
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 120
+            periodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-llama3-8b-svc
+spec:
+  selector:
+    app: vllm-llama3-8b
+  ports:
+    - port: 80
+      targetPort: 8000
+  type: ClusterIP
+```
+
+Two details matter here more than in a typical web service. First,
+`nvidia.com/gpu: 1` in both `requests` and `limits` — GPUs are not shareable by
+default the way CPU/memory are, so requests and limits must match exactly (you're
+either given a whole GPU or none). Second, `initialDelaySeconds: 60` on the readiness
+probe — a default (short) delay would mark the Pod "not ready" and get it killed by
+Kubernetes before model loading even finishes, causing a crash loop that has nothing
+to do with the app actually being broken.
+
+<Mermaid client:visible code={`flowchart LR
+  Client["Client request"] --> Svc["Service\n(stable DNS/IP, load-balances)"]
+  Svc --> Pod1["Pod: vLLM replica 1\n(GPU 1)"]
+  Svc --> Pod2["Pod: vLLM replica 2\n(GPU 1)"]
+  Pod1 --> GPU1["Physical GPU"]
+  Pod2 --> GPU2["Physical GPU"]`} />
+
+## Why the Service matters
+
+Pods are ephemeral — they get rescheduled with new IPs when they restart. A
+**Service** gives your Deployment a stable DNS name and IP (`vllm-llama3-8b-svc`) that
+automatically load-balances across whichever Pods currently match its label selector,
+so clients (or an ingress/gateway in front of it) never need to track individual Pod
+addresses.
+
+## Resource requests vs limits, and why they matter here
+
+`requests` is what the scheduler uses to decide which node has room for this Pod;
+`limits` is the hard ceiling enforced at runtime. Setting `memory` requests
+realistically (not just GPU) matters for LLM serving because the KV cache and
+activation memory live in host-pinned or GPU memory depending on configuration, and
+an undersized memory request risks the node's out-of-memory killer terminating your
+Pod under load — a much harder failure to debug than a clean scheduling rejection.
+
+## Horizontal Pod Autoscaler, briefly
+
+```bash
+kubectl autoscale deployment vllm-llama3-8b --cpu-percent=70 --min=2 --max=6
+```
+
+This works for CPU-bound services, but for GPU-serving workloads CPU utilization is
+usually a poor scaling signal — the GPU is the actual bottleneck, and CPU percent
+barely moves even under heavy inference load. Production GPU autoscaling typically
+needs custom metrics instead, covered at the expert level.

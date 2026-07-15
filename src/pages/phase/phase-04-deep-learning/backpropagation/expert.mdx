@@ -1,0 +1,81 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Backpropagation"
+level: expert
+phaseSlug: "phase-04-deep-learning"
+phaseName: "Deep Learning"
+topicSlug: "backpropagation"
+estReadTime: 12
+resources:
+  - type: article
+    title: "Understanding the difficulty of training deep feedforward neural networks (Glorot & Bengio)"
+    url: "https://proceedings.mlr.press/v9/glorot10a/glorot10a.pdf"
+  - type: docs
+    title: "PyTorch — Automatic Mixed Precision and loss scaling"
+    url: "https://pytorch.org/docs/stable/notes/amp_examples.html"
+---
+
+## Backprop as a Jacobian-vector product chain
+
+Formally, backpropagation computes vector-Jacobian products (VJPs), not full
+Jacobian matrices. For a layer `y = f(x)`, the backward pass receives
+`dLoss/dy` (a vector) and computes `dLoss/dx = J^T · (dLoss/dy)` without ever
+materializing the full Jacobian `J`. This is the computational trick that makes
+backprop tractable: explicitly forming Jacobians for layers with millions of
+parameters would be prohibitively expensive, but the VJP can often be computed in
+roughly the same cost as the forward pass itself.
+
+## Compute vs. memory: the fundamental trade-off
+
+Reverse-mode backprop requires caching every intermediate activation from the
+forward pass, because the backward computation at each layer typically needs its
+own input. This gives it `O(depth)` memory for a network with sequential depth
+`depth`, in exchange for `O(1)` passes overall (one forward, one backward) — as
+opposed to naively re-running a full forward pass for every parameter's finite
+difference, which would be `O(N)` forward passes for `N` parameters. Gradient
+checkpointing exists precisely to relax this memory bound by recomputing rather
+than storing, trading it back for extra compute at O(sqrt(depth)) memory in the
+common checkpoint-every-few-layers scheme.
+
+## Numerical precision issues in practice
+
+Training in float16 exposes a genuine backprop failure mode: gradients for
+well-trained networks are often very small in magnitude, and float16's limited
+exponent range means small gradient values can underflow to exactly zero before
+they're even used, silently killing learning for affected weights. **Loss scaling**
+(multiply the loss by a large constant before `.backward()`, then unscale the
+resulting gradients before the optimizer step) shifts the gradient distribution into
+float16's representable range without changing the mathematical result:
+
+```python
+scaler = torch.cuda.amp.GradScaler()
+with torch.autocast(device_type="cuda", dtype=torch.float16):
+    loss = criterion(model(x), y)
+scaler.scale(loss).backward()   # scales loss up before backward
+scaler.step(optimizer)          # unscales grads, skips step if any are inf/nan
+scaler.update()                 # adjusts scale factor for next iteration
+```
+
+`bfloat16` sidesteps this specific problem (same exponent range as float32, so no
+underflow) at the cost of less mantissa precision — a large part of why bfloat16 has
+become the default training dtype on modern accelerators.
+
+## Comparing mitigations for vanishing/exploding gradients
+
+| Technique | Mechanism | Cost | Where it's used |
+|---|---|---|---|
+| ReLU-family activations | Derivative is 1 (not less than 1) for active units | None | Default for most hidden layers |
+| Residual/skip connections | Adds an identity path so gradients can bypass a block entirely | Small extra memory | ResNets, Transformers, virtually all deep modern architectures |
+| Batch/Layer normalization | Keeps layer input distributions well-scaled | Extra compute per layer | CNNs (BatchNorm), Transformers (LayerNorm) |
+| Careful weight initialization (Kaiming/Xavier) | Keeps activation variance stable at the start of training | None (one-time) | Universal default at model init |
+| Gradient clipping | Caps gradient norm before the optimizer step | Negligible | RNNs/LSTMs, any training prone to spikes |
+| Loss scaling | Shifts gradient magnitudes into float16's representable range | Negligible | Mixed-precision training |
+
+## Why this still matters with autograd doing the work for you
+
+Nobody hand-derives backprop equations for production models anymore — but
+diagnosing a network that "isn't learning" almost always comes back to one of the
+mechanisms above breaking down somewhere in the backward chain. Understanding
+backprop as literally a product of local derivatives is what lets you reason about
+*where* in a 100-layer network a gradient problem is coming from, rather than
+treating the whole model as an opaque box.

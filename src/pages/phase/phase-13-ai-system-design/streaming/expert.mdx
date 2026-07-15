@@ -1,0 +1,92 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Streaming"
+level: expert
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "streaming"
+estReadTime: 12
+resources:
+  - type: docs
+    title: "OpenAI Platform — Streaming API responses"
+    url: "https://platform.openai.com/docs/api-reference/streaming"
+  - type: article
+    title: "NVIDIA — Mastering LLM Techniques: Inference Optimization"
+    url: "https://developer.nvidia.com/blog/mastering-llm-techniques-inference-optimization/"
+---
+
+## Streaming turns stateless load balancing into a stateful problem
+
+The single biggest architectural consequence of streaming is that a "request"
+is no longer a quick request/response pair a stateless load balancer can
+route and forget — it's a **long-lived, stateful connection** that holds
+server-side generation state (and GPU-attached KV cache) for as long as
+tokens are still being produced, sometimes tens of seconds. This breaks the
+assumptions behind naive round-robin or even connection-count-based load
+balancing: two connections aren't equally "loaded" just because they're both
+open — one might be mid-generation on a 3000-token response, the other might
+have just started. Production systems need routing that accounts for actual
+in-flight generation cost (estimated remaining tokens, current queue depth
+on the target replica), and infrastructure (load balancers, proxies) that
+supports long-lived connections without idle-timing them out mid-stream.
+
+## Cancellation must propagate all the way to the GPU
+
+A client closing a stream (navigating away, hitting stop) is easy to detect
+at the edge, but the hard requirement is propagating that cancellation
+**all the way back to the inference engine** so it actually stops spending
+GPU cycles on a generation nobody will see — and does so promptly, not after
+finishing the current batch step. Systems that only stop sending tokens to
+the client without freeing the underlying generation slot waste real
+capacity that should be reallocated to serve other requests; at scale, this
+is a direct and measurable capacity/cost problem, not just wasted work on
+one request. This requires cancellation signals to be threaded through every
+layer: edge/gateway, application server, and the batching engine itself.
+
+## Fairness inside a shared batching engine
+
+Continuous batching engines process many concurrent streaming requests
+together on the same GPU. Without deliberate scheduling, requests with very
+long expected output (a long-form generation) can starve shorter, more
+latency-sensitive requests sharing the same batch — every request in a
+naive FIFO batch effectively pays the batch's slowest member's per-step
+overhead. Production serving engines address this with scheduling policies
+that account for expected sequence length and priority, not just arrival
+order, so a handful of long-running streams don't degrade time-to-first-
+token for everyone else on the same GPU.
+
+## Mid-stream moderation and correction
+
+For products that run safety/moderation checks on generated output,
+streaming forces a decision: check tokens incrementally as they're produced
+(adding a small amount of per-chunk latency, but able to cut a stream
+immediately if it turns unsafe), or buffer and check before sending each
+chunk to the client (slightly higher latency per chunk, but a cleaner
+moderation boundary). Cutting a stream mid-sentence after a user has already
+seen part of a response is also a UX problem in its own right — one that
+some products handle by editing/retracting the visible partial output, which
+in turn requires the client to support removing already-rendered content,
+not just appending to it.
+
+## Multi-stage pipelines compound streaming complexity
+
+Systems that chain multiple models (retrieval -> generation, or STT -> LLM ->
+TTS as in voice AI) have to decide which stages stream and how they connect.
+Naively waiting for stage N to fully complete before starting stage N+1
+reintroduces the latency streaming was meant to eliminate. The alternative —
+overlapping stages, e.g. starting TTS synthesis on the first completed
+sentence while the LLM is still generating the rest — requires each stage's
+output to be consumable incrementally by the next (sentence-boundary
+chunking, not raw token-by-token handoff, since TTS needs coherent text
+units), and correct handling of a downstream stage needing to be cancelled
+if an upstream stage is cancelled or corrected.
+
+## Trade-off summary
+
+| Concern | Simple approach | Production-grade approach | Cost |
+|---|---|---|---|
+| Load balancing | Stateless round-robin | Load-aware routing (queue depth, in-flight generation cost) | Router needs real-time load signal |
+| Cancellation | Stop sending to client | Propagate cancellation to the batching engine / GPU | Cross-layer signal plumbing |
+| Batch fairness | FIFO within a batch | Length/priority-aware scheduling | Scheduler complexity |
+| Mid-stream safety | Moderate full response before sending | Incremental moderation with retraction support | Added per-chunk latency, client-side retraction UX |
+| Multi-stage pipelines | Sequential: wait for each stage to finish | Overlapped streaming with chunk-boundary handoff | Chunking logic, cross-stage cancellation |

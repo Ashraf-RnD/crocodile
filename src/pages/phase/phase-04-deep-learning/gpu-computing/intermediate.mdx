@@ -1,0 +1,91 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "GPU Computing"
+level: intermediate
+phaseSlug: "phase-04-deep-learning"
+phaseName: "Deep Learning"
+topicSlug: "gpu-computing"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "PyTorch — Automatic Mixed Precision"
+    url: "https://pytorch.org/docs/stable/amp.html"
+  - type: docs
+    title: "PyTorch — DistributedDataParallel"
+    url: "https://pytorch.org/tutorials/intermediate/ddp_tutorial.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Minimizing CPU-GPU data movement
+
+Copying data between CPU (host) and GPU (device) memory over PCIe is slow relative
+to on-GPU compute. A production training loop keeps data on the GPU end-to-end and
+only pulls small scalars back to the CPU (like a loss value for logging), not full
+tensors, and not on every step.
+
+```python
+device = torch.device("cuda")
+model.to(device)
+
+for batch in dataloader:
+    x, y = batch[0].to(device, non_blocking=True), batch[1].to(device, non_blocking=True)
+    preds = model(x)
+    loss = criterion(preds, y)
+    loss.backward()
+    optimizer.step()
+    optimizer.zero_grad()
+
+    if step % 100 == 0:
+        print(loss.item())   # only sync to CPU occasionally, not every step
+```
+
+`non_blocking=True` combined with pinned host memory (`DataLoader(pin_memory=True)`)
+lets the copy overlap with GPU compute instead of stalling the training loop.
+
+## Mixed precision training
+
+Modern GPUs have specialized tensor cores that run float16/bfloat16 matrix multiplies
+much faster than float32. `torch.autocast` runs selected ops in reduced precision
+automatically while keeping numerically sensitive ops (like reductions) in float32,
+and `GradScaler` prevents small gradients from underflowing to zero in float16:
+
+```python
+scaler = torch.cuda.amp.GradScaler()
+
+for x, y in dataloader:
+    optimizer.zero_grad()
+    with torch.autocast(device_type="cuda", dtype=torch.float16):
+        preds = model(x)
+        loss = criterion(preds, y)
+    scaler.scale(loss).backward()
+    scaler.step(optimizer)
+    scaler.update()
+```
+
+This is close to a free 2-3x speedup on modern GPUs (A100/H100/RTX 30xx+) for most
+architectures, which is why it's close to a default in production training code.
+
+## Scaling beyond one GPU
+
+<Mermaid client:visible code={`flowchart TB
+  subgraph DP ["DataParallel (legacy, single-process)"]
+    M0[GPU 0: full model] -->|gathers grads| M0
+    M1[GPU 1: model replica] -.->|scatter batch, gather output| M0
+  end
+  subgraph DDP ["DistributedDataParallel (production standard)"]
+    D0[Process 0 / GPU 0: full model] <-->|all-reduce gradients| D1[Process 1 / GPU 1: full model]
+  end`} />
+
+`nn.DataParallel` splits a batch across GPUs from a single process but funnels
+everything through one GPU for gradient aggregation, creating a bottleneck.
+`DistributedDataParallel` (DDP) runs one process per GPU, each with its own full
+model copy, and synchronizes gradients via an efficient all-reduce — it's faster and
+is what virtually all real multi-GPU training uses today.
+
+## Checking utilization, not just availability
+
+`torch.cuda.is_available()` only tells you a GPU exists — it says nothing about
+whether you're actually using it efficiently. Production teams routinely watch
+`nvidia-smi` (or `torch.cuda.memory_allocated()` / `memory_reserved()`) during
+training; a GPU sitting at 20% utilization usually means the bottleneck is data
+loading or CPU preprocessing, not the model itself.

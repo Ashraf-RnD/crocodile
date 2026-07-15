@@ -1,0 +1,84 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "OCR"
+level: beginner
+phaseSlug: "phase-09-multimodal-ai"
+phaseName: "Multimodal AI"
+topicSlug: "ocr"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "Tesseract OCR documentation"
+    url: "https://tesseract-ocr.github.io/tessdoc/"
+  - type: docs
+    title: "pytesseract on PyPI"
+    url: "https://pypi.org/project/pytesseract/"
+---
+
+## What OCR actually does
+
+Optical Character Recognition (OCR) turns pixels into text. Point it at a photo of a
+receipt, a scanned PDF, or a street sign, and it gives you back a string you can search,
+copy, and process like any other text.
+
+Think of it like a very literal, very fast reader: it doesn't understand what the words
+*mean*, it just recognizes shapes that look like letters and maps them to characters —
+similar to how you can sound out a word in a language you don't speak, just from its
+shape.
+
+### Your first OCR run
+
+```python
+import pytesseract
+from PIL import Image
+
+image = Image.open("receipt.png")
+text = pytesseract.image_to_string(image)
+print(text)
+```
+
+`pytesseract` is a thin Python wrapper around Google's open-source **Tesseract** engine.
+Under the hood, Tesseract scans the image for regions that look like text, segments them
+into lines and characters, then classifies each character shape.
+
+### It's not magic — image quality matters a lot
+
+OCR accuracy drops fast on blurry, low-contrast, or skewed images. A quick, cheap fix
+that helps in most cases is converting to grayscale and boosting contrast before running
+OCR:
+
+```python
+import cv2
+
+img = cv2.imread("receipt.png")
+gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+_, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
+cv2.imwrite("cleaned.png", thresh)
+```
+
+Run OCR on `cleaned.png` instead of the raw photo, and you'll usually see fewer garbled
+characters.
+
+## Try it yourself
+
+You have a scanned image `invoice.png` and want just the digits (e.g. an invoice
+total), not headers or logos. Tesseract accepts a `config` string to restrict which
+characters it looks for. Look up how to restrict `pytesseract.image_to_string` to only
+digits using `--psm` and `-c tessedit_char_whitelist`.
+
+<details>
+<summary>Solution</summary>
+
+```python
+text = pytesseract.image_to_string(
+    Image.open("invoice.png"),
+    config="--psm 6 -c tessedit_char_whitelist=0123456789.,"
+)
+print(text)
+```
+
+`--psm 6` tells Tesseract to assume a single uniform block of text, and the whitelist
+restricts recognition to digits and punctuation — useful for pulling totals out of
+receipts without picking up stray letters.
+
+</details>

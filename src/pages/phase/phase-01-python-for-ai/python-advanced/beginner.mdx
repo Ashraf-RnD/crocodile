@@ -1,0 +1,83 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Python Advanced"
+level: beginner
+phaseSlug: "phase-01-python-for-ai"
+phaseName: "Python for AI"
+topicSlug: "python-advanced"
+estReadTime: 8
+resources:
+  - type: docs
+    title: "Official Python Tutorial"
+    url: "https://docs.python.org/3/tutorial/"
+  - type: video
+    title: "Corey Schafer — Python OOP Tutorials"
+    url: "https://www.youtube.com/watch?v=ZDa-Z5JzLYM"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Why "advanced" Python matters for AI work
+
+Most AI code you'll read (Hugging Face, PyTorch, LangChain) leans hard on a handful of
+Python features that basic tutorials skip. You don't need to master all of Python —
+you need fluency in the specific patterns that show up everywhere in ML codebases.
+
+### The five features you actually need
+
+1. **List/dict comprehensions** — `[x**2 for x in range(10)]` — used everywhere for
+   quick data transforms instead of manual loops.
+2. **`*args` and `**kwargs`** — nearly every model class and API wrapper (`model(*inputs, **kwargs)`)
+   uses these to pass variable arguments through layers of abstraction.
+3. **Decorators** — `@staticmethod`, `@torch.no_grad()`, `@app.get("/predict")` — you'll
+   see these constantly in inference code and APIs.
+4. **Context managers (`with`)** — `with torch.no_grad():`, `with open(file) as f:` —
+   used to scope resources (GPU memory, files, timers) safely.
+5. **Type hints** — `def predict(x: list[float]) -> float:` — most modern AI libraries
+   (Pydantic, FastAPI, LangChain) are built entirely around type hints for validation.
+
+### A minimal mental model of a decorator
+
+A decorator is just a function that wraps another function and controls when/how it runs.
+
+<Mermaid client:visible code={`flowchart LR
+  A["Call decorated_fn()"] --> B["Decorator's wrapper runs first"]
+  B --> C["Wrapper calls original function"]
+  C --> D["Wrapper can inspect/modify result"]
+  D --> E["Return final value to caller"]`} />
+
+```python
+def log_calls(fn):
+    def wrapper(*args, **kwargs):
+        print(f"Calling {fn.__name__}")
+        return fn(*args, **kwargs)
+    return wrapper
+
+@log_calls
+def predict(x):
+    return x * 2
+
+predict(5)  # prints "Calling predict", then returns 10
+```
+
+This exact pattern is why `@torch.no_grad()` "turns off" gradient tracking for whatever
+function it wraps — it's a context manager used as a decorator.
+
+### Try it yourself
+
+Rewrite this loop as a list comprehension:
+
+```python
+squares = []
+for x in range(10):
+    if x % 2 == 0:
+        squares.append(x ** 2)
+```
+
+<details>
+<summary>Solution</summary>
+
+```python
+squares = [x ** 2 for x in range(10) if x % 2 == 0]
+```
+
+</details>

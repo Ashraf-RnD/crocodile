@@ -1,0 +1,62 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Eigenvalues"
+level: expert
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "eigenvalues"
+estReadTime: 10
+resources:
+  - type: article
+    title: "On the difficulty of training RNNs (Pascanu et al.)"
+    url: "https://arxiv.org/abs/1211.5063"
+---
+
+## Eigenvalues and the Hessian: loss landscape curvature
+
+At a critical point of a loss function, the eigenvalues of the **Hessian** (matrix of
+second derivatives) tell you what kind of point it is: all positive eigenvalues means
+a local minimum, all negative means a local maximum, and a mix of signs means a
+**saddle point**. In high-dimensional neural network loss landscapes, saddle points
+vastly outnumber true local minima — this is one of the theoretical reasons plain
+gradient descent can stall (near-zero gradient) without actually being near a good
+minimum, and why optimizers with momentum help escape these flat directions.
+
+## Spectral radius and RNN gradient stability
+
+For a recurrent update `h_t = f(W h_{t-1})`, the **spectral radius** (largest
+eigenvalue magnitude) of `W` determines long-run behavior: if it's less than 1,
+repeated multiplication shrinks the signal toward zero (vanishing gradients); if
+greater than 1, it grows unbounded (exploding gradients). This is the precise
+mathematical reason vanilla RNNs fail on long sequences, and why LSTM/GRU gating
+mechanisms exist — they're explicitly designed to give gradients a path with
+effective eigenvalue near 1 (the cell state's additive update).
+
+## Power iteration and why you rarely compute exact eigendecomposition
+
+Exact eigendecomposition costs `O(n^3)` — infeasible for the huge matrices in deep
+learning. When only the **largest** eigenvalue/eigenvector is needed (e.g. estimating
+Lipschitz constants for spectral normalization in GANs), **power iteration** —
+repeatedly multiplying a random vector by the matrix and renormalizing — converges to
+the dominant eigenvector in `O(n^2)` per iteration, with convergence rate governed by
+the ratio between the top two eigenvalues. This is exactly what `torch.nn.utils.spectral_norm`
+uses under the hood.
+
+```python
+def power_iteration(A, num_iters=50):
+    v = torch.randn(A.shape[1])
+    for _ in range(num_iters):
+        v = A @ v
+        v = v / torch.norm(v)
+    eigenvalue = v @ A @ v
+    return eigenvalue, v
+```
+
+## Trade-off summary
+
+| Method | Cost | When to use |
+|---|---|---|
+| Full eigendecomposition (`eig`/`eigh`) | O(n³) | Small matrices, need all eigenpairs |
+| Power iteration | O(n²) per iter | Only need the dominant eigenvalue/vector |
+| Lanczos / Krylov methods | O(n²) per iter, better convergence | Need top-k eigenpairs of large sparse matrices |
+| Randomized SVD | O(n²k) | Approximate top-k for very large, dense matrices |

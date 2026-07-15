@@ -1,0 +1,56 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Conditional Probability"
+level: expert
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "conditional-probability"
+estReadTime: 10
+resources:
+  - type: article
+    title: "Simpson's Paradox — a visual explainer"
+    url: "https://www.tylervigen.com/investigations/simpsons-paradox"
+---
+
+## Teacher forcing vs exposure bias
+
+Training an autoregressive model uses the chain-rule factorization with **teacher
+forcing**: at each step, the model conditions on the *true* previous tokens, not its
+own (possibly wrong) predictions. At inference time, there's no ground truth to
+condition on — the model conditions on its own generated tokens instead. This
+train/inference mismatch is **exposure bias**: errors made early in generation shift
+the conditioning context away from anything seen during training, and can compound.
+This is one of the standing theoretical justifications for techniques like scheduled
+sampling, and part of why sampling strategy (temperature, nucleus sampling) at
+inference time meaningfully affects output quality beyond just "more randomness."
+
+## Attention as a learned conditional weighting
+
+Self-attention computes, for each token, a probability distribution (via softmax) over
+*which other tokens to condition on and how strongly* — the attention weights are
+literally a conditional probability-like weighting used to form a context vector. This
+reframes attention not as an exotic new mechanism but as a learned, input-dependent
+generalization of the fixed conditioning window used by older n-gram language models.
+
+## Simpson's paradox in ML evaluation
+
+Aggregate conditional statistics can reverse when you look at subgroups. A model can
+have higher accuracy than a baseline overall, `P(correct | model)  > P(correct | baseline)`,
+while being *worse* on every individual subgroup, if the subgroup sizes are unevenly
+distributed between the aggregate populations being compared. This is a real, recurring
+failure mode in ML evaluation — a new model can look like a win on an aggregate metric
+while quietly regressing on your most important segment. Any conditional-probability-based
+metric (accuracy, precision by cohort) should be checked at the subgroup level before
+trusting the aggregate number, especially when comparing across different traffic mixes
+or A/B test arms with non-random assignment.
+
+## The Markov assumption as a conditioning simplification
+
+`P(w_t | w_1, ..., w_{t-1}) ≈ P(w_t | w_{t-k}, ..., w_{t-1})` — conditioning only on the
+last `k` tokens instead of the full history — is the Markov assumption underlying
+classical n-gram models. Transformers don't make this assumption explicitly (they can
+attend to arbitrarily distant tokens within the context window), but the *context
+window itself* is a hard Markov-like truncation: anything outside it is unconditionally
+unavailable, which is precisely the motivation behind long-context and retrieval-
+augmented approaches — they're different strategies for coping with the same
+underlying finite-conditioning-window limitation.

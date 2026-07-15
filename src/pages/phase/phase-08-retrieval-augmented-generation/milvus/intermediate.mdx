@@ -1,0 +1,122 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Milvus"
+level: intermediate
+phaseSlug: "phase-08-retrieval-augmented-generation"
+phaseName: "Retrieval-Augmented Generation"
+topicSlug: "milvus"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "Milvus — Index types"
+    url: "https://milvus.io/docs/index.md"
+  - type: docs
+    title: "Milvus — Hybrid Search"
+    url: "https://milvus.io/docs/multi-vector-search.md"
+---
+
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Milvus's storage/compute separation
+
+Unlike simpler embedded vector stores, Milvus's production architecture separates
+storage (object storage like S3/MinIO for durability) from compute (independently
+scalable query, index-build, and data nodes coordinated by etcd). This is the
+architectural reason Milvus targets billion-scale collections — compute and storage
+scale independently instead of being tied to a single node's disk and RAM.
+
+<Mermaid client:visible code={`flowchart TB
+  App["Your application"] --> Proxy["Milvus proxy"]
+  Proxy --> Query["Query nodes"]
+  Proxy --> Data["Data nodes"]
+  Query --> Storage["Object storage (S3/MinIO)"]
+  Data --> Storage
+  Proxy --> Meta["etcd (metadata/coordination)"]`} />
+
+## Schema-first collections
+
+Unlike some schema-flexible vector stores, Milvus collections are explicitly schema'd
+— you declare fields and types up front, closer to a traditional database table:
+
+```python
+from pymilvus import MilvusClient, DataType
+
+client = MilvusClient(uri="http://localhost:19530")
+
+schema = client.create_schema(auto_id=False, enable_dynamic_field=True)
+schema.add_field("id", DataType.INT64, is_primary=True)
+schema.add_field("vector", DataType.FLOAT_VECTOR, dim=1536)
+schema.add_field("department", DataType.VARCHAR, max_length=64)
+schema.add_field("updated_at", DataType.INT64)
+
+index_params = client.prepare_index_params()
+index_params.add_index(field_name="vector", index_type="HNSW", metric_type="COSINE",
+                        params={"M": 16, "efConstruction": 200})
+
+client.create_collection(collection_name="support_docs", schema=schema, index_params=index_params)
+```
+
+`enable_dynamic_field=True` allows storing additional ad-hoc fields beyond the
+declared schema, which is a useful escape hatch for evolving metadata without a formal
+migration for every new field, while still getting the performance benefits of typed,
+indexed fields for the ones you query on regularly.
+
+## Filtering with a boolean expression language
+
+Milvus filters use a SQL-like expression string rather than a structured filter
+object:
+
+```python
+results = client.search(
+    collection_name="support_docs",
+    data=[query_vector],
+    filter='department == "billing" and updated_at > 1700000000',
+    limit=5,
+    output_fields=["text", "department"],
+)
+```
+
+This expression syntax supports comparisons, boolean logic, `in`, and range queries
+directly, applied during the ANN search rather than as a post-filter — the same
+during-search filtering approach other production vector databases use to avoid
+under-returning results when a filter is highly selective.
+
+## Hybrid and multi-vector search
+
+Milvus supports storing multiple vector fields per collection (e.g. a dense embedding
+and a sparse BM25-style vector) and searching across them with weighted fusion:
+
+```python
+from pymilvus import AnnSearchRequest, WeightedRanker
+
+dense_request = AnnSearchRequest(data=[dense_query_vector], anns_field="dense_vector", param={}, limit=25)
+sparse_request = AnnSearchRequest(data=[sparse_query_vector], anns_field="sparse_vector", param={}, limit=25)
+
+results = client.hybrid_search(
+    collection_name="support_docs",
+    reqs=[dense_request, sparse_request],
+    ranker=WeightedRanker(0.7, 0.3),  # weight dense higher than sparse
+    limit=10,
+)
+```
+
+This mirrors the hybrid search pattern from the Hybrid Search topic, but implemented
+as native multi-vector search within a single Milvus collection rather than
+combining results from two separate systems.
+
+## Consistency levels: a Milvus-specific tuning knob
+
+Milvus exposes an explicit consistency level per query, trading read freshness for
+performance — relevant because Milvus's distributed write path means a just-inserted
+vector isn't always instantly visible to every query node:
+
+```python
+client.search(collection_name="support_docs", data=[query_vector],
+               consistency_level="Bounded")  # or "Strong", "Eventually", "Session"
+```
+
+`Strong` guarantees you see all writes up to the moment of the query (higher latency);
+`Bounded` (the common default) tolerates a small, bounded staleness for better
+throughput — the right choice depends on whether your RAG use case needs read-your-
+writes guarantees (e.g. a user uploading a document and immediately querying it) or
+can tolerate eventual visibility (a nightly batch ingestion pipeline).

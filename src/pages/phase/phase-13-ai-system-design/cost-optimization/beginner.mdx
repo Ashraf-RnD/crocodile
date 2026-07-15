@@ -1,0 +1,71 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Cost Optimization"
+level: beginner
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "cost-optimization"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "OpenAI Platform — Pricing"
+    url: "https://openai.com/api/pricing/"
+  - type: docs
+    title: "Anthropic Docs — Pricing"
+    url: "https://docs.claude.com/en/docs/about-claude/pricing"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Every word costs money
+
+Unlike a typical web app where serving a page costs almost nothing extra
+per user, calling an LLM costs real money **every single time**, and the
+cost scales with how much text goes in and comes out. Providers charge per
+token (roughly a word-piece) — both the tokens you send (the prompt) and the
+tokens the model generates (the response). A chatty conversation with a long
+history and a long answer can cost meaningfully more than a short,
+to-the-point exchange.
+
+<Mermaid client:visible code={`flowchart LR
+  Prompt["Your prompt: N input tokens"] --> Cost1["Cost = N x price-per-input-token"]
+  Model["Model generates M output tokens"] --> Cost2["Cost = M x price-per-output-token"]
+  Cost1 --> Total["Total cost per request"]
+  Cost2 --> Total`} />
+
+## Why this matters more as you scale
+
+If one request costs a fraction of a cent, that sounds trivial — until your
+product has a million users sending several requests a day. Costs that look
+negligible per request add up fast at scale, which is why cost isn't
+something you bolt on later; it shapes real product decisions from day one,
+like how much conversation history to resend, or which model tier to use
+for which feature.
+
+## Three simple levers
+
+- **Use a smaller/cheaper model when you can.** Not every task needs the
+  most powerful (and most expensive) model — a simple classification task
+  doesn't need the same model as complex reasoning.
+- **Don't send more context than you need.** Trimming unnecessary
+  conversation history or irrelevant documents reduces input tokens, which
+  directly reduces cost.
+- **Cache repeated work.** If the same question gets asked often, don't pay
+  to regenerate the same answer every time (see the "Caching" topic in this
+  phase).
+
+## Try it yourself
+
+A support chatbot resends the entire conversation history on every message.
+After 20 back-and-forth messages, is the 21st message cheaper, about the
+same, or more expensive to process than the 1st message was?
+
+<details>
+<summary>Solution</summary>
+
+More expensive. Because the whole history gets resent every time, message 21
+carries the weight of 20 previous exchanges as input tokens, while message 1
+had none. The per-message cost grows as the conversation grows — which is
+exactly why long-running conversations are a real cost concern, not just a
+performance one, and why production systems often summarize or trim old
+history rather than resending it forever.
+</details>

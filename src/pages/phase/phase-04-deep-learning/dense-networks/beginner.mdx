@@ -1,0 +1,76 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Dense Networks"
+level: beginner
+phaseSlug: "phase-04-deep-learning"
+phaseName: "Deep Learning"
+topicSlug: "dense-networks"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "PyTorch — Build the Neural Network"
+    url: "https://pytorch.org/tutorials/beginner/basics/buildmodel_tutorial.html"
+  - type: video
+    title: "3Blue1Brown — But what is a neural network?"
+    url: "https://www.youtube.com/watch?v=aircAruvnKk"
+---
+
+## Every neuron sees everything
+
+A **dense** (or "fully connected") layer connects every input to every output. If a
+layer has 10 inputs and 5 outputs, each of the 5 outputs is a weighted combination of
+all 10 inputs. Stack several of these layers, with a non-linear function
+(like ReLU) between them, and you get a **Multi-Layer Perceptron (MLP)** — the
+simplest and most fundamental kind of neural network.
+
+Think of it like a panel of judges (each output neuron) who all watch the same
+evidence (all inputs) but each judge weighs the evidence differently, forming their
+own opinion.
+
+```python
+import torch
+import torch.nn as nn
+
+model = nn.Sequential(
+    nn.Linear(4, 8),   # 4 inputs -> 8 hidden neurons
+    nn.ReLU(),
+    nn.Linear(8, 3),   # 8 hidden -> 3 outputs (e.g. 3 classes)
+)
+
+x = torch.randn(1, 4)   # one sample, 4 features
+output = model(x)
+print(output.shape)     # torch.Size([1, 3])
+```
+
+### Why the non-linearity (ReLU) matters
+
+Without a non-linear function between layers, stacking `Linear` layers is
+mathematically equivalent to a *single* linear layer — no matter how many you stack.
+`ReLU` (and similar functions) is what lets the network represent curved, complex
+decision boundaries instead of only straight lines.
+
+```python
+relu = nn.ReLU()
+print(relu(torch.tensor([-2.0, -0.5, 0.0, 1.5])))
+# tensor([0.0, 0.0, 0.0, 1.5]) — negative values are zeroed out
+```
+
+### Try it yourself
+
+Build a small `nn.Sequential` model that takes 10 input features, has one hidden
+layer of 16 neurons with ReLU, and outputs a single value (e.g. for regression).
+
+<details>
+<summary>Solution</summary>
+
+```python
+import torch.nn as nn
+
+model = nn.Sequential(
+    nn.Linear(10, 16),
+    nn.ReLU(),
+    nn.Linear(16, 1),
+)
+```
+
+</details>

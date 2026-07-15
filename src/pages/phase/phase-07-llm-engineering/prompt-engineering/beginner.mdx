@@ -1,0 +1,88 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Prompt Engineering"
+level: beginner
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "prompt-engineering"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "OpenAI — Prompt Engineering Guide"
+    url: "https://platform.openai.com/docs/guides/prompt-engineering"
+  - type: article
+    title: "Anthropic — Prompt Engineering Overview"
+    url: "https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/overview"
+---
+
+## Think of it like writing instructions for a new intern
+
+A new intern with encyclopedic knowledge but zero context about your company will do a
+much better job if you give them a clear role, the exact format you want back, and an
+example of what "good" looks like — instead of a vague one-line request. That's
+prompt engineering: the LLM is enormously capable, but it can only work with what's in
+front of it. Vague input in, vague (or wrong) output out.
+
+### A weak prompt vs. a strong prompt
+
+```python
+from openai import OpenAI
+client = OpenAI()
+
+# Weak: vague, no format, no context
+weak = "Tell me about this product review: 'Battery died in 2 days, screen cracked easily.'"
+
+# Strong: role, task, format, constraints
+strong = """You are a customer support analyst. Read the product review below and
+extract:
+1. The main complaints (as a bullet list)
+2. A sentiment score from 1 (very negative) to 5 (very positive)
+
+Review: "Battery died in 2 days, screen cracked easily."
+
+Respond in this exact format:
+Complaints: <bullet list>
+Sentiment: <number>
+"""
+
+response = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": strong}],
+)
+print(response.choices[0].message.content)
+```
+
+The weak prompt might get you a rambling paragraph. The strong prompt reliably gets you
+something you can parse and use in code — because you told the model exactly *who* it
+is, *what* to do, and *how* to respond.
+
+### The four ingredients that matter most
+
+1. **Role** — "You are a ..." sets the lens the model uses to interpret everything else.
+2. **Task** — the specific action, stated as a clear instruction, not a question.
+3. **Format** — tell it exactly how you want the answer shaped (bullets, JSON, a table).
+4. **Examples** — showing one or two examples of input → desired output (called
+   "few-shot prompting") is often more effective than a paragraph of instructions.
+
+### Try it yourself
+
+You have this weak prompt: `"Summarize this email."` Rewrite it so it (1) gives the
+model a role, (2) specifies exactly what the summary should contain, and (3) specifies
+the output format as three bullet points.
+
+<details>
+<summary>Solution</summary>
+
+```
+You are an executive assistant. Summarize the email below in exactly three bullet
+points: the sender's main request, any deadline mentioned, and the suggested next
+action.
+
+Email: <paste email here>
+```
+
+Notice how each added constraint removes a way the model could go wrong — no role
+meant it might summarize too casually; no length limit meant a rambling summary; no
+"next action" instruction meant you'd have to infer it yourself.
+
+</details>

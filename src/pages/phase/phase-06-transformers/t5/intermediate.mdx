@@ -1,0 +1,102 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "T5"
+level: intermediate
+phaseSlug: "phase-06-transformers"
+phaseName: "Transformers"
+topicSlug: "t5"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "Hugging Face — T5ForConditionalGeneration"
+    url: "https://huggingface.co/docs/transformers/en/model_doc/t5#transformers.T5ForConditionalGeneration"
+  - type: article
+    title: "Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer (T5 paper)"
+    url: "https://arxiv.org/abs/1910.10683"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Architecture: a full encoder-decoder, closest to the original Transformer
+
+Unlike BERT (encoder-only) or GPT (decoder-only), T5 uses both halves — the encoder
+processes the full input bidirectionally, and the decoder generates the output
+autoregressively while cross-attending to the encoder's output.
+
+<Mermaid client:visible code={`flowchart LR
+  In["Input text with task prefix"] --> Enc["Encoder (bidirectional self-attention)"]
+  Enc --> EncOut["Encoder output"]
+  EncOut --> Cross["Decoder cross-attention"]
+  Dec["Decoder (causal self-attention)"] --> Cross
+  Cross --> Out["Generated output text"]`} />
+
+## Pretraining objective: span corruption
+
+Instead of BERT's single-token masking, T5 is pretrained on **span corruption**:
+contiguous spans of tokens are replaced with a single sentinel token, and the model
+must generate the missing spans (in order) as its target output.
+
+```
+Original:  "Thank you for inviting me to your party last week."
+Corrupted: "Thank you <X> me to your party <Y> week."
+Target:    "<X> for inviting <Y> last <Z>"
+```
+
+This is closer to a "fill in these blanks, but generate the fill autoregressively"
+task than BERT's per-token classification — a natural fit for an encoder-decoder
+setup, since the decoder needs to *generate* text (the missing spans), not just
+classify a masked position.
+
+## Fine-tuning T5 for a custom text-to-text task
+
+```python
+from transformers import T5Tokenizer, T5ForConditionalGeneration, Seq2SeqTrainingArguments, Seq2SeqTrainer
+
+tokenizer = T5Tokenizer.from_pretrained("t5-small")
+model = T5ForConditionalGeneration.from_pretrained("t5-small")
+
+def preprocess(example):
+    inputs = tokenizer(
+        "summarize: " + example["article"], truncation=True, max_length=512
+    )
+    labels = tokenizer(example["summary"], truncation=True, max_length=128)
+    inputs["labels"] = labels["input_ids"]
+    return inputs
+
+# tokenized_dataset = raw_dataset.map(preprocess)
+
+training_args = Seq2SeqTrainingArguments(
+    output_dir="./t5-finetuned",
+    per_device_train_batch_size=8,
+    num_train_epochs=3,
+    learning_rate=3e-4,
+    predict_with_generate=True,
+)
+
+# trainer = Seq2SeqTrainer(model=model, args=training_args,
+#                           train_dataset=tokenized_dataset["train"])
+# trainer.train()
+```
+
+`predict_with_generate=True` matters here — during evaluation, you want to actually
+run the decoder's autoregressive generation loop (not just compute teacher-forced
+loss) to get a realistic measure of output quality, since generation and
+teacher-forced next-token accuracy can diverge meaningfully for longer outputs.
+
+## Task prefixes vs. instruction tuning
+
+T5's fixed task prefixes (`"translate English to German:"`, `"summarize:"`) were an
+early, structured version of what instruction-tuned LLMs generalized much further:
+instead of a small fixed set of hand-designed prefixes, models like FLAN-T5 were
+fine-tuned on a huge diversity of natural-language instructions phrased many
+different ways, which measurably improved zero-shot generalization to task phrasings
+never seen during fine-tuning. **FLAN-T5** is a widely used drop-in upgrade over
+base T5 for exactly this reason — same architecture, instruction-tuned, and usually
+a stronger starting point for downstream fine-tuning.
+
+## When to reach for T5 vs. BERT vs. GPT
+
+| Need | Best fit |
+|---|---|
+| Classify or extract from existing text | BERT-style encoder |
+| Open-ended generation, chat, few-shot prompting | GPT-style decoder-only |
+| Well-defined text-in/text-out mapping (translation, summarization) with a moderate labeled dataset | T5-style encoder-decoder |

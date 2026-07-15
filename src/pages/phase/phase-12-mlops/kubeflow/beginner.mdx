@@ -1,0 +1,96 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Kubeflow"
+level: beginner
+phaseSlug: "phase-12-mlops"
+phaseName: "MLOps"
+topicSlug: "kubeflow"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "Kubeflow Pipelines — Getting Started"
+    url: "https://www.kubeflow.org/docs/components/pipelines/getting-started/"
+  - type: video
+    title: "What is Kubeflow?"
+    url: "https://www.youtube.com/watch?v=cTZArDgbIWw"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Running ML pipelines on Kubernetes
+
+**Kubeflow** is a set of tools for running machine learning workloads on
+Kubernetes — the same infrastructure many companies already use to run their
+applications. Instead of writing a shell script to train a model, you write a
+**pipeline**: a series of steps, each running in its own container, that
+Kubernetes schedules onto available machines (including GPU nodes).
+
+The most commonly used piece is **Kubeflow Pipelines**, which lets you define
+a training workflow in Python and get a visual DAG, automatic retries, and
+artifact tracking, all running on a Kubernetes cluster.
+
+### Your first pipeline
+
+```python
+from kfp import dsl
+
+@dsl.component
+def preprocess(input_path: str, output_path: str):
+    import pandas as pd
+    df = pd.read_csv(input_path)
+    df = df.dropna()
+    df.to_csv(output_path, index=False)
+
+@dsl.component
+def train_model(data_path: str) -> str:
+    # ... train and save a model ...
+    return "model.pkl"
+
+@dsl.pipeline(name="simple-training-pipeline")
+def my_pipeline(input_path: str = "data/raw.csv"):
+    prep_task = preprocess(input_path=input_path, output_path="data/clean.csv")
+    train_task = train_model(data_path=prep_task.outputs["output_path"])
+```
+
+Each `@dsl.component` becomes its own container. Kubeflow figures out that
+`train_model` depends on `preprocess`'s output and runs them in the right
+order — you never manually manage which machine runs what.
+
+### The mental model
+
+<Mermaid client:visible code={`flowchart LR
+  A["Pipeline defined in Python"] --> B["Compiled to a K8s-native workflow"]
+  B --> C["preprocess — runs in its own container"]
+  C --> D["train_model — runs in its own container"]
+  D --> E["Artifacts + logs stored automatically"]`} />
+
+Because every step runs in its own container on Kubernetes, a step that needs
+a GPU can request one, while a lightweight preprocessing step runs on a cheap
+CPU node — Kubernetes handles the scheduling for you.
+
+## Try it yourself
+
+You want a two-step pipeline: `download_data` then `validate_data`. Sketch
+the `@dsl.pipeline` function connecting them (implementation details of each
+step can be `...`).
+
+<details>
+<summary>Solution</summary>
+
+```python
+from kfp import dsl
+
+@dsl.component
+def download_data(output_path: str):
+    ...
+
+@dsl.component
+def validate_data(input_path: str):
+    ...
+
+@dsl.pipeline(name="download-and-validate")
+def my_pipeline():
+    download_task = download_data(output_path="data/raw.csv")
+    validate_data(input_path=download_task.outputs["output_path"])
+```
+
+</details>

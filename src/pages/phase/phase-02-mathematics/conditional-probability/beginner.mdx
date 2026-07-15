@@ -1,0 +1,63 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Conditional Probability"
+level: beginner
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "conditional-probability"
+estReadTime: 6
+resources:
+  - type: video
+    title: "StatQuest — Conditional Probability, clearly explained"
+    url: "https://www.youtube.com/watch?v=_IgyaD7vOOA"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## "Given that..." changes everything
+
+Conditional probability answers: "given that we already know B happened, what's the
+probability of A?" — written `P(A | B)`. New information narrows down the possibilities,
+which changes the probability.
+
+**Example**: the probability a random email is spam might be 20%. But the probability
+it's spam *given that it contains the word "free"* is much higher — that word is
+strong evidence.
+
+<Mermaid client:visible code={`flowchart TB
+  All["All emails"] --> Spam["20% are spam (no info)"]
+  All --> Contains["Emails containing 'free'"]
+  Contains --> SpamGiven["70% of these are spam (P(spam | 'free'))"]`} />
+
+## The formula
+
+```
+P(A | B) = P(A and B) / P(B)
+```
+
+```python
+p_spam_and_free = 0.14   # 14% of all emails are spam AND contain "free"
+p_free = 0.20             # 20% of all emails contain "free"
+p_spam_given_free = p_spam_and_free / p_free
+print(p_spam_given_free)  # 0.70 — 70% chance of spam, given it contains "free"
+```
+
+## Why this matters for language models
+
+Every time an LLM generates the next word, it's sampling from a conditional
+probability: `P(next word | all previous words)`. The entire "autoregressive"
+generation process — the core mechanism behind GPT-style models — is nothing but
+repeatedly computing and sampling from a conditional probability distribution.
+
+## Try it yourself
+
+10% of patients have a disease. A test is positive for 90% of people who have it, and
+also positive for 5% of people who don't. If someone tests positive, is it *certain*
+they have the disease?
+
+<details>
+<summary>Solution</summary>
+
+No — this needs Bayes' theorem (next lesson) to combine both pieces of information
+properly. Spoiler: because the disease is rare, a surprisingly large share of positive
+tests are actually false positives from the healthy 90% of the population.
+</details>

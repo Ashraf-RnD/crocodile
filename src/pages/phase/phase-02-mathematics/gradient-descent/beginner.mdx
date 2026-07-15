@@ -1,0 +1,71 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Gradient Descent"
+level: beginner
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "gradient-descent"
+estReadTime: 7
+resources:
+  - type: video
+    title: "3Blue1Brown — Gradient descent, how neural networks learn"
+    url: "https://www.youtube.com/watch?v=IHZwWFHWa-w"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Rolling downhill to find the minimum
+
+Imagine you're standing on a hilly landscape in the fog and want to reach the lowest
+point. You can't see the whole landscape, but you can feel which direction is
+downhill from where you stand. **Gradient descent** does exactly this: repeatedly
+take a small step in the downhill direction (opposite the gradient) until you reach a
+low point.
+
+<Mermaid client:visible code={`flowchart LR
+  Start["Random starting weights"] --> Compute["Compute gradient of loss"]
+  Compute --> Step["Take a small step opposite the gradient"]
+  Step --> Check{"Loss still decreasing?"}
+  Check -->|yes| Compute
+  Check -->|no, converged| Done["Trained weights"]`} />
+
+## The update rule
+
+```
+new_weight = old_weight - learning_rate * gradient
+```
+
+The **learning rate** controls step size. Too big and you overshoot the minimum,
+bouncing around or diverging. Too small and training takes forever.
+
+```python
+def gradient_descent_step(weight, gradient, learning_rate=0.1):
+    return weight - learning_rate * gradient
+
+w = 10.0        # start far from the minimum
+grad = 2 * w     # gradient of f(w) = w^2 is 2w
+w = gradient_descent_step(w, grad)
+print(w)  # 8.0 — moved toward 0, the minimum of w^2
+```
+
+## Watching it converge
+
+```python
+w = 10.0
+for step in range(10):
+    grad = 2 * w
+    w = gradient_descent_step(w, grad, learning_rate=0.1)
+    print(f"step {step}: w={w:.3f}")
+# w gets closer and closer to 0 (the minimum of w^2) each step
+```
+
+## Try it yourself
+
+For `f(w) = (w - 5)^2` (minimum at `w=5`), starting at `w=0` with `learning_rate=0.1`
+and gradient `2(w-5)`, what's `w` after one step?
+
+<details>
+<summary>Solution</summary>
+
+`gradient = 2(0-5) = -10`. `new_w = 0 - 0.1 * (-10) = 1.0`. It moved toward 5, the
+correct minimum — a negative gradient means "increasing w decreases the loss."
+</details>

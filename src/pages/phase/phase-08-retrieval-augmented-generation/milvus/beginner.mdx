@@ -1,0 +1,95 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Milvus"
+level: beginner
+phaseSlug: "phase-08-retrieval-augmented-generation"
+phaseName: "Retrieval-Augmented Generation"
+topicSlug: "milvus"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "Milvus — Quickstart"
+    url: "https://milvus.io/docs/quickstart.md"
+  - type: docs
+    title: "Milvus — PyMilvus SDK"
+    url: "https://milvus.io/docs/install-pymilvus.md"
+---
+
+## A vector database built for very large scale
+
+**Milvus** is an open-source vector database designed from the ground up for
+billion-scale vector search, with a distributed architecture separating storage and
+compute. For learning and small projects, it also ships **Milvus Lite** — an
+embedded, file-based mode with zero setup, similar in spirit to how SQLite lets you
+try a relational database without running a server.
+
+## Getting started with Milvus Lite
+
+```python
+# pip install pymilvus
+from pymilvus import MilvusClient
+
+client = MilvusClient("articles.db")  # local file, no server needed
+
+client.create_collection(
+    collection_name="articles",
+    dimension=384,  # matches all-MiniLM-L6-v2's output size
+)
+```
+
+## Storing and searching vectors
+
+```python
+from sentence_transformers import SentenceTransformer
+
+model = SentenceTransformer("all-MiniLM-L6-v2")
+
+texts = [
+    "Our refund policy allows returns within 30 days.",
+    "To reset your password, go to Settings.",
+    "Standard shipping takes 5-7 business days.",
+]
+vectors = model.encode(texts)
+
+data = [
+    {"id": i, "vector": vectors[i].tolist(), "text": texts[i]}
+    for i in range(len(texts))
+]
+client.insert(collection_name="articles", data=data)
+
+query_vector = model.encode("How long until my order ships?")
+results = client.search(
+    collection_name="articles",
+    data=[query_vector.tolist()],
+    limit=2,
+    output_fields=["text"],
+)
+
+for hit in results[0]:
+    print(hit["distance"], hit["entity"]["text"])
+```
+
+Notice the shape is nearly identical to any other vector database: create a
+collection with a fixed dimension, insert vectors with metadata, search with a query
+vector. That similarity across vector databases is intentional — once you understand
+the concepts (collections, vectors, metadata, top-k search), moving between Milvus,
+Qdrant, or others is mostly a matter of syntax.
+
+## Try it yourself
+
+If your team's document corpus is currently 50,000 chunks but is expected to grow to
+50 million within a year, would starting with Milvus Lite be a reasonable choice? What
+would change?
+
+<details>
+<summary>Solution</summary>
+
+Milvus Lite is a fine choice to start with — it's the same client API you'd use at
+scale, so early development work carries over. But Milvus Lite runs embedded in a
+single process and isn't designed for billion-scale distributed workloads; as the
+corpus grows toward tens of millions of vectors, you'd migrate to a full Milvus
+deployment (self-hosted cluster or Zilliz Cloud, Milvus's managed offering) which adds
+distributed storage, compute scaling, and cluster management — the code you write
+against `MilvusClient` largely stays the same, but the underlying deployment topology
+changes as scale demands it.
+</details>

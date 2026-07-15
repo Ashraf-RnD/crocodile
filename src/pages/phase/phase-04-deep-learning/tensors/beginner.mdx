@@ -1,0 +1,80 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Tensors"
+level: beginner
+phaseSlug: "phase-04-deep-learning"
+phaseName: "Deep Learning"
+topicSlug: "tensors"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "PyTorch — Tensors tutorial"
+    url: "https://pytorch.org/tutorials/beginner/basics/tensorqs_tutorial.html"
+  - type: video
+    title: "PyTorch Tensors Explained"
+    url: "https://www.youtube.com/watch?v=x9JiIFvlUwk"
+---
+
+## A tensor is just a labeled grid of numbers
+
+A single number is a **scalar**. A list of numbers is a **vector**. A grid of numbers
+(rows and columns) is a **matrix**. A **tensor** is the general word for all of these —
+a grid of numbers with any number of dimensions. A color image is a 3D tensor (height,
+width, color channels). A batch of images is a 4D tensor (batch, height, width, channels).
+
+Everything in PyTorch — your data, your model's weights, your predictions — is a tensor.
+
+```python
+import torch
+
+scalar = torch.tensor(7)                     # 0 dimensions
+vector = torch.tensor([1, 2, 3])              # 1 dimension, shape (3,)
+matrix = torch.tensor([[1, 2], [3, 4]])       # 2 dimensions, shape (2, 2)
+
+print(vector.shape)   # torch.Size([3])
+print(matrix.shape)   # torch.Size([2, 2])
+print(matrix.dtype)   # torch.int64
+```
+
+### Basic operations
+
+Tensors support the math you'd expect, applied element-by-element:
+
+```python
+a = torch.tensor([1.0, 2.0, 3.0])
+b = torch.tensor([4.0, 5.0, 6.0])
+
+print(a + b)        # tensor([5., 7., 9.])
+print(a * b)        # tensor([4., 10., 18.])
+print(a.sum())       # tensor(6.)
+print(a.mean())      # tensor(2.)
+
+# reshape a 6-element vector into a 2x3 matrix
+c = torch.arange(6)
+print(c.reshape(2, 3))
+# tensor([[0, 1, 2],
+#         [3, 4, 5]])
+```
+
+The `shape` of a tensor tells you exactly how it's organized, and almost every bug
+in early deep learning code comes down to a shape mismatch — so get comfortable
+checking `.shape` constantly while you're learning.
+
+### Try it yourself
+
+Create a tensor of the numbers 1 through 12, then reshape it into a 3x4 matrix and
+print its shape.
+
+<details>
+<summary>Solution</summary>
+
+```python
+import torch
+
+t = torch.arange(1, 13)
+reshaped = t.reshape(3, 4)
+print(reshaped.shape)  # torch.Size([3, 4])
+print(reshaped)
+```
+
+</details>

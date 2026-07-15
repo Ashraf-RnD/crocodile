@@ -1,0 +1,88 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Dropout"
+level: intermediate
+phaseSlug: "phase-04-deep-learning"
+phaseName: "Deep Learning"
+topicSlug: "dropout"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "PyTorch — Dropout2d for convolutional feature maps"
+    url: "https://pytorch.org/docs/stable/generated/torch.nn.Dropout2d.html"
+  - type: article
+    title: "Dropout: A Simple Way to Prevent Overfitting (Srivastava et al.)"
+    url: "https://jmlr.org/papers/v15/srivastava14a.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Inverted dropout: why activations aren't just zeroed
+
+If dropout simply zeroed out `p` fraction of neurons during training and did
+nothing at test time, the *expected magnitude* of activations would differ between
+train and test — the network would effectively see roughly `(1-p)` times weaker
+signals whenever the rest of the network expected full-strength ones at inference.
+PyTorch (like all modern implementations) uses **inverted dropout**: it scales the
+surviving activations up by `1/(1-p)` during training, so the expected value stays
+consistent between train and eval, and eval mode needs no special scaling at all —
+you simply skip dropout entirely, no correction step required:
+
+```python
+dropout = nn.Dropout(p=0.5)
+x = torch.ones(1, 6)
+print(dropout(x))
+# e.g. tensor([[0., 2., 2., 0., 2., 0.]]) — survivors scaled by 1/(1-0.5) = 2x
+```
+
+<Mermaid client:visible code={`flowchart LR
+  X["Input activations"] --> Mask["Random binary mask (p dropped)"]
+  Mask --> Scale["Surviving values scaled by 1/(1-p)"]
+  Scale --> Out["Output — same expected magnitude as no dropout"]`} />
+
+## Where to place dropout
+
+Dropout is typically applied after the activation function, on dense layers, and
+usually *not* on the very last layer before the output (you don't want to drop
+information right before the final prediction):
+
+```python
+class MLP(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(100, 128), nn.ReLU(), nn.Dropout(0.3),
+            nn.Linear(128, 64), nn.ReLU(), nn.Dropout(0.3),
+            nn.Linear(64, 10),   # no dropout right before the output
+        )
+
+    def forward(self, x):
+        return self.net(x)
+```
+
+## Spatial dropout for CNNs
+
+Standard `Dropout` zeroes individual scalar activations independently — but in a
+convolutional feature map, neighboring pixels in the same channel are highly
+correlated, so randomly zeroing individual pixels barely disrupts the redundant
+information the network can lean on. `Dropout2d` instead zeroes out *entire
+channels*, which is a much stronger and more meaningful form of regularization for
+CNNs:
+
+```python
+conv_block = nn.Sequential(
+    nn.Conv2d(64, 128, 3, padding=1),
+    nn.ReLU(),
+    nn.Dropout2d(0.2),   # drops whole feature-map channels, not individual pixels
+)
+```
+
+## Dropout's declining role in very large models
+
+Modern large-scale architectures (many production transformers, especially at LLM
+scale) often use little or no dropout in certain configurations. With sufficiently
+large datasets relative to model capacity, overfitting is less of a concern than it
+is for smaller models on limited data — and dropout's added training noise can
+actually slow convergence without a proportional generalization benefit at that
+scale. This is a useful practical signal: dropout rate is a hyperparameter worth
+tuning down (or removing) as your training-data-to-parameter ratio grows, not a
+fixed default to always include at 0.5.

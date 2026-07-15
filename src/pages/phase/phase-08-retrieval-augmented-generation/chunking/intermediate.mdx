@@ -1,0 +1,115 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Chunking"
+level: intermediate
+phaseSlug: "phase-08-retrieval-augmented-generation"
+phaseName: "Retrieval-Augmented Generation"
+topicSlug: "chunking"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "LangChain — Semantic Chunker"
+    url: "https://python.langchain.com/docs/how_to/semantic-chunker/"
+  - type: docs
+    title: "Unstructured.io — Chunking for RAG"
+    url: "https://docs.unstructured.io/open-source/core-functionality/chunking"
+---
+
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Chunking is a retrieval-quality decision, not a preprocessing detail
+
+In production RAG pipelines, chunking strategy usually has more impact on answer
+quality than which embedding model you pick. A badly chunked corpus produces
+embeddings that are either too diffuse (huge chunks, muddy similarity scores) or too
+fragmented (tiny chunks that retrieve accurately but lack the context an LLM needs to
+answer well). The right chunk size is a function of your embedding model's effective
+context window, your documents' structure, and how much surrounding context the
+generation step needs per retrieved snippet.
+
+<Mermaid client:visible code={`flowchart LR
+  Doc["Raw document"] --> Split["Splitter (structure-aware)"]
+  Split --> C1["Chunk 1 + metadata"]
+  Split --> C2["Chunk 2 + metadata"]
+  Split --> C3["Chunk 3 + metadata"]
+  C1 --> Embed["Embedding model"]
+  C2 --> Embed
+  C3 --> Embed
+  Embed --> Store["Vector store"]`} />
+
+## Structure-aware splitting with LangChain
+
+Beyond character-based recursive splitting, production pipelines lean on document
+structure — Markdown headers, HTML tags, code blocks — to keep semantically related
+content together:
+
+```python
+from langchain_text_splitters import (
+    MarkdownHeaderTextSplitter,
+    RecursiveCharacterTextSplitter,
+)
+
+headers_to_split_on = [("#", "h1"), ("##", "h2"), ("###", "h3")]
+md_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=headers_to_split_on)
+sections = md_splitter.split_text(markdown_document)  # keeps header metadata per chunk
+
+# then apply a size limit within each section
+char_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=100)
+final_chunks = char_splitter.split_documents(sections)
+
+for chunk in final_chunks[:2]:
+    print(chunk.metadata)  # {'h1': 'Billing', 'h2': 'Refunds'}
+    print(chunk.page_content[:100])
+```
+
+Splitting by headers first, then applying a size limit *within* each section, means a
+chunk never straddles a "Billing" section and a "Shipping" section — a common source
+of confusing, off-topic retrieval results.
+
+## Semantic chunking
+
+Fixed-size and structure-based splitting are both syntactic — they don't look at
+*meaning*. **Semantic chunking** embeds consecutive sentences and cuts a new chunk
+where the embedding similarity between adjacent sentences drops sharply, i.e. where
+the topic actually shifts:
+
+```python
+from langchain_experimental.text_splitter import SemanticChunker
+from langchain_openai import OpenAIEmbeddings
+
+semantic_splitter = SemanticChunker(
+    OpenAIEmbeddings(),
+    breakpoint_threshold_type="percentile",
+)
+chunks = semantic_splitter.create_documents([document])
+```
+
+This is more expensive (every sentence needs an embedding call at chunking time) but
+produces noticeably more coherent chunks for documents that don't have reliable
+structural markers, like transcripts or long-form prose.
+
+## Attaching metadata for filtering and provenance
+
+Every chunk should carry metadata beyond its raw text — source document, section
+title, page number, timestamp — so retrieval results can be filtered (e.g. "only
+search the 2024 policy docs") and cited back to the user:
+
+```python
+for chunk in final_chunks:
+    chunk.metadata.update({
+        "source": "employee_handbook.pdf",
+        "chunk_id": f"handbook-{final_chunks.index(chunk)}",
+    })
+```
+
+## Sizing chunks against your embedding model and generator
+
+A common production default is **300-800 tokens per chunk with 10-20% overlap**, but
+the right number depends on two constraints working in opposite directions: your
+embedding model's context limit caps the *maximum* useful chunk size (most sentence
+embedding models are tuned on paragraph-length inputs, not multi-page ones), while the
+generator's need for surrounding context pushes toward *larger* chunks so the LLM
+isn't handed an isolated, ambiguous fragment. Many teams resolve this by chunking small
+for precise retrieval, then expanding each hit to include its neighboring chunks (or
+the full parent section) before passing it to the LLM — retrieve small, generate with
+more.

@@ -1,0 +1,67 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Probability"
+level: intermediate
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "probability"
+estReadTime: 8
+resources:
+  - type: article
+    title: "Cross-entropy loss explained"
+    url: "https://gombru.github.io/2018/05/23/cross_entropy_loss/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Softmax: turning raw scores into probabilities
+
+A neural network's final layer usually outputs raw, unbounded numbers ("logits"), not
+probabilities. **Softmax** converts them into a valid probability distribution —
+non-negative, summing to 1 — by exponentiating and normalizing:
+
+```
+softmax(z)_i = exp(z_i) / sum(exp(z_j) for all j)
+```
+
+```python
+import numpy as np
+logits = np.array([2.0, 1.0, 0.1])
+exp = np.exp(logits)
+probs = exp / exp.sum()
+print(probs)  # [0.659, 0.242, 0.099] — sums to 1.0
+```
+
+<Mermaid client:visible code={`flowchart LR
+  L["Logits: [2.0, 1.0, 0.1] (unbounded)"] --> S["Softmax"]
+  S --> P["Probabilities: [0.66, 0.24, 0.10] (sum=1)"]`} />
+
+## Cross-entropy: the loss function built on probability
+
+Cross-entropy loss measures how far a predicted probability distribution is from the
+true one. For a single correct class `c`, it simplifies to `-log(p_c)` — the negative
+log of the probability the model assigned to the right answer:
+
+```python
+def cross_entropy(probs, true_class_idx):
+    return -np.log(probs[true_class_idx])
+
+cross_entropy(probs, 0)  # true class is index 0 ("cat")
+# -log(0.659) = 0.417 — low loss because the model was confident and correct
+```
+
+This is why a confident, wrong prediction is penalized *far* more than an unconfident
+wrong one — `-log(x)` grows toward infinity as `x → 0`.
+
+## Joint, marginal, and conditional probability
+
+- **Joint**: `P(A, B)` — probability both A and B happen
+- **Marginal**: `P(A)` — probability of A regardless of B, computed by summing out B
+- **Conditional**: `P(A | B)` — probability of A *given that* B happened (next lesson)
+
+```
+P(A) = sum over all b of P(A, B=b)   # "marginalizing out" B
+```
+
+This shows up directly in language models: the probability of a sentence is the joint
+probability of every word, and generating text token-by-token is sampling from a
+conditional distribution at each step.

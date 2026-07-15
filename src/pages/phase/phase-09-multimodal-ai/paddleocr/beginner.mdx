@@ -1,0 +1,67 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "PaddleOCR"
+level: beginner
+phaseSlug: "phase-09-multimodal-ai"
+phaseName: "Multimodal AI"
+topicSlug: "paddleocr"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "PaddleOCR documentation"
+    url: "https://paddlepaddle.github.io/PaddleOCR/"
+  - type: docs
+    title: "PaddleOCR GitHub repository"
+    url: "https://github.com/PaddlePaddle/PaddleOCR"
+---
+
+## What makes PaddleOCR different from "just OCR"
+
+Plain Tesseract expects fairly clean, horizontal text. Real-world photos — a street
+sign at an angle, a crumpled receipt, a product label wrapped around a bottle — break
+that assumption constantly. **PaddleOCR** (from Baidu's PaddlePaddle deep learning
+framework) is a complete pipeline built for exactly this: it first *finds* text
+anywhere in the image, at any angle, and *then* reads it.
+
+Think of it as three specialists working together: one who scans the whole photo and
+draws a box around every word-like region, one who checks if any of those boxes are
+upside-down or sideways and rotates them upright, and one who actually reads the
+straightened text.
+
+### Your first PaddleOCR run
+
+```python
+from paddleocr import PaddleOCR
+
+ocr = PaddleOCR(use_angle_cls=True, lang="en")
+result = ocr.ocr("street_sign.jpg")
+
+for line in result[0]:
+    box, (text, confidence) = line
+    print(f"{text!r}  (confidence: {confidence:.2f})")
+```
+
+Each detected line comes back with its four-corner bounding box, the recognized text,
+and a confidence score — all in one call, no manual preprocessing required.
+
+## Try it yourself
+
+Modify the loop above so it only prints text with confidence above `0.9`, and collects
+everything else into a `needs_review` list instead of printing it.
+
+<details>
+<summary>Solution</summary>
+
+```python
+needs_review = []
+for line in result[0]:
+    box, (text, confidence) = line
+    if confidence > 0.9:
+        print(f"{text!r}  (confidence: {confidence:.2f})")
+    else:
+        needs_review.append((text, confidence))
+
+print(f"{len(needs_review)} lines need manual review")
+```
+
+</details>

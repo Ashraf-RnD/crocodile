@@ -1,0 +1,97 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Model Registry"
+level: intermediate
+phaseSlug: "phase-12-mlops"
+phaseName: "MLOps"
+topicSlug: "model-registry"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "MLflow — Model Aliases (replacing Stages)"
+    url: "https://mlflow.org/docs/latest/model-registry.html#deploy-and-organize-models-with-aliases-and-tags"
+  - type: docs
+    title: "SageMaker Model Registry"
+    url: "https://docs.aws.amazon.com/sagemaker/latest/dg/model-registry.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Aliases vs. stages: a more flexible model
+
+MLflow's older `Staging`/`Production`/`Archived` stage model is being
+replaced by **aliases** — arbitrary named pointers to specific versions,
+which better match how teams actually operate (e.g. running a `champion` and
+a `challenger` simultaneously for A/B testing, which the fixed stage model
+couldn't express):
+
+```python
+from mlflow import MlflowClient
+client = MlflowClient()
+
+client.set_registered_model_alias("fraud-detector", "champion", version=12)
+client.set_registered_model_alias("fraud-detector", "challenger", version=15)
+
+# Serving code
+champion_model = mlflow.pyfunc.load_model("models:/fraud-detector@champion")
+challenger_model = mlflow.pyfunc.load_model("models:/fraud-detector@challenger")
+```
+
+This maps directly onto shadow deployment and canary patterns: route 95% of
+traffic to `champion`, 5% to `challenger`, and compare live performance
+before ever calling `challenger` "Production."
+
+## Gating promotion with automated checks
+
+A registry entry shouldn't be promoted just because training finished — real
+pipelines gate promotion behind validation:
+
+```python
+def validate_and_promote(model_name, version, run_id):
+    client = MlflowClient()
+    metrics = client.get_run(run_id).data.metrics
+
+    checks = {
+        "accuracy_threshold": metrics["accuracy"] > 0.90,
+        "latency_threshold": metrics["p99_latency_ms"] < 100,
+        "fairness_check": metrics["demographic_parity_diff"] < 0.05,
+    }
+
+    if all(checks.values()):
+        client.set_registered_model_alias(model_name, "production", version)
+        client.set_model_version_tag(model_name, version, "promoted_by", "ci-pipeline")
+    else:
+        failed = [k for k, v in checks.items() if not v]
+        raise ValueError(f"Promotion blocked, failed checks: {failed}")
+```
+
+This is typically wired into the tail end of a retraining Airflow DAG or CI
+pipeline — training produces a candidate, this function decides whether it's
+promotion-worthy, and only a passing candidate ever reaches the alias
+serving code reads from.
+
+<Mermaid client:visible code={`flowchart LR
+  A["Retraining job finishes"] --> B{"Meets accuracy, latency, fairness thresholds?"}
+  B -->|yes| C["Promote: set 'production' alias"]
+  B -->|no| D["Block promotion, alert team"]
+  C --> E["Serving layer picks up new version"]`} />
+
+## Model lineage and metadata
+
+Beyond the model file, a production registry entry should carry enough
+metadata to answer "what is this, and can I trust it" without digging
+through training logs:
+
+```python
+client.update_model_version(
+    name="fraud-detector",
+    version=version,
+    description="Trained on Q2 2024 transaction data, XGBoost, tuned via Katib sweep #42",
+)
+client.set_model_version_tag("fraud-detector", version, "training_data_hash", "dvc:8d7e9f3a")
+client.set_model_version_tag("fraud-detector", version, "framework", "xgboost==2.0.3")
+client.set_model_version_tag("fraud-detector", version, "approved_by", "ml-review-board")
+```
+
+This tagged metadata is what makes an incident response tractable — when a
+model starts misbehaving in production, the on-call engineer can look up the
+exact data version and training run without paging the original author.

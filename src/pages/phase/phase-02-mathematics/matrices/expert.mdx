@@ -1,0 +1,63 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Matrices"
+level: expert
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "matrices"
+estReadTime: 10
+resources:
+  - type: article
+    title: "PyTorch — Tensor memory layout & contiguity"
+    url: "https://pytorch.org/docs/stable/generated/torch.Tensor.contiguous.html"
+---
+
+## Memory layout: row-major, strides, and contiguity
+
+A matrix isn't really a 2D grid in memory — it's a flat 1D buffer plus a **stride**
+(how many elements to skip to move along each axis). NumPy/PyTorch default to
+row-major ("C") order: elements of a row sit next to each other in memory.
+
+`.T` doesn't copy data — it just swaps the strides, returning a *view*. This is why
+`a.T` is instant even for huge matrices, but also why some operations (certain matrix
+multiplications, `.reshape()` on a transposed array) require an internal copy first —
+you'll see `.contiguous()` calls in PyTorch code specifically to force that copy when
+an op requires contiguous memory.
+
+```python
+a = torch.randn(1000, 1000)
+b = a.T
+b.is_contiguous()   # False — same memory, different strides
+b.contiguous()       # forces a real copy into row-major layout
+```
+
+## Why matrix multiplication dominates compute cost
+
+A dense matmul of an `(m, k)` and `(k, n)` matrix costs `O(m·k·n)` — this single
+operation, repeated across every linear layer, attention block, and MLP in a
+transformer, is why GPUs (built around massively parallel matrix multiply units —
+Tensor Cores) exist, and why FLOPs, not "line count," is the right way to reason about
+model compute cost.
+
+## Numerical precision trade-offs
+
+| Precision | Memory | Speed | Risk |
+|---|---|---|---|
+| float32 | 4 bytes/elem | Baseline | Safe default |
+| float16 (fp16) | 2 bytes/elem | ~2x faster on Tensor Cores | Narrow exponent range → overflow/underflow in loss |
+| bfloat16 (bf16) | 2 bytes/elem | ~2x faster | Same exponent range as fp32 — safer than fp16, less precision |
+| int8 (quantized) | 1 byte/elem | 4x smaller, fastest inference | Needs calibration; accuracy loss without care |
+
+Mixed-precision training (`torch.cuda.amp`) keeps master weights in fp32 but runs
+most matmuls in fp16/bf16 — this is standard practice, not an edge case, for any
+non-trivial training run.
+
+## Condition number and numerical stability
+
+For matrix inversion / linear solves (e.g. in classical ML, PCA, or Newton's method
+optimizers), a matrix's **condition number** measures how sensitive the solution is to
+small input errors. An ill-conditioned matrix (very high condition number) can produce
+wildly inaccurate results even with correct code — this is why `np.linalg.solve` is
+preferred over explicitly computing `inv(A) @ b`, and why regularization (adding a
+small value to the diagonal, as in ridge regression) is often a numerical-stability
+fix as much as a statistical one.

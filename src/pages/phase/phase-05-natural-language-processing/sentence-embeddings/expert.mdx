@@ -1,0 +1,94 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Sentence Embeddings"
+level: expert
+phaseSlug: "phase-05-natural-language-processing"
+phaseName: "Natural Language Processing"
+topicSlug: "sentence-embeddings"
+estReadTime: 13
+resources:
+  - type: article
+    title: "Gao et al. — SimCSE: Simple Contrastive Learning of Sentence Embeddings"
+    url: "https://arxiv.org/abs/2104.08821"
+  - type: docs
+    title: "MTEB — Massive Text Embedding Benchmark leaderboard"
+    url: "https://huggingface.co/spaces/mteb/leaderboard"
+---
+
+## The training objective determines everything downstream
+
+A sentence embedding model's usefulness is entirely a function of what it was trained
+to optimize for — cosine similarity between embeddings is only meaningful if the
+model's loss function explicitly shaped the embedding space around that metric.
+**SimCSE** demonstrated a striking result: a purely *unsupervised* contrastive
+objective — passing the same sentence through the encoder twice with different
+dropout masks (two independently "noised" forward passes act as a free positive
+pair) and pushing those two views together while pushing other in-batch sentences
+apart — produces embeddings competitive with fully supervised approaches on semantic
+textual similarity benchmarks. This reframes what a sentence embedding "is": not a
+byproduct of language modeling, but the direct result of shaping a metric space
+around a specific notion of similarity — and different notions of similarity
+(paraphrase, topical relatedness, entailment, retrieval relevance) genuinely produce
+different embedding spaces, even from the same base encoder.
+
+## Symmetric vs. asymmetric search: a frequent production bug
+
+A subtle but critical distinction: **symmetric search** (query and corpus are the same
+kind of text, e.g. "find a similar question") versus **asymmetric search** (query and
+corpus differ structurally, e.g. a short question retrieving a long passage that
+answers it). Using a model trained for symmetric similarity in an asymmetric retrieval
+setting (or vice versa) silently degrades retrieval quality — the embedding space was
+never shaped to bring short queries and long answer passages close together. This is
+why dedicated QA/retrieval models (e.g. `multi-qa-mpnet-base-dot-v1`, or dual-encoder
+models trained specifically on query-passage pairs like DPR) exist as a distinct model
+family from general sentence-similarity models — and it's a common, hard-to-diagnose
+root cause of "our RAG retrieval quality is bad" when the wrong embedding model family
+was selected for the access pattern.
+
+## Pooling strategy is not a minor implementation detail
+
+Converting a sequence of token embeddings into one sentence vector requires a pooling
+choice, and it materially changes results:
+
+| Pooling strategy | Behavior | Trade-off |
+|---|---|---|
+| `[CLS]` token | Uses the first token's final-layer representation | Only meaningful if the model was specifically trained with a `[CLS]`-based objective (e.g. next-sentence prediction); often poor for embedding tasks otherwise |
+| Mean pooling | Averages all token embeddings (masking out padding) | Standard default in Sentence-Transformers; robust across sentence lengths |
+| Max pooling | Takes the max activation per dimension across tokens | Captures salient features but is more sensitive to outlier tokens/noise |
+
+Sentence-Transformers defaults to mean pooling specifically because SBERT's original
+ablations showed it outperforming `[CLS]`-pooling for models not explicitly
+pretrained with a `[CLS]`-centric objective — but this is a model-family-specific
+empirical finding, not a universal law, and needs re-validating for any new base
+encoder.
+
+## Dimensionality, quantization, and vector database economics
+
+Embedding dimensionality (384 for MiniLM, 768-1536+ for larger models) directly
+drives vector database storage and search cost at scale — for a corpus of 100M
+documents, the difference between 384-dim and 1536-dim float32 vectors is roughly
+150GB vs. 600GB of raw storage, before indexing overhead. This has driven active
+production engineering work: **Matryoshka Representation Learning** (used in newer
+OpenAI and some open embedding models) trains embeddings so that truncating the vector
+to a shorter prefix still yields a usable, if slightly lower-quality, embedding —
+letting a single model serve both a cheap coarse-ranking pass (truncated vector) and
+an expensive precise pass (full vector), instead of needing two separately trained
+models. Product quantization and scalar quantization (compressing float32 components
+to int8 or binary) are the other major lever, trading a small, measurable recall drop
+for 4-32x storage and search-speed improvements — a decision every large-scale
+semantic search system has to make explicitly rather than defaulting to full-precision
+vectors.
+
+## Evaluating embedding models isn't a single number
+
+MTEB (Massive Text Embedding Benchmark) evaluates embedding models across dozens of
+tasks (classification, clustering, retrieval, STS, reranking) because a model that
+tops the leaderboard on semantic textual similarity can rank near the bottom on
+retrieval, and vice versa — the aggregate MTEB score is a summary that can hide
+task-specific weaknesses relevant to your actual use case. The expert practice is to
+evaluate candidate embedding models directly on a held-out sample of *your* retrieval
+task (with your actual document lengths, domain vocabulary, and query patterns)
+rather than trusting a general leaderboard ranking to transfer — embedding models are
+notoriously domain-sensitive, and a model trained mostly on web/Wikipedia text can
+underperform meaningfully on legal, medical, or code-heavy corpora without any
+warning sign beyond a direct evaluation.

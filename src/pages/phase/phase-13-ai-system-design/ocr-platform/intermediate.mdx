@@ -1,0 +1,98 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "OCR Platform"
+level: intermediate
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "ocr-platform"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "Google Cloud Document AI — Overview"
+    url: "https://cloud.google.com/document-ai/docs/overview"
+  - type: docs
+    title: "AWS Textract — How it works"
+    url: "https://docs.aws.amazon.com/textract/latest/dg/how-it-works.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## System design: a multi-stage document pipeline
+
+A production OCR platform is a pipeline of independently scalable stages, not
+one monolithic "read the image" model — each stage has different compute
+needs (CPU-bound preprocessing vs. GPU-bound recognition) and different
+failure modes.
+
+<Mermaid client:visible code={`flowchart TB
+  Ingest["Ingestion API<br/>upload, or async job queue for batches"] --> Preproc["Preprocessing worker<br/>deskew, denoise, crop, split multi-page PDFs"]
+  Preproc --> Layout["Layout analysis<br/>detect text blocks, tables, checkboxes, columns"]
+  Layout --> Detect["Text detection model<br/>bounding boxes per line/word"]
+  Detect --> Recog["Text recognition model<br/>reads text inside each box"]
+  Recog --> PostLM["Language-model post-correction<br/>fix likely OCR errors using context"]
+  PostLM --> Extract["Field extraction<br/>map text + layout to named fields"]
+  Extract --> Validate["Business-rule validation<br/>e.g. totals sum correctly, dates are valid"]
+  Validate --> Store[("Structured output + original doc")]`} />
+
+## Ingestion: sync vs. async
+
+A single-page receipt upload can be handled synchronously (upload, wait a
+couple seconds, get JSON back). A 200-page scanned contract cannot — it needs
+an **async job model**: accept the upload, return a job ID immediately,
+process pages in parallel workers, and let the client poll or receive a
+webhook when done. Real platforms typically support both paths, since forcing
+synchronous behavior on large documents either times out the client or forces
+an artificially low page-count limit.
+
+```python
+# Simplified async ingestion shape
+def submit_document(file, callback_url=None):
+    job_id = create_job(file)
+    enqueue(job_id, priority=estimate_priority(file))
+    if callback_url:
+        register_webhook(job_id, callback_url)
+    return {"job_id": job_id, "status": "queued"}
+```
+
+## Layout analysis before recognition
+
+Before reading text, the system needs to understand the document's
+**structure**: is this a table, a form with labeled fields, a paragraph of
+prose, a checkbox? Layout analysis (often a separate model or model head from
+pure text detection) segments the page into regions and classifies each
+region's type. This matters because the correct read order for a two-column
+document is not top-to-bottom across the full page width, and a table's cell
+boundaries need to be understood before "the numbers in this row" can be
+correctly associated with each other.
+
+## Field extraction is a structured-prediction problem
+
+Turning "raw recognized text scattered across a page" into `{"vendor": "Acme
+Corp", "total": 42.17, "date": "2024-03-03"}` typically combines the layout
+signal (where is this text, relative to labels and other fields) with a
+model trained specifically to map (text, position) pairs to a target schema.
+For known document types (a specific government ID format, a specific
+invoice template), this can lean on template matching; for arbitrary unseen
+documents, it needs a more general model reasoning jointly over text and
+spatial layout.
+
+## Post-correction and validation
+
+Two error-correction layers commonly sit after raw recognition:
+
+- **Language-model-based post-correction**: OCR mistakes are often
+  characters that look alike ("O" vs "0", "l" vs "1"); a language model can
+  catch and fix errors that don't fit the surrounding context.
+- **Business-rule validation**: for structured documents like invoices, cheap
+  sanity checks (do the line items sum to the stated total? is the date
+  parseable and in a plausible range?) catch a meaningful fraction of
+  remaining errors and can trigger a human-review path instead of silently
+  returning wrong structured data.
+
+## Human-in-the-loop for low-confidence extractions
+
+No OCR pipeline hits 100% accuracy on messy real-world documents. Production
+systems attach a **confidence score** to each extracted field and route
+low-confidence extractions to a human review queue rather than returning
+them silently — for high-stakes use cases (financial documents, ID
+verification) this review step isn't optional polish, it's a core part of
+the system's accuracy guarantee.

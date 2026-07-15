@@ -1,0 +1,59 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Momentum"
+level: expert
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "momentum"
+estReadTime: 10
+resources:
+  - type: article
+    title: "Polyak's heavy ball method — original convergence analysis"
+    url: "https://distill.pub/2017/momentum/"
+---
+
+## Momentum's convergence rate on ill-conditioned quadratics
+
+For a convex quadratic with condition number `κ` (ratio of largest to smallest
+Hessian eigenvalue), plain gradient descent's convergence rate scales as
+`O((κ-1)/(κ+1))` per step, while the heavy-ball momentum method achieves
+`O((√κ-1)/(√κ+1))` — replacing a linear dependence on `κ` with a square-root
+dependence. For a highly ill-conditioned problem (large `κ`, i.e. a long narrow
+valley), this is the formal reason momentum can converge dramatically faster than
+plain gradient descent — not just an empirical folk observation, but a provable
+result for this idealized setting.
+
+## Momentum as discretized second-order ODE dynamics
+
+The continuous-time limit of the heavy-ball momentum update is a second-order
+ordinary differential equation, analogous to a physical particle with mass (inertia)
+moving in a potential field with friction — this is precisely why the "ball rolling
+downhill" intuition isn't just a metaphor but reflects real underlying dynamics.
+Plain gradient descent, by contrast, corresponds to a first-order ODE (pure
+overdamped motion with no inertia). This connection to physical dynamical systems is
+also the lens through which Nesterov's accelerated gradient method is best
+understood: it corresponds to a different, more carefully tuned discretization of
+essentially the same continuous dynamics, which is why it achieves a provably better
+convergence rate for convex problems without changing the core "accumulate velocity"
+idea.
+
+## Interaction between momentum and learning rate schedules
+
+Momentum and learning rate are not independent hyperparameters — the *effective* step
+size in the direction of consistent gradient flow scales roughly as
+`learning_rate / (1 - momentum)`, not just `learning_rate` alone. This means changing
+momentum without adjusting learning rate (or vice versa) can silently change the
+effective step size by a large factor — a common, easy-to-miss source of training
+instability when hyperparameter search treats them as fully independent axes rather
+than accounting for this coupling.
+
+## Momentum in non-convex, stochastic settings — the honest gap
+
+The clean convergence-rate results above are for convex, deterministic (full-batch)
+gradient descent. In the non-convex, stochastic setting that actual deep learning
+operates in, momentum's benefits are empirically robust and widely reproduced, but
+the theoretical guarantees are much weaker (typically convergence to a stationary
+point, with rate bounds that don't cleanly show the same dramatic κ-dependent
+speedup). Practitioner intuition here is running ahead of full theoretical
+justification — worth knowing so you don't over-claim precision the theory doesn't
+actually provide for this regime.

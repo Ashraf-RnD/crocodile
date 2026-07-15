@@ -1,0 +1,60 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Matrices"
+level: intermediate
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "matrices"
+estReadTime: 8
+resources:
+  - type: docs
+    title: "NumPy — Broadcasting rules"
+    url: "https://numpy.org/doc/stable/user/basics.broadcasting.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Broadcasting: how shapes that don't match still work
+
+NumPy/PyTorch let you combine arrays of *different* shapes by automatically expanding
+the smaller one, as long as their trailing dimensions are compatible. This is how you
+add a bias vector to every row of a batch without writing a loop:
+
+```python
+batch = np.zeros((32, 128))   # 32 examples, 128 features
+bias = np.zeros(128)          # one bias per feature
+result = batch + bias         # bias is broadcast across all 32 rows
+```
+
+**Rule:** dimensions are compared from the right; they're compatible if equal, or one
+of them is 1. `(32, 128) + (128,)` works because `128 == 128`. `(32, 128) + (32,)`
+would fail — no compatible trailing dimension.
+
+<Mermaid client:visible code={`flowchart LR
+  A["batch (32, 128)"] --> C["+"]
+  B["bias (128,) → broadcast to (32, 128)"] --> C
+  C --> D["result (32, 128)"]`} />
+
+## Transpose and reshape
+
+`.T` flips rows and columns — needed constantly to line up shapes for multiplication.
+`.reshape()` changes a matrix's shape without changing its data, as long as the total
+element count matches.
+
+```python
+a = np.arange(12).reshape(3, 4)   # shape (3, 4)
+a.T.shape                          # (4, 3)
+a.reshape(4, 3).shape               # (4, 3) — different layout than a.T!
+a.reshape(6, 2).shape                # (6, 2)
+```
+
+`.reshape()` and `.T` are **not** interchangeable — reshape re-flows the same data in
+row-major order, transpose actually swaps the axes. Mixing them up silently corrupts
+data without an error, one of the most common bugs when preparing tensors for a model.
+
+## Sparse vs dense matrices
+
+Most matrices in a neural net are **dense** (mostly non-zero) — full NumPy/PyTorch
+arrays. But some data (e.g. one-hot encoded categorical features, adjacency matrices
+for graphs) is **sparse** — mostly zeros — and storing it densely wastes huge amounts
+of memory. `scipy.sparse` and PyTorch's sparse tensors store only the non-zero
+entries and their positions instead.

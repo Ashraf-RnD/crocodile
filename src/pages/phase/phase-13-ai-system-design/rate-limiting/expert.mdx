@@ -1,0 +1,98 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Rate Limiting"
+level: expert
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "rate-limiting"
+estReadTime: 12
+resources:
+  - type: docs
+    title: "OpenAI Platform — Rate limits"
+    url: "https://platform.openai.com/docs/guides/rate-limits"
+  - type: article
+    title: "Cloudflare — What is rate limiting?"
+    url: "https://www.cloudflare.com/learning/bots/what-is-rate-limiting/"
+---
+
+## Distributed rate limiting is a consensus problem, not just a counter
+
+A single-instance token bucket in memory works until you have multiple
+API-server instances behind a load balancer — each instance enforcing its
+own local limit effectively multiplies the real limit by the number of
+instances, since a user's requests get spread across them. Correct
+distributed rate limiting needs a **shared, low-latency counter** (typically
+Redis or a similar in-memory store with atomic increment operations), which
+introduces its own failure modes: the counter store becoming a single point
+of contention under high request rates, and the trade-off between strict
+consistency (every check synchronously hits the shared store — correct but
+adds latency to every request) versus eventually-consistent local caching
+with periodic reconciliation (lower latency, but allows some over-admission
+during the reconciliation window). Most production systems accept small,
+bounded over-admission in exchange for not adding a synchronous network
+hop to every single request's critical path.
+
+## Cost-aware limiting requires estimating cost before you know it
+
+Because output length isn't known until generation completes, admitting a
+request against a token-per-minute budget requires either a pessimistic
+estimate (reserve the maximum possible cost, e.g. based on `max_tokens`,
+which under-utilizes budget when actual output is shorter) or an optimistic
+estimate with post-hoc reconciliation (admit based on typical/average cost,
+then true up the budget after generation completes — simpler on the
+happy path but allows the budget to go temporarily negative under adversarial
+or unusually verbose traffic, which needs its own cap). There's no
+estimate that's both tight and safe; production systems pick a point on
+this trade-off deliberately and monitor actual over-admission rates rather
+than assuming the estimate holds.
+
+## Fairness under shared, finite GPU capacity is different from web-scale fairness
+
+Traditional API rate limiting protects a service's *availability*; LLM rate
+limiting also has to protect a shared, genuinely finite resource (GPU
+capacity) from being monopolized, which changes the fairness problem.
+Simple per-user quotas don't prevent a scenario where many users are each
+individually within their limit, but the aggregate exceeds total system
+capacity during a demand spike. This requires a second layer — global
+admission control or weighted fair queuing across all active users — that
+degrades gracefully (queuing with an honest wait estimate, or shedding load
+from lower-priority tiers first) rather than allowing every individually-
+compliant user's request through and letting the inference layer collapse
+under aggregate load.
+
+## Adversarial evasion and the limits of identity-based limiting
+
+Rate limits keyed on API key or user ID are only as strong as the identity
+system behind them — attackers (or just legitimate users working around
+perceived unfairness) can rotate API keys, spin up multiple free-tier
+accounts, or distribute requests across many source IPs to evade per-key or
+per-IP limits. Robust systems layer additional signals beyond raw identity:
+behavioral fingerprinting (request patterns consistent with automated
+abuse), account-creation velocity limits, and global circuit breakers that
+trigger on aggregate anomalies regardless of which identities are
+technically compliant individually — accepting that no identity-based
+scheme alone is airtight against a motivated adversary.
+
+## Rate limiting interacts with retries in ways that can amplify load
+
+A client that retries immediately on a 429 without honoring `Retry-After`
+(or without exponential backoff) can turn a brief capacity shortfall into a
+sustained overload — every rejected request becomes another request shortly
+after, compounding rather than relieving pressure. Well-designed systems
+both emit clear backoff signals and, on the server side, apply **increasing
+backoff pressure** to clients that are repeatedly hitting limits (temporarily
+tightening their effective limit further, a soft penalty) rather than
+treating every rejection as independent and stateless — because a client
+retrying in a tight loop against a fixed limit will keep failing at the
+same rate forever without an escalating signal to actually back off.
+
+## Trade-off summary
+
+| Concern | Simple approach | Production-grade approach | Cost |
+|---|---|---|---|
+| Limit dimension | Requests per minute only | Requests + tokens per minute, cost-weighted | More complex accounting, needs cost estimation |
+| Distributed enforcement | Per-instance local counter | Shared counter (Redis) with consistency trade-off | Added latency or bounded over-admission |
+| Cost estimation | Assume average cost per request | Reserve max, or reconcile post-hoc | Under-utilization vs. temporary budget overshoot |
+| System-wide fairness | Per-user quota only | Global admission control / weighted fair queuing | Extra coordination layer across all users |
+| Evasion resistance | Rate limit by API key/IP alone | Behavioral signals + account-velocity limits | Ongoing detection/maintenance, false-positive risk |
+| Retry behavior | Stateless rejection every time | Escalating backoff for repeat offenders | Extra state per client, tuning to avoid punishing legitimate retries |

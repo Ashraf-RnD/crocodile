@@ -1,0 +1,69 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "GRU"
+level: beginner
+phaseSlug: "phase-04-deep-learning"
+phaseName: "Deep Learning"
+topicSlug: "gru"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "PyTorch — GRU documentation"
+    url: "https://pytorch.org/docs/stable/generated/torch.nn.GRU.html"
+  - type: article
+    title: "Understanding GRU Networks"
+    url: "https://towardsdatascience.com/understanding-gru-networks-2ef37df6c9be"
+---
+
+## LSTM's simpler sibling
+
+A **GRU (Gated Recurrent Unit)** solves the same problem as an LSTM — remembering
+useful information across a long sequence — with a simpler design: no separate cell
+state, and only two gates instead of three. Think of it as a streamlined version of
+the same "conveyor belt with valves" idea, with fewer valves to keep track of, which
+also means fewer parameters to learn and faster computation per step.
+
+```python
+import torch
+import torch.nn as nn
+
+gru = nn.GRU(input_size=5, hidden_size=8, batch_first=True)
+
+sequence = torch.randn(1, 10, 5)   # 1 sample, 10 time steps, 5 features
+output, hidden = gru(sequence)
+
+print(output.shape)   # torch.Size([1, 10, 8])
+print(hidden.shape)   # torch.Size([1, 1, 8])
+```
+
+Notice a GRU returns just one state (`hidden`), like a plain RNN — unlike LSTM's two
+(hidden + cell). That's the direct, visible consequence of not having a separate
+cell state.
+
+### When to reach for GRU vs LSTM
+
+In practice, the two perform similarly on most tasks, so the choice often comes down
+to practical factors: GRU trains a bit faster and uses less memory (fewer
+parameters), which matters more on smaller datasets or resource-constrained
+settings. When in doubt, many practitioners simply try both and let validation
+performance decide.
+
+### Try it yourself
+
+Create an `nn.GRU` with input size 6 and hidden size 10, run it on a single sequence
+of length 8, and print the shape of the output at every time step.
+
+<details>
+<summary>Solution</summary>
+
+```python
+import torch
+import torch.nn as nn
+
+gru = nn.GRU(input_size=6, hidden_size=10, batch_first=True)
+x = torch.randn(1, 8, 6)
+output, hidden = gru(x)
+print(output.shape)   # torch.Size([1, 8, 10])
+```
+
+</details>

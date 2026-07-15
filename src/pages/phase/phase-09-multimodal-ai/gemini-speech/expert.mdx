@@ -1,0 +1,67 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Gemini Speech"
+level: expert
+phaseSlug: "phase-09-multimodal-ai"
+phaseName: "Multimodal AI"
+topicSlug: "gemini-speech"
+estReadTime: 11
+resources:
+  - type: docs
+    title: "Gemini API — Live API: interruptions and VAD"
+    url: "https://ai.google.dev/gemini-api/docs/live"
+  - type: article
+    title: "Cascaded vs end-to-end speech-to-speech models (overview)"
+    url: "https://ai.google.dev/gemini-api/docs/audio"
+---
+
+## The controllability trade-off of native audio
+
+Cascaded pipelines (ASR → LLM → TTS) have an underrated advantage: the intermediate
+text representation is fully inspectable and controllable. You can run content
+moderation on the transcribed text, log the exact words for compliance, apply a
+separate TTS voice/brand identity, and swap any one component independently. Native
+audio-to-audio models collapse all of this into one opaque forward pass — you get
+lower latency and richer prosody understanding, but you lose the clean intervention
+points a cascaded pipeline gives you for free.
+
+| Concern | Cascaded (ASR→LLM→TTS) | Native audio-to-audio |
+|---|---|---|
+| Latency | Higher (3 sequential model calls) | Lower (single streaming model) |
+| Prosody/tone awareness | Lost at the ASR step | Preserved throughout |
+| Content moderation | Easy (moderate the text) | Harder (must moderate audio or trust the model) |
+| Component swappability | High (swap ASR/TTS independently) | Low (locked to one model's voice/behavior) |
+| Voice brand consistency | Full control (dedicated TTS voice) | Limited to model's available voices |
+| Auditability | Full text transcript by default | Requires separate transcription for logs |
+
+## Barge-in and interruption handling
+
+A subtle but critical production requirement for voice agents: users interrupt.
+Real conversations aren't strict turn-taking — someone starts talking while the agent
+is still speaking (a "barge-in"), and a good voice agent needs to stop talking and
+listen, not talk over the user. The Live API surfaces this as an explicit signal in
+the stream (detecting new user audio while a response is still being emitted), and
+handling it well — cutting output audio immediately, not after the current sentence
+finishes — is one of the harder engineering details that separates a good voice
+product from a frustrating one.
+
+## Why moderation is harder for native audio
+
+Text-based content moderation is mature: run the LLM's text output through a
+classifier before it reaches the user. Native audio-to-audio output skips a text
+intermediate for the *response* by default, meaning teams either need the model to
+also emit a text transcript in parallel (which Gemini's Live API supports via
+`response_modalities: ["AUDIO", "TEXT"]`) specifically to give a moderation layer
+something to inspect, or accept weaker guardrail coverage on the voice channel than
+they'd have on a text-only product.
+
+## When cascaded still wins in production
+
+Despite the latency and prosody advantages of native audio, many production voice
+products still deliberately choose a cascaded pipeline — because they need a specific,
+brand-consistent TTS voice (native models offer a limited voice set), need full text
+logs for compliance/QA, or need to swap in a specialized domain ASR model tuned for
+noisy call-center audio that outperforms a general-purpose native audio model on that
+specific acoustic environment. Native audio-to-audio is the better default for new
+conversational products; cascaded remains the right choice when any one component has
+a hard, specific requirement a general multimodal model doesn't meet.

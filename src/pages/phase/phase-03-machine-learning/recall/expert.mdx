@@ -1,0 +1,120 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Recall"
+level: expert
+phaseSlug: "phase-03-machine-learning"
+phaseName: "Machine Learning"
+topicSlug: "recall"
+estReadTime: 11
+resources:
+  - type: docs
+    title: "scikit-learn: precision_recall_curve"
+    url: "https://scikit-learn.org/stable/modules/generated/sklearn.metrics.precision_recall_curve.html"
+  - type: article
+    title: "imbalanced-learn: Over-sampling methods"
+    url: "https://imbalanced-learn.org/stable/over_sampling.html"
+---
+
+## Recall as a curve, not a single number
+
+Like precision, recall is only meaningful alongside the threshold it was measured at. The
+recall side of the precision-recall curve shows exactly how much recall you can buy at
+each precision cost:
+
+```python
+from sklearn.metrics import precision_recall_curve
+import numpy as np
+
+probs = clf.predict_proba(X_test)[:, 1]
+precisions, recalls, thresholds = precision_recall_curve(y_test, probs)
+
+# find the lowest threshold that still guarantees recall >= 0.95
+target_recall = 0.95
+valid = recalls[:-1] >= target_recall
+if valid.any():
+    idx = np.where(valid)[0][-1]   # last index satisfying the constraint
+    print(f"threshold={thresholds[idx]:.3f} achieves recall={recalls[idx]:.3f}, "
+          f"precision={precisions[idx]:.3f}")
+```
+
+This "pick the threshold that guarantees a recall floor, then see what precision you pay"
+workflow is exactly how thresholds get set in recall-critical systems — the recall target
+usually comes first, as a hard requirement, and precision is whatever falls out.
+
+## Class imbalance interventions and their effect on recall
+
+Three common levers push recall up on a minority class, each with different mechanics and
+side effects:
+
+- **`class_weight='balanced'`** — reweights the loss function so misclassifying a minority
+  example costs proportionally more, shifting the learned decision boundary without
+  touching the data itself.
+- **Oversampling (SMOTE, random oversampling)** — synthesizes or duplicates minority-class
+  examples so the model sees a more balanced distribution during training.
+- **Undersampling** — discards majority-class examples, which is cheap but throws away
+  information and can hurt overall model quality if the majority class is large.
+
+```python
+from sklearn.linear_model import LogisticRegression
+
+# class_weight is usually the first, cheapest lever to try
+model = LogisticRegression(class_weight="balanced", max_iter=1000)
+model.fit(X_train, y_train)
+```
+
+All three raise recall by construction — they all make the model more willing to predict
+positive — but none of them add real information the model didn't have before. The gain is
+a repositioned decision boundary, not new signal, and it always comes at a precision cost
+that should be measured, not assumed acceptable.
+
+## Cost-sensitive threshold selection
+
+As with precision, recall only becomes an actionable target once tied to a real cost of a
+missed positive (false negative) versus a false alarm (false positive):
+
+```python
+import numpy as np
+
+cost_fn = 100   # e.g. cost of a missed fraud case
+cost_fp = 3     # e.g. cost of an unnecessary manual review
+
+best_threshold, best_cost = None, np.inf
+for t in np.linspace(0.01, 0.99, 99):
+    preds = (probs >= t).astype(int)
+    fn = ((preds == 0) & (y_test == 1)).sum()
+    fp = ((preds == 1) & (y_test == 0)).sum()
+    cost = fn * cost_fn + fp * cost_fp
+    if cost < best_cost:
+        best_threshold, best_cost = t, cost
+
+print(f"Cost-optimal threshold: {best_threshold:.2f}")
+```
+
+When `cost_fn` dominates `cost_fp`, the cost-optimal threshold naturally drops low,
+favoring recall — this is the principled version of "just set a recall target," because it
+also tells you exactly how much false-positive cost you're accepting to get there.
+
+## Trade-off summary
+
+| Approach | Effect on recall | Mechanism | Side effect |
+|---|---|---|---|
+| Lower decision threshold | Increases | Predicts positive more liberally | Precision drops |
+| `class_weight='balanced'` | Increases on minority class | Reweights the loss during training | Shifts decision boundary; can hurt majority-class precision |
+| Oversampling (SMOTE) | Increases on minority class | Synthesizes minority examples | Risk of overfitting to synthetic patterns |
+| Undersampling | Increases on minority class | Discards majority examples | Loses information, can hurt majority-class performance |
+| Cost-weighted threshold | Increases proportional to `cost_fn` | Picks threshold minimizing expected cost | Requires knowing real FP/FN costs |
+
+## Production concerns
+
+High-stakes systems often ship with an explicit recall SLA — "must catch at least 95% of
+fraud" or "must flag at least 99% of safety-critical defects" — set by the business, not
+derived from the model. Meeting that SLA is a threshold-tuning exercise, not a model-
+architecture one: you lower the threshold until the recall floor is met on a representative
+validation set, then measure what precision (and downstream review-team workload) that
+threshold produces in practice. The operational cost of a recall-first policy is real and
+compounding — every point of recall gained by lowering the threshold usually adds a larger
+number of false positives, which lands as extra volume on whatever downstream review
+process consumes the flagged cases. Recall targets set without accounting for that
+downstream capacity are a common way recall-optimized systems fail in production: the model
+"works" (hits its recall number) but the review queue it feeds collapses under false-alarm
+volume.

@@ -1,0 +1,89 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "LLaMA"
+level: intermediate
+phaseSlug: "phase-14-research-literacy"
+phaseName: "Research Literacy"
+topicSlug: "llama"
+estReadTime: 10
+resources:
+  - type: article
+    title: "LLaMA: Open and Efficient Foundation Language Models"
+    url: "https://arxiv.org/abs/2302.13971"
+  - type: docs
+    title: "Hugging Face — LLaMA model docs"
+    url: "https://huggingface.co/docs/transformers/model_doc/llama"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Training past the "compute-optimal" point
+
+Chinchilla's scaling laws say: for a *fixed training compute budget*, there's an
+optimal ratio of parameters to training tokens (roughly 20 tokens per parameter).
+LLaMA deliberately trains smaller models on *more* tokens than that ratio would
+suggest — the 7B model was trained on about 1 trillion tokens, far beyond its
+"compute-optimal" point — because the paper's target isn't minimal training
+compute, it's minimal *inference* cost for a target quality level. Training
+compute is a one-time cost; inference compute is paid every single time the
+model is used, so over a model's lifetime, a cheaper-to-run model can be the
+better economic bet even if training it took longer than "optimal."
+
+## Three architectural changes from the original Transformer
+
+LLaMA keeps the decoder-only shape popularized by GPT but adopts three changes
+that had each been separately validated in prior work and became a de facto
+recipe for essentially every open LLM since:
+
+1. **RMSNorm instead of LayerNorm**, applied *before* each sub-layer (pre-norm)
+   rather than after — simpler (no mean-centering, only rescaling) and more
+   stable at depth.
+
+```python
+import torch
+
+def rmsnorm(x, weight, eps=1e-6):
+    norm = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps)
+    return norm * weight
+```
+
+2. **SwiGLU activation** in the feed-forward layers instead of ReLU/GELU — a
+   gated variant that consistently improves quality for a similar parameter
+   budget.
+3. **Rotary Positional Embeddings (RoPE)** instead of learned or sinusoidal
+   absolute positions — position information is injected by rotating query/key
+   vectors as a function of relative position, which generalizes better to
+   sequence lengths beyond what the model was trained on.
+
+<Mermaid client:visible code={`flowchart TB
+  In["Input embeddings"] --> RMS1["RMSNorm (pre-norm)"]
+  RMS1 --> Attn["Self-attention with RoPE"]
+  Attn --> Res1["+ residual"]
+  Res1 --> RMS2["RMSNorm (pre-norm)"]
+  RMS2 --> FFN["SwiGLU feed-forward"]
+  FFN --> Res2["+ residual"]
+  Res2 --> Next["Next layer (x N)"]`} />
+
+## Training data and tokenizer
+
+LLaMA trains exclusively on publicly available data — Common Crawl, C4,
+GitHub, Wikipedia, books, arXiv, StackExchange — deliberately avoiding any
+proprietary or private datasets, which is part of what made the recipe
+reproducible by outside researchers. A byte-pair encoding (BPE) tokenizer
+similar to GPT-2/GPT-3's is used, splitting numbers into individual digits to
+improve arithmetic generalization.
+
+## Model family and sizes
+
+The original paper releases four sizes — 7B, 13B, 33B, and 65B parameters — all
+trained on the same data mixture, letting researchers directly study how
+capability scales with parameters when data and recipe are held constant
+(the complement of the Chinchilla study, which varies data and compute).
+
+## Why this recipe became the open-model default
+
+Because LLaMA's weights were released and its recipe was published in detail,
+nearly every subsequent open-weight model (Mistral, Qwen, DeepSeek, and LLaMA's
+own later versions) adopted the same RMSNorm + SwiGLU + RoPE decoder block as a
+starting point, treating it as the de facto standard architecture rather than
+reinventing it — the architectural choices below the surface changed remarkably
+little even as scale, data mixture, and training tricks kept evolving.

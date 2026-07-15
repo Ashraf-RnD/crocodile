@@ -1,0 +1,136 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Axolotl"
+level: intermediate
+phaseSlug: "phase-10-fine-tuning"
+phaseName: "Fine-tuning"
+topicSlug: "axolotl"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "Axolotl — config reference (all options)"
+    url: "https://docs.axolotl.ai/docs/config.html"
+  - type: docs
+    title: "Axolotl — dataset formats guide"
+    url: "https://docs.axolotl.ai/docs/dataset-formats/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## What Axolotl is actually doing under the hood
+
+<Mermaid client:visible code={`flowchart TB
+  YAML["Your YAML config"] --> Parse["Axolotl parses config"]
+  Parse --> Load["Loads model via transformers"]
+  Parse --> Data["Formats dataset to chat template"]
+  Parse --> Adapter["Configures LoRA/QLoRA via peft"]
+  Load --> Trainer["Builds an SFTTrainer/DPOTrainer under the hood"]
+  Data --> Trainer
+  Adapter --> Trainer
+  Trainer --> Run["accelerate launch runs the job, possibly multi-GPU"]`} />
+
+Axolotl is best understood as a well-tested orchestration layer over the same stack
+you'd use manually (`transformers`, `peft`, `trl`, `accelerate`, `bitsandbytes`,
+DeepSpeed) — its value is codifying dozens of small correct decisions (dataset
+formatting per template type, sane default hyperparameters, multi-GPU launch
+configuration) into a config schema instead of requiring you to get each one right by
+hand.
+
+## A production-realistic QLoRA + DeepSpeed config
+
+```yaml
+base_model: meta-llama/Llama-3.1-8B-Instruct
+model_type: LlamaForCausalLM
+tokenizer_type: AutoTokenizer
+
+load_in_4bit: true
+adapter: qlora
+lora_r: 32
+lora_alpha: 64
+lora_dropout: 0.05
+lora_target_linear: true       # target all linear layers, not just attention
+
+datasets:
+  - path: ./data/support_conversations.jsonl
+    type: chat_template
+    chat_template: llama3
+
+sequence_len: 4096
+sample_packing: true            # concatenate short examples to reduce padding waste
+
+gradient_accumulation_steps: 4
+micro_batch_size: 2
+num_epochs: 3
+optimizer: paged_adamw_8bit
+learning_rate: 0.0002
+lr_scheduler: cosine
+
+deepspeed: deepspeed_configs/zero2.json
+
+output_dir: ./llama3-support-out
+save_strategy: steps
+save_steps: 200
+eval_strategy: steps
+eval_steps: 100
+```
+
+```bash
+accelerate launch -m axolotl.cli.train config.yaml
+```
+
+Notice `sample_packing`, `paged_adamw_8bit`, and `deepspeed` — Axolotl exposes the same
+memory-efficiency techniques covered elsewhere in this phase (QLoRA, packing, paged
+optimizers) as flat config fields rather than requiring you to wire up each library's
+API individually.
+
+## Running DPO with Axolotl
+
+```yaml
+base_model: ./llama3-support-out   # start from the SFT checkpoint
+rl: dpo
+dpo_beta: 0.1
+
+datasets:
+  - path: trl-lib/ultrafeedback_binarized
+    type: chat_template.default
+
+learning_rate: 0.000005
+num_epochs: 1
+
+output_dir: ./llama3-support-dpo-out
+```
+
+The same declarative pattern extends to preference tuning — setting `rl: dpo` switches
+Axolotl's internal trainer selection from SFT to DPO, without you needing to know that
+this maps to TRL's `DPOTrainer` under the hood.
+
+## Multi-GPU and multi-node training
+
+Axolotl's config-driven approach becomes especially valuable at multi-GPU scale, where
+getting DeepSpeed/FSDP configuration right by hand is a common source of subtle bugs:
+
+```yaml
+fsdp_config:
+  fsdp_transformer_layer_cls_to_wrap: LlamaDecoderLayer
+  fsdp_sharding_strategy: FULL_SHARD
+  fsdp_state_dict_type: FULL_STATE_DICT
+```
+
+Axolotl ships tested, known-good example configs for common architectures'
+FSDP/DeepSpeed wrapping targets, which removes a real source of trial-and-error you'd
+otherwise hit configuring these directly.
+
+## When to prefer Axolotl over hand-written TRL scripts
+
+- **You're running many similar fine-tuning experiments** — YAML configs are easy to
+  diff, version, and share across a team, which is harder to do cleanly with ad hoc
+  Python scripts.
+- **You want tested defaults for multi-GPU/DeepSpeed setups** — Axolotl's example
+  configs encode working configurations for common architectures.
+- **You need a quick, reliable baseline** before investing in a fully custom training
+  pipeline for a specialized need (custom loss, unusual data preprocessing) that Axolotl
+  doesn't expose as a config option.
+
+Reach for hand-written TRL scripts instead when your training loop needs genuinely
+custom logic — a novel loss function, non-standard data augmentation, or tight
+integration with an existing custom training infrastructure that a config-driven tool
+can't easily accommodate.

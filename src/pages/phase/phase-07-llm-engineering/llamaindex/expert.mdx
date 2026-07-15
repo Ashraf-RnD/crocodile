@@ -1,0 +1,122 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "LlamaIndex"
+level: expert
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "llamaindex"
+estReadTime: 12
+resources:
+  - type: docs
+    title: "LlamaIndex — Advanced Retrieval Strategies"
+    url: "https://docs.llamaindex.ai/en/stable/optimizing/advanced_retrieval/advanced_retrieval/"
+  - type: docs
+    title: "LlamaIndex — Evaluating RAG Systems"
+    url: "https://docs.llamaindex.ai/en/stable/optimizing/evaluation/evaluation/"
+---
+
+## Naive top-k retrieval is a baseline, not a destination
+
+`similarity_top_k` retrieval on raw chunk embeddings is where every RAG system
+starts, and where most production RAG systems eventually discover the ceiling: pure
+vector similarity retrieves chunks that are *semantically similar* to the query, which
+is not the same as chunks that *answer* the query, and it has no notion of keyword
+precision (exact product codes, names, numbers) that dense embeddings blur. Mature
+LlamaIndex deployments layer several techniques on top of the naive baseline:
+
+- **Hybrid search** — combine dense vector similarity with sparse keyword search
+  (BM25) and merge results, since dense embeddings alone are weak at exact-term
+  matching (SKUs, error codes, proper nouns) that keyword search handles well.
+- **Reranking** — retrieve a larger initial candidate set (e.g. top 25) with cheap
+  vector search, then rerank with a more expensive cross-encoder model
+  (`SentenceTransformerRerank`, Cohere's rerank API) that scores query-chunk pairs
+  jointly rather than via separately-computed embeddings, before passing only the
+  final top-k to the LLM. Cross-encoders are meaningfully more accurate than
+  embedding similarity for relevance but too slow to run over an entire corpus,
+  hence the two-stage retrieve-then-rerank pattern.
+- **Query transformation** — the raw user query is often a poor retrieval query
+  (too short, ambiguous, or phrased differently than the source documents). Techniques
+  like HyDE (generate a hypothetical answer first, embed *that* for retrieval) or
+  sub-question decomposition (split a compound question into simpler retrievable
+  sub-queries) measurably improve retrieval on queries that don't lexically or
+  semantically resemble their answers.
+
+```python
+from llama_index.core.postprocessor import SentenceTransformerRerank
+from llama_index.retrievers.bm25 import BM25Retriever
+from llama_index.core.retrievers import QueryFusionRetriever
+
+vector_retriever = index.as_retriever(similarity_top_k=25)
+bm25_retriever = BM25Retriever.from_defaults(index=index, similarity_top_k=25)
+
+fusion_retriever = QueryFusionRetriever(
+    [vector_retriever, bm25_retriever], similarity_top_k=10, num_queries=1, mode="reciprocal_rerank",
+)
+reranker = SentenceTransformerRerank(model="cross-encoder/ms-marco-MiniLM-L-6-v2", top_n=5)
+
+query_engine = index.as_query_engine(retriever=fusion_retriever, node_postprocessors=[reranker])
+```
+
+## Indexing structure choice is a real architectural decision
+
+`VectorStoreIndex` (flat similarity search) is the default, but LlamaIndex supports
+structurally different indices suited to different data shapes:
+
+- **`DocumentSummaryIndex`** — retrieves at the document level via LLM-generated
+  summaries first, then drills into the matched document's chunks; better than flat
+  vector search when queries need to identify *which document* is relevant before
+  finding the specific passage.
+- **`KnowledgeGraphIndex` / property graph index** — extracts entities and
+  relationships into a graph, enabling multi-hop queries ("who reports to the person
+  who approved this budget?") that pure vector similarity structurally cannot answer,
+  since no single chunk's embedding captures a multi-hop relationship.
+- **Recursive retrieval / document hierarchies** — index chunks that reference their
+  parent section or document, so retrieval can return a precise chunk *and* pull in
+  its broader context on demand, rather than choosing chunk size as a single fixed
+  trade-off.
+
+## Evaluation: retrieval quality and generation quality are separate problems
+
+A RAG system can fail at retrieval (irrelevant chunks returned) or at generation
+(correct chunks retrieved, but the LLM still answers wrong) — conflating these in a
+single end-to-end eval hides which half actually needs fixing. LlamaIndex's evaluation
+module separates them:
+
+```python
+from llama_index.core.evaluation import FaithfulnessEvaluator, RelevancyEvaluator
+
+faithfulness = FaithfulnessEvaluator(llm=Settings.llm)  # does the answer stay grounded in retrieved context?
+relevancy = RelevancyEvaluator(llm=Settings.llm)        # was the retrieved context actually relevant to the query?
+
+result = faithfulness.evaluate_response(response=response)
+print(result.passing, result.feedback)
+```
+
+Track retrieval metrics (hit rate, MRR against a labeled query/relevant-chunk dataset)
+and generation metrics (faithfulness/groundedness, answer relevancy) as separate
+dashboards — a regression in one doesn't imply a regression in the other, and
+debugging effort should be targeted accordingly.
+
+## Trade-offs across retrieval sophistication levels
+
+| Approach | Retrieval accuracy | Latency/cost | Engineering complexity |
+|---|---|---|---|
+| Flat vector top-k | Baseline | Lowest | Lowest |
+| + Hybrid (vector + BM25) | Better on exact-term queries | Slightly higher | Low |
+| + Reranking (cross-encoder) | Meaningfully better relevance ordering | Added rerank latency per query | Medium |
+| + Query transformation (HyDE, decomposition) | Better on ambiguous/compound queries | Extra LLM call(s) before retrieval | Medium-high |
+| Graph/hierarchical indices | Enables multi-hop and structural queries flat retrieval can't | Higher indexing cost, more moving parts | Highest |
+
+## When LlamaIndex is (and isn't) the right choice vs. LangChain
+
+Both libraries overlap substantially in RAG capability today. LlamaIndex's comparative
+strength is its depth of retrieval-specific tooling (chunking strategies, index types,
+retrieval evaluation built in as first-class citizens) — it was built retrieval-first.
+LangChain's comparative strength is breadth of general-purpose orchestration (chains,
+broader agent/tool ecosystem, LangGraph for complex control flow) — it was built
+orchestration-first. Teams building a retrieval-heavy system with deep indexing needs
+often reach for LlamaIndex (sometimes composed *with* LangChain/LangGraph for the
+surrounding agent logic); teams building complex multi-step agentic workflows where
+retrieval is one component among many often reach for LangChain/LangGraph first. The
+two are not mutually exclusive — LlamaIndex query engines are commonly wrapped as
+tools inside a LangGraph agent.

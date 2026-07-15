@@ -1,0 +1,92 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Gemini Speech"
+level: intermediate
+phaseSlug: "phase-09-multimodal-ai"
+phaseName: "Multimodal AI"
+topicSlug: "gemini-speech"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "Gemini API — Live API guide"
+    url: "https://ai.google.dev/gemini-api/docs/live"
+  - type: docs
+    title: "Gemini API — Function calling"
+    url: "https://ai.google.dev/gemini-api/docs/function-calling"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Cascaded pipelines vs native audio
+
+Before native multimodal audio models, a voice agent was three separate models
+chained together:
+
+<Mermaid client:visible code={`flowchart LR
+  subgraph Cascaded["Cascaded pipeline (older approach)"]
+    A1[Audio in] --> B1[ASR: speech to text]
+    B1 --> C1[LLM: reasoning]
+    C1 --> D1[TTS: text to speech]
+    D1 --> E1[Audio out]
+  end
+  subgraph Native["Native audio (Gemini Live)"]
+    A2[Audio in] --> B2["Single model:\nunderstands + reasons + speaks"]
+    B2 --> E2[Audio out]
+  end`} />
+
+Each hop in the cascaded pipeline adds latency and loses information — tone, pace,
+emphasis, and interruptions all get flattened into plain text at the ASR step, so the
+LLM never actually "hears" how something was said, only what was said.
+
+## The Live API for real-time voice agents
+
+Gemini's **Live API** supports full bidirectional audio streaming over a WebSocket,
+which is what real production voice agents (customer support bots, voice assistants)
+are built on:
+
+```python
+import asyncio
+from google import genai
+
+client = genai.Client(api_key="YOUR_API_KEY")
+
+async def voice_session():
+    async with client.aio.live.connect(
+        model="gemini-2.0-flash-live-001",
+        config={"response_modalities": ["AUDIO"]},
+    ) as session:
+        await session.send(input=audio_chunk, end_of_turn=False)
+        async for response in session.receive():
+            if response.data:
+                play_audio(response.data)  # stream audio out as it arrives
+
+asyncio.run(voice_session())
+```
+
+The session is stateful and streaming in both directions — you can send audio chunks
+as the user speaks and start receiving spoken response audio before the user has even
+finished their turn, which is what makes it feel conversational rather than
+walkie-talkie ("press to talk, wait, listen").
+
+## Function calling from a voice conversation
+
+Voice agents in production almost always need to *do* something — check an order
+status, book an appointment — not just talk. Gemini's function calling works the same
+way over the Live API as it does over text: the model can emit a structured function
+call mid-conversation, your code executes it, and the result gets spoken back:
+
+```python
+config = {
+    "response_modalities": ["AUDIO"],
+    "tools": [{"function_declarations": [{
+        "name": "check_order_status",
+        "description": "Look up an order by ID",
+        "parameters": {"type": "object", "properties": {
+            "order_id": {"type": "string"}
+        }},
+    }]}],
+}
+```
+
+This is the architecture behind most production "voice agent that can actually take
+action" products — native audio understanding for the conversational feel, function
+calling for the actual task execution.

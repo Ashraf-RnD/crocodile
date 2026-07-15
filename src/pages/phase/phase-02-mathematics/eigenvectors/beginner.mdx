@@ -1,0 +1,62 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Eigenvectors"
+level: beginner
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "eigenvectors"
+estReadTime: 6
+resources:
+  - type: video
+    title: "3Blue1Brown — Eigenvectors and eigenvalues"
+    url: "https://www.youtube.com/watch?v=PFDu9oVAE-g"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The direction that doesn't rotate
+
+An **eigenvector** of a matrix `A` is a special direction that, when you apply `A`,
+only gets stretched or shrunk — never rotated onto a different direction. Its partner
+number, the eigenvalue, tells you exactly how much it stretches.
+
+<Mermaid client:visible code={`flowchart LR
+  A["Eigenvector v"] --> M["Apply matrix A"]
+  M --> R["Still points the same direction, just longer/shorter"]
+  Other["Any other vector"] --> M2["Apply matrix A"]
+  M2 --> R2["Points in a NEW direction"]`} />
+
+```python
+import numpy as np
+A = np.array([[2, 0],
+              [0, 1]])
+eigenvalues, eigenvectors = np.linalg.eig(A)
+print(eigenvectors)
+# columns are the eigenvectors: [1, 0] and [0, 1] for this matrix
+```
+
+For this matrix, `[1, 0]` (pointing along x) and `[0, 1]` (pointing along y) are the
+eigenvectors — because this matrix only stretches along the x and y axes, without
+mixing them.
+
+## Verifying by hand
+
+Check that `A · v = λ · v` for `v = [1, 0]`, `λ = 2`:
+
+```python
+v = np.array([1, 0])
+A @ v          # [2, 0]
+2 * v          # [2, 0] — matches!
+```
+
+## Try it yourself
+
+For `A = [[3, 0], [0, 3]]` (uniform scaling), is *every* vector an eigenvector, or
+only special ones?
+
+<details>
+<summary>Solution</summary>
+
+Every vector is an eigenvector here, all sharing eigenvalue 3 — because this matrix
+scales every direction equally, nothing gets rotated relative to anything else. This
+is a special case; most matrices only have a couple of eigenvector directions.
+</details>

@@ -1,0 +1,91 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "RNN"
+level: intermediate
+phaseSlug: "phase-04-deep-learning"
+phaseName: "Deep Learning"
+topicSlug: "rnn"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "PyTorch — pack_padded_sequence"
+    url: "https://pytorch.org/docs/stable/generated/torch.nn.utils.rnn.pack_padded_sequence.html"
+  - type: docs
+    title: "PyTorch — Sequence models tutorial"
+    url: "https://pytorch.org/tutorials/beginner/nlp/sequence_models_tutorial.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The unrolled view
+
+An RNN applies the *same* weights at every time step, updating its hidden state
+using the current input and the previous hidden state: `h_t = tanh(W_x * x_t + W_h * h_{t-1} + b)`.
+"Unrolling" the recurrence across time makes the computation explicit:
+
+<Mermaid client:visible code={`flowchart LR
+  h0["h0 (init)"] --> C1["cell: x1, h0 -> h1"]
+  C1 --> C2["cell: x2, h1 -> h2"]
+  C2 --> C3["cell: x3, h2 -> h3"]
+  C3 --> hN["h3 -> final output / prediction"]`} />
+
+Because the same weight matrices (`W_x`, `W_h`) are reused at every step, an RNN can
+handle sequences of any length with a fixed number of parameters — unlike a dense
+network, which would need a different set of weights for every possible sequence
+length.
+
+## Handling variable-length sequences in a batch
+
+Real batches contain sequences of different lengths (sentences of different word
+counts). Padding shorter sequences to a common length is necessary for batching, but
+naively running the RNN over padding tokens wastes compute and can corrupt the
+hidden state. `pack_padded_sequence` tells PyTorch to skip padded positions
+entirely:
+
+```python
+import torch
+from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
+
+lengths = torch.tensor([5, 3, 4])                 # actual length of each sequence
+padded = torch.zeros(3, 5, 8)                      # batch, max_len, features
+
+packed = pack_padded_sequence(padded, lengths, batch_first=True, enforce_sorted=False)
+rnn = torch.nn.RNN(input_size=8, hidden_size=16, batch_first=True)
+packed_out, hidden = rnn(packed)
+output, out_lengths = pad_packed_sequence(packed_out, batch_first=True)
+```
+
+This is standard practice in any production NLP pipeline using RNNs — training
+without it either wastes compute on padding or, worse, lets the hidden state be
+influenced by meaningless padded zeros.
+
+## Where RNNs are still used in production
+
+Transformers have replaced RNNs for most large-scale NLP, but RNNs (and their gated
+variants, LSTM/GRU) remain practical for:
+
+- **Streaming/online inference** — an RNN processes one token at a time with
+  `O(1)` memory per step, no need to reprocess the whole sequence like a transformer
+  without KV-caching would.
+- **Small-scale time series forecasting** — sensor data, financial series — where
+  a lightweight recurrent model trains and infers faster than a transformer with
+  comparable accuracy on modest datasets.
+- **Low-latency edge deployment** — RNN cells are cheap and simple to run on
+  constrained hardware compared to attention's quadratic cost.
+
+## A minimal sequence classifier
+
+```python
+import torch.nn as nn
+
+class RNNClassifier(nn.Module):
+    def __init__(self, vocab_size, embed_dim, hidden_dim, num_classes):
+        super().__init__()
+        self.embedding = nn.Embedding(vocab_size, embed_dim)
+        self.rnn = nn.RNN(embed_dim, hidden_dim, batch_first=True)
+        self.fc = nn.Linear(hidden_dim, num_classes)
+
+    def forward(self, token_ids):
+        embedded = self.embedding(token_ids)
+        _, hidden = self.rnn(embedded)
+        return self.fc(hidden.squeeze(0))   # classify using the final hidden state
+```

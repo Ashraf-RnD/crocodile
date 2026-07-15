@@ -1,0 +1,74 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "BERT"
+level: beginner
+phaseSlug: "phase-06-transformers"
+phaseName: "Transformers"
+topicSlug: "bert"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "Hugging Face — BERT model docs"
+    url: "https://huggingface.co/docs/transformers/en/model_doc/bert"
+  - type: article
+    title: "Jay Alammar — The Illustrated BERT"
+    url: "https://jalammar.github.io/illustrated-bert/"
+---
+
+## BERT: a fill-in-the-blank expert
+
+BERT (Bidirectional Encoder Representations from Transformers) is a model built
+entirely from **encoder** layers — the "understand, don't generate" half of the
+Transformer you may have already met. It was trained on one deceptively simple game:
+given a sentence with some words hidden, guess the hidden words.
+
+"The cat sat on the [MASK]." → BERT learns to predict "mat," "chair," "floor," etc.,
+by looking at words on **both sides** of the blank — this is what "bidirectional"
+means. Unlike GPT, which only ever looks backward while generating, BERT gets to see
+the whole sentence, blank and all, in one shot.
+
+This training game is called **Masked Language Modeling (MLM)**, and it forces BERT
+to build a genuinely deep understanding of how words relate to their full context —
+which turns out to transfer extremely well to tasks like sentiment analysis, question
+answering, and named entity recognition.
+
+### Using a pretrained BERT in three lines
+
+```python
+from transformers import pipeline
+
+fill_mask = pipeline("fill-mask", model="bert-base-uncased")
+results = fill_mask("The capital of France is [MASK].")
+
+for r in results[:3]:
+    print(f"{r['token_str']:>10}  (score: {r['score']:.3f})")
+# paris       (score: 0.68-ish)
+# lyon        (score: much lower)
+# french      (score: much lower)
+```
+
+Notice you didn't train anything — `bert-base-uncased` was pretrained by Google on a
+huge amount of text and is simply being asked to play its original fill-in-the-blank
+game on a new sentence.
+
+## Try it yourself
+
+Try changing the sentence to `"I love eating [MASK] for breakfast."` and predict
+which categories of words (fruit? meat? something else?) you'd expect to see ranked
+highly, before running it.
+
+<details>
+<summary>Solution</summary>
+
+```python
+results = fill_mask("I love eating [MASK] for breakfast.")
+```
+
+You'd expect common breakfast foods to rank highly — things like "eggs," "cereal,"
+"pancakes," "toast." BERT isn't reasoning about nutrition; it's recalling which
+words statistically co-occur with "eating ___ for breakfast" across its huge
+pretraining corpus, filtered through both the words before *and* after the blank
+("eating" pulls toward food words, "breakfast" narrows it further) — that
+bidirectional context is exactly what makes BERT's guesses feel sensible.
+
+</details>

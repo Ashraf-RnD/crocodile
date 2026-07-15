@@ -1,0 +1,109 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "FastAPI"
+level: expert
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "fastapi"
+estReadTime: 11
+resources:
+  - type: docs
+    title: "FastAPI — Concurrency and async / await"
+    url: "https://fastapi.tiangolo.com/async/"
+  - type: docs
+    title: "vLLM — OpenAI-Compatible Server"
+    url: "https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html"
+---
+
+## The blocking-call problem in front of a GPU
+
+A common mistake: wrapping a synchronous, GPU-bound model call (`model.generate(...)`
+that runs on the local process, not over the network) inside `async def`. Because
+that call never `await`s anything, it blocks the single-threaded event loop for its
+entire duration — every other request queues behind it, even ones that would
+otherwise complete instantly. Two fixes address this differently:
+
+```python
+from fastapi import FastAPI
+from fastapi.concurrency import run_in_threadpool
+
+app = FastAPI()
+
+@app.post("/predict")
+async def predict(prompt: str):
+    # runs the blocking call in FastAPI's threadpool instead of the event loop
+    result = await run_in_threadpool(model.generate, prompt)
+    return {"result": result}
+```
+
+`run_in_threadpool` (or manually via `loop.run_in_executor`) unblocks the event
+loop so other requests keep flowing, but it doesn't make the GPU call itself
+faster or truly concurrent — Python's GIL means CPU-bound work in threads still
+serializes for anything that isn't I/O or a C-extension releasing the GIL. The
+deeper fix is to move inference off the request-handling process entirely: front
+a real async-native inference server (vLLM, Triton, TGI) that does its own
+continuous batching and queuing, and have FastAPI just make an async HTTP call to
+it — the pattern shown in the intermediate lesson.
+
+## Batching, queuing, and concurrency limits
+
+A naive FastAPI layer that forwards every request straight to a single-model
+backend has no admission control — a burst of 500 concurrent requests can exhaust
+GPU memory or destroy latency for everyone. A `Semaphore` bounds in-flight
+requests to the backend without changing the public API contract:
+
+```python
+import asyncio
+from fastapi import FastAPI, HTTPException
+
+app = FastAPI()
+inference_semaphore = asyncio.Semaphore(16)  # max 16 concurrent backend calls
+
+@app.post("/generate")
+async def generate(prompt: str):
+    try:
+        async with asyncio.timeout(30):
+            async with inference_semaphore:
+                return await call_backend(prompt)
+    except TimeoutError:
+        raise HTTPException(status_code=503, detail="inference backend busy")
+```
+
+This protects the backend, but it's a blunt instrument compared to what a proper
+inference server does internally (continuous/in-flight batching that packs many
+requests' decode steps into shared GPU passes) — a semaphore just limits how many
+requests are outstanding, it doesn't improve GPU utilization the way batching does.
+
+## FastAPI wrapper vs vLLM's built-in server vs Ray Serve
+
+| Axis | Custom FastAPI layer | vLLM OpenAI-compatible server | Ray Serve |
+|---|---|---|---|
+| Batching/scheduling | You build it (semaphores, queues) | Built-in continuous batching, PagedAttention | Built-in, plus multi-model/multi-replica routing |
+| Custom business logic (auth, routing, multi-model orchestration, non-LLM steps) | Full control, easy to add | Limited — it's an inference server, not a general app framework | Good — designed for composing multiple deployments/services |
+| Time to stand up | Fast for a thin wrapper, slower if you rebuild batching | Fastest for pure LLM serving — one command | Moderate — more infra concepts (deployments, replicas) to learn |
+| Best fit | Need custom auth/logging/multi-step pipelines around one or more backends | Serving one or a few LLMs behind an OpenAI-compatible API, nothing else | Multi-model pipelines, mixing LLM + non-LLM steps, autoscaling across a cluster |
+| Redundancy risk | Reimplementing batching/queuing that vLLM already does well | N/A | N/A |
+
+The practical guidance: if the only thing between clients and the model is
+"forward the request," a custom FastAPI layer is usually redundant — point
+clients straight at vLLM's or TGI's own OpenAI-compatible server. FastAPI earns
+its place when there's real logic to own beyond forwarding: authentication and
+per-tenant rate limiting, request transformation, orchestrating multiple models
+or a RAG pipeline, non-LLM business logic, or a stable public API contract that
+needs to outlive swapping the underlying inference backend.
+
+## Production concerns
+
+- **Worker count vs GPU count**: running multiple Uvicorn/Gunicorn worker
+  processes multiplies memory for anything loaded per-process (a model loaded via
+  `lifespan` gets duplicated per worker) — for a GPU-resident model, typically run
+  one worker per GPU process, not `--workers N` with N > available model
+  replicas, or you'll OOM the GPU.
+- **Timeouts compounding**: a client-facing timeout that's shorter than the
+  backend's queuing delay under load causes cascading retries that make load
+  worse, not better — set FastAPI-side timeouts with the backend's actual queuing
+  behavior in mind, not just typical-case latency.
+- **Health checks that lie**: a `/health` endpoint that returns 200 as long as the
+  process is alive (rather than checking the model/backend is actually
+  responsive) lets orchestrators route traffic to a instance whose GPU backend has
+  silently died — check the dependency, not just the process.

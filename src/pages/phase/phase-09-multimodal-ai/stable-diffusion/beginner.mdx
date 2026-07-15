@@ -1,0 +1,79 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Stable Diffusion"
+level: beginner
+phaseSlug: "phase-09-multimodal-ai"
+phaseName: "Multimodal AI"
+topicSlug: "stable-diffusion"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "Hugging Face Diffusers documentation"
+    url: "https://huggingface.co/docs/diffusers/index"
+  - type: docs
+    title: "Stable Diffusion v1-5 model card"
+    url: "https://huggingface.co/runwayml/stable-diffusion-v1-5"
+---
+
+## Turning noise into a picture
+
+**Stable Diffusion** generates images from text descriptions by starting with pure
+random noise and gradually "denoising" it, step by step, into a coherent picture that
+matches your prompt.
+
+Think of it like a sculptor starting with a rough block of marble (random noise) and
+slowly chipping away, refining the shape a little more with each pass, until a
+recognizable figure emerges — except each "chip" here is guided by your text prompt.
+
+### Your first generated image
+
+```python
+from diffusers import StableDiffusionPipeline
+import torch
+
+pipe = StableDiffusionPipeline.from_pretrained(
+    "runwayml/stable-diffusion-v1-5",
+    torch_dtype=torch.float16,
+).to("cuda")
+
+image = pipe("a watercolor painting of a lighthouse at sunset").images[0]
+image.save("lighthouse.png")
+```
+
+`StableDiffusionPipeline` bundles together everything needed: a text encoder (turns
+your prompt into a numeric representation), a denoising model (the actual image
+generation), and a decoder that turns the final result into a viewable image.
+
+### Controlling how many refinement steps
+
+```python
+image = pipe(
+    "a watercolor painting of a lighthouse at sunset",
+    num_inference_steps=30,   # more steps = more refinement, slower
+    guidance_scale=7.5,       # how strictly to follow the prompt
+).images[0]
+```
+
+More denoising steps generally means a cleaner, more detailed result, up to a point of
+diminishing returns — most models look nearly identical at 30 steps vs 50.
+
+## Try it yourself
+
+Use a **negative prompt** to tell the model what to avoid (e.g. blurry, low quality)
+without changing your main prompt.
+
+<details>
+<summary>Solution</summary>
+
+```python
+image = pipe(
+    "a watercolor painting of a lighthouse at sunset",
+    negative_prompt="blurry, low quality, distorted",
+    num_inference_steps=30,
+).images[0]
+```
+
+`negative_prompt` steers generation away from those concepts during the same denoising
+process — it's one of the simplest, highest-impact quality knobs available.
+
+</details>

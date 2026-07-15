@@ -1,0 +1,92 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Attention Is All You Need"
+level: beginner
+phaseSlug: "phase-14-research-literacy"
+phaseName: "Research Literacy"
+topicSlug: "attention-is-all-you-need"
+estReadTime: 7
+resources:
+  - type: article
+    title: "Attention Is All You Need (original paper)"
+    url: "https://arxiv.org/abs/1706.03762"
+  - type: article
+    title: "The Illustrated Transformer — Jay Alammar"
+    url: "https://jalammar.github.io/illustrated-transformer/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The problem before this paper
+
+Before 2017, the best machine translation and language models were built on
+**recurrent neural networks** (RNNs) and their improved cousin, LSTMs. These models
+read a sentence one word at a time, carrying a running "memory" forward to the next
+word. Two problems fell out of that design:
+
+1. **No parallelism.** Word 10 can't be processed until words 1-9 have been, so
+   training was forced to be sequential — slow, and wasteful of modern GPUs that are
+   built to do many things at once.
+2. **Long-range forgetting.** By the time an RNN reaches word 50 of a paragraph, the
+   "memory" of word 1 has been diluted through 49 rounds of updates. Researchers had
+   already bolted an "attention" mechanism onto RNNs to help with this (Bahdanau et
+   al., 2014), but the RNN backbone — and its sequential bottleneck — was still there.
+
+The authors of "Attention Is All You Need" asked a provocative question: what if we
+just... removed the recurrence entirely, and kept only the attention part?
+
+## The core idea, in plain language
+
+Imagine translating the sentence "The animal didn't cross the street because it was
+too tired." To know what "it" refers to, you need to look back at "animal" — not the
+word right before "it", but a specific word several positions away.
+
+An RNN does this the slow way: it has to relay that information forward, word by
+word, like a game of telephone through the whole sentence. **Self-attention** instead
+lets every word directly ask every other word: "how relevant are you to me?" and pull
+in information from the most relevant ones immediately — no relay, no telephone game.
+
+A useful analogy: picture a group discussion where everyone can talk to everyone
+else at once, instead of a line of people who can only whisper to the person
+standing next to them. The group discussion converges on the important connections
+immediately, and — crucially — everyone can talk simultaneously rather than waiting
+their turn. That simultaneity is what makes the Transformer both faster to train and
+better at connecting distant words.
+
+The paper's architecture, called the **Transformer**, is built entirely out of this
+self-attention idea (plus simple feed-forward layers) — no recurrence, no
+convolution.
+
+<Mermaid client:visible code={`flowchart LR
+  subgraph RNN["RNN (before)"]
+    W1[word 1] --> W2[word 2] --> W3[word 3] --> W4["... word 50"]
+  end
+  subgraph TF["Transformer (this paper)"]
+    A1[word 1] --- A2[word 2]
+    A1 --- A3[word 3]
+    A1 --- A4["... word 50"]
+    A2 --- A4
+    A3 --- A4
+  end`} />
+
+## Why it mattered
+
+Removing recurrence meant training could be massively parallelized across GPUs, and
+any two words — no matter how far apart — were now just one attention "hop" away
+from each other. That combination is the direct ancestor of every modern large
+language model: GPT, BERT, LLaMA, and effectively everything covered later in this
+phase all start from the Transformer block introduced here.
+
+## Try it yourself
+
+Can you explain the core idea of this paper in one sentence to a non-technical
+friend?
+
+<details>
+<summary>Solution</summary>
+
+Something like: "Instead of reading a sentence word by word and trying to remember
+everything as it goes, this method lets every word look directly at every other word
+at the same time to figure out which ones matter most — which turns out to be both
+faster to compute and better at connecting ideas that are far apart in a sentence."
+
+</details>

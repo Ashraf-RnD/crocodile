@@ -1,0 +1,99 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Encoder"
+level: beginner
+phaseSlug: "phase-06-transformers"
+phaseName: "Transformers"
+topicSlug: "encoder"
+estReadTime: 6
+resources:
+  - type: article
+    title: "Jay Alammar — The Illustrated Transformer"
+    url: "https://jalammar.github.io/illustrated-transformer/"
+  - type: docs
+    title: "Hugging Face — BertModel (an encoder-only model)"
+    url: "https://huggingface.co/docs/transformers/en/model_doc/bert"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The encoder's job: understand, don't generate
+
+If the Transformer has two halves, the **encoder** is the "reading comprehension"
+half. Its job is to take a full input sequence (a sentence, a document) and turn it
+into a rich, context-aware representation — one vector per input token, each of which
+has "absorbed" information about every other token in the sequence, because encoder
+self-attention has no restriction on which tokens it can look at.
+
+Think of the encoder like a very careful reader who's allowed to read the *entire*
+passage — forwards and backwards, as many times as needed — before writing a summary
+of what each word means in context. It never has to guess what comes next, because it
+already has the whole input in front of it.
+
+### What's inside one encoder layer
+
+Every encoder layer is the same two-step recipe, repeated:
+
+1. **Self-attention** — every token looks at every other token (bidirectionally) to
+   build context.
+2. **Feed-forward network** — a small per-token neural network that adds nonlinear
+   processing on top of the attention output.
+
+Each step is wrapped with a residual connection and layer normalization, which keeps
+training stable across many stacked layers.
+
+<Mermaid client:visible code={`flowchart TB
+  In["Input embeddings + positions"] --> SA["Self-attention (bidirectional)"]
+  SA --> Add1["Add & LayerNorm"]
+  Add1 --> FF["Feed-forward network"]
+  FF --> Add2["Add & LayerNorm"]
+  Add2 --> Out["Encoder layer output"]`} />
+
+```python
+import torch
+import torch.nn as nn
+
+class EncoderLayer(nn.Module):
+    def __init__(self, d_model=256, num_heads=8, d_ff=1024):
+        super().__init__()
+        self.self_attn = nn.MultiheadAttention(d_model, num_heads, batch_first=True)
+        self.norm1 = nn.LayerNorm(d_model)
+        self.ffn = nn.Sequential(
+            nn.Linear(d_model, d_ff), nn.ReLU(), nn.Linear(d_ff, d_model)
+        )
+        self.norm2 = nn.LayerNorm(d_model)
+
+    def forward(self, x):
+        attn_out, _ = self.self_attn(x, x, x)     # no causal mask — sees everything
+        x = self.norm1(x + attn_out)
+        x = self.norm2(x + self.ffn(x))
+        return x
+
+layer = EncoderLayer()
+x = torch.randn(2, 12, 256)   # batch=2, seq_len=12, d_model=256
+out = layer(x)
+print(out.shape)  # torch.Size([2, 12, 256]) — same shape, richer representation
+```
+
+Stacking several of these layers (BERT-base uses 12) is what gives an encoder its
+depth of understanding — each layer refines the representations produced by the one
+before it.
+
+## Try it yourself
+
+BERT is a famous encoder-only model. Given what you just learned about encoders
+seeing the *whole* input at once, why do you think BERT is good at tasks like
+sentiment classification or named entity recognition, but isn't used to generate
+open-ended text like GPT does?
+
+<details>
+<summary>Solution</summary>
+
+Encoders like BERT's are trained to build the best possible *understanding* of a
+fixed, already-complete input — every layer can freely look both forward and
+backward. That's ideal for classification, tagging, or extracting answers from a
+passage, where the whole input is known upfront. But generating text one word at a
+time requires the model to only ever look at words *already generated* — it can't
+peek at words it hasn't produced yet, which is exactly what a causal (decoder-style)
+mask enforces and what a bidirectional encoder deliberately does not do.
+
+</details>

@@ -1,0 +1,88 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "OpenAI SDK"
+level: beginner
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "openai-sdk"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "OpenAI — API Reference"
+    url: "https://platform.openai.com/docs/api-reference/introduction"
+  - type: docs
+    title: "OpenAI — Quickstart"
+    url: "https://platform.openai.com/docs/quickstart"
+---
+
+## Think of it as a phone line to the model
+
+The **OpenAI SDK** (the official `openai` Python/JS package) is the most direct way to
+talk to OpenAI's models — no framework in between, just your code calling their API.
+It's the foundation almost every other tool (LangChain, LlamaIndex, `instructor`)
+builds on top of when targeting OpenAI models.
+
+### Your first call
+
+```python
+from openai import OpenAI
+
+client = OpenAI()  # reads OPENAI_API_KEY from the environment automatically
+
+response = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "What's a good name for a coffee shop?"},
+    ],
+)
+print(response.choices[0].message.content)
+```
+
+Three things worth noticing: `messages` is a list because conversations have
+history (see the Memory lesson); `role` marks who said what (`system` sets behavior,
+`user` is the human, `assistant` is the model); and the actual reply lives at
+`response.choices[0].message.content` — the response object carries extra metadata
+(token counts, finish reason) alongside the text.
+
+### Streaming a response
+
+For anything user-facing, streaming shows text as it's generated instead of making
+the user wait for the full response:
+
+```python
+stream = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "Write a haiku about the ocean."}],
+    stream=True,
+)
+
+for chunk in stream:
+    delta = chunk.choices[0].delta.content
+    if delta:
+        print(delta, end="", flush=True)
+```
+
+Each `chunk` is a small piece of the response as it's generated — printing them as
+they arrive is what produces the familiar "typing" effect you see in chat UIs.
+
+### Try it yourself
+
+Write a call that asks the model to translate `"Good morning"` into French, using a
+system prompt that sets its role as a translator.
+
+<details>
+<summary>Solution</summary>
+
+```python
+response = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[
+        {"role": "system", "content": "You are a translator. Respond with only the translation, no extra text."},
+        {"role": "user", "content": "Translate to French: Good morning"},
+    ],
+)
+print(response.choices[0].message.content)  # "Bonjour"
+```
+
+</details>

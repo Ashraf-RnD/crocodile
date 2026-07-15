@@ -1,0 +1,72 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "RNN"
+level: beginner
+phaseSlug: "phase-04-deep-learning"
+phaseName: "Deep Learning"
+topicSlug: "rnn"
+estReadTime: 7
+resources:
+  - type: docs
+    title: "PyTorch — RNN documentation"
+    url: "https://pytorch.org/docs/stable/generated/torch.nn.RNN.html"
+  - type: video
+    title: "Recurrent Neural Networks explained"
+    url: "https://www.youtube.com/watch?v=LHXXI4-IEns"
+---
+
+## Reading a sentence while keeping a memory note
+
+When you read a sentence, you don't process each word in isolation — you carry a
+running memory of what came before. "The cat sat on the ___" makes you expect "mat"
+partly because of everything you've read so far. A **Recurrent Neural Network
+(RNN)** works the same way: it processes a sequence one step at a time, keeping a
+**hidden state** — a running summary — that gets updated at every step and passed
+forward to the next.
+
+```python
+import torch
+import torch.nn as nn
+
+rnn = nn.RNN(input_size=5, hidden_size=8, batch_first=True)
+
+sequence = torch.randn(1, 10, 5)   # 1 sample, 10 time steps, 5 features per step
+output, hidden = rnn(sequence)
+
+print(output.shape)   # torch.Size([1, 10, 8]) -> hidden state at every time step
+print(hidden.shape)   # torch.Size([1, 1, 8])  -> final hidden state only
+```
+
+`output` gives you the hidden state produced at *every* time step (useful if you
+need a prediction per step, like tagging each word). `hidden` is just the final
+one (useful if you only care about a summary of the whole sequence, like sentiment
+of a whole sentence).
+
+### Why order matters
+
+Unlike a dense network, an RNN's output for a given input depends on everything that
+came before it in the sequence — shuffle the words in a sentence and you get a
+completely different hidden state, even though the individual words are unchanged.
+That sensitivity to order is exactly what makes RNNs suited to sequences: text,
+audio, time series, anything where "what happened before" matters.
+
+### Try it yourself
+
+Create an `nn.RNN` that processes sequences of 3-dimensional vectors with a hidden
+size of 4, feed it a batch of 2 sequences of length 6, and print the shape of the
+final hidden state.
+
+<details>
+<summary>Solution</summary>
+
+```python
+import torch
+import torch.nn as nn
+
+rnn = nn.RNN(input_size=3, hidden_size=4, batch_first=True)
+x = torch.randn(2, 6, 3)
+output, hidden = rnn(x)
+print(hidden.shape)   # torch.Size([1, 2, 4])
+```
+
+</details>

@@ -1,0 +1,78 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "SGLang"
+level: expert
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "sglang"
+estReadTime: 10
+resources:
+  - type: article
+    title: "SGLang: Efficient Execution of Structured Language Model Programs"
+    url: "https://arxiv.org/abs/2312.07104"
+---
+
+## RadixAttention vs PagedAttention: different core bets
+
+Both systems solve KV-cache memory management, but they optimize for different
+things. **PagedAttention** (vLLM) treats the KV cache as a paging problem — its
+primary win is eliminating internal/external fragmentation so more *concurrent,
+unrelated* requests fit in memory. Prefix sharing is layered on top as an additional
+feature (`--enable-prefix-caching`). **RadixAttention** (SGLang) makes prefix sharing
+the primary organizing data structure: every sequence's KV cache lives in a radix tree
+keyed by token IDs, and cache eviction uses LRU over tree nodes, so the *whole system*
+is built around maximizing reuse across requests, not just packing memory tightly.
+
+The practical consequence: on workloads with little or no shared prefix (fully
+independent, unrelated prompts — e.g. summarizing unrelated documents), the two
+engines converge to similar throughput, since RadixAttention's tree has nothing to
+reuse and behaves like a plain cache. On workloads with heavy prefix sharing (long
+system prompts, few-shot exemplars, multi-turn chat, agent tool-definitions repeated
+every call), SGLang's benchmarks have shown multi-x throughput advantages specifically
+because cache-hit rate on the radix tree becomes the dominant factor — that gap is a
+property of the *workload's prefix-sharing structure*, not a fixed universal number.
+
+## The scheduling implication
+
+Because SGLang's scheduler is prefix-aware (`--schedule-policy lpm`), it can
+deliberately reorder the request queue to co-locate requests with shared prefixes in
+the same batch window, increasing cache-hit rate beyond what arrival order alone would
+give you. vLLM's scheduler is comparatively closer to FCFS with continuous batching;
+its prefix cache benefits from *whatever* sharing happens to occur in the natural
+arrival order, but it doesn't reorder requests specifically to maximize cache hits.
+This is a real architectural difference, not just a config flag difference — it's a
+consequence of prefix-awareness being central to SGLang's scheduler design from the
+start.
+
+## Comparison: SGLang vs vLLM vs TensorRT-LLM
+
+| Axis | SGLang | vLLM | TensorRT-LLM |
+|---|---|---|---|
+| Core memory abstraction | Radix tree (prefix-first) | Paged blocks (fragmentation-first) | Custom, hand-tuned per engine |
+| Best case workload | Heavy prefix/prompt reuse (agents, few-shot, chat) | General-purpose, mixed workloads | Fixed, high-scale single-model deployment |
+| Structured/constrained output | Native, first-class (grammar-constrained sampling) | Supported via guided decoding backends | Limited, less first-class |
+| Multi-call program orchestration | Native (`sgl.function` DSL with shared state) | None — one request in, one response out | None |
+| Setup complexity | Low, similar to vLLM | Low | High (AOT compilation) |
+| Ecosystem maturity (as of 2026) | Growing fast, strong in agent-serving niche | Most widely adopted, broadest hardware support | Mature, NVIDIA-backed, enterprise-heavy |
+
+## When SGLang's advantage disappears
+
+If your traffic is mostly independent one-shot completions with unique prompts (e.g.
+bulk translation of unrelated sentences), there's little prefix to share, and
+RadixAttention's tree bookkeeping (insertion, LRU eviction, prefix matching) becomes
+pure overhead relative to PagedAttention's simpler block allocator — in that regime,
+choosing SGLang for its RadixAttention advantage specifically would be optimizing for
+a benefit your workload doesn't actually have. The decision should follow from
+measuring your actual prefix-sharing ratio (how much of the average prompt is
+identical across requests), not from a general "SGLang is faster" assumption.
+
+## Production engineering takeaway
+
+Choosing between these engines is a workload-shape decision as much as a benchmark
+decision: heavy agentic/multi-turn/tool-calling traffic with long shared system
+context favors SGLang's cache-hit-maximizing scheduler; broad, general-purpose serving
+across many model types and hardware targets favors vLLM's maturity and ecosystem
+support; fixed-scale single-model deployment on homogeneous NVIDIA fleets where every
+percent of throughput matters favors the compilation cost of TensorRT-LLM. None of
+these is a strictly dominant choice — each optimizes for a different point on the
+cost/latency/throughput/engineering-effort surface.

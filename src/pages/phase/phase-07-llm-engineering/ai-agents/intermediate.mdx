@@ -1,0 +1,94 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "AI Agents"
+level: intermediate
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "ai-agents"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "LangGraph — Agent Architectures"
+    url: "https://langchain-ai.github.io/langgraph/concepts/agentic_concepts/"
+  - type: docs
+    title: "OpenAI Agents SDK"
+    url: "https://openai.github.io/openai-agents-python/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Agents as graphs, not just loops
+
+A flat while-loop works for simple agents, but production agents are usually modeled
+as an explicit **state graph**: nodes are steps (call model, run tools, validate
+output), edges define what happens next, and some edges are conditional on the
+current state. LangGraph makes this explicit instead of implicit in a while-loop:
+
+```python
+from langgraph.graph import StateGraph, END
+from langgraph.prebuilt import ToolNode
+from typing import TypedDict, Annotated
+import operator
+
+class AgentState(TypedDict):
+    messages: Annotated[list, operator.add]
+
+def call_model(state):
+    response = llm_with_tools.invoke(state["messages"])
+    return {"messages": [response]}
+
+def should_continue(state):
+    last = state["messages"][-1]
+    return "tools" if last.tool_calls else END
+
+graph = StateGraph(AgentState)
+graph.add_node("agent", call_model)
+graph.add_node("tools", ToolNode(tools))
+graph.set_entry_point("agent")
+graph.add_conditional_edges("agent", should_continue, {"tools": "tools", END: END})
+graph.add_edge("tools", "agent")
+
+app = graph.compile()
+result = app.invoke({"messages": [{"role": "user", "content": "What's the weather in Tokyo?"}]})
+```
+
+<Mermaid client:visible code={`flowchart LR
+  Start([Entry]) --> Agent[agent node: call model]
+  Agent -->|tool_calls present| Tools[tools node: execute]
+  Tools --> Agent
+  Agent -->|no tool_calls| End([END])`} />
+
+Modeling the agent explicitly as a graph, rather than a bare loop, gives you
+inspectable state at every step, the ability to add branches (validation, human
+approval, retries) without restructuring the whole loop, and built-in support for
+checkpointing and resuming — all things a hand-rolled `while True:` loop has to
+reimplement from scratch.
+
+## The ReAct pattern, formalized
+
+Most agent frameworks implement some variant of **ReAct** (Reason + Act): the model
+produces a thought, takes an action (a tool call), observes the result, and repeats.
+What frameworks add on top: automatic message-history management, structured state
+beyond just messages (e.g. tracking a running plan, a scratchpad, or a budget), and
+guardrails like max-iteration limits and per-step timeouts.
+
+## Guardrails every production agent needs
+
+- **Max iteration / step limits** — prevent runaway loops from burning tokens
+  indefinitely on a confused trajectory.
+- **Tool-call validation** — verify arguments against the schema *and* business
+  rules before executing, don't trust the model's arguments as pre-validated.
+- **Human-in-the-loop checkpoints** — pause before irreversible actions (LangGraph's
+  `interrupt()`, OpenAI's approval flows) rather than letting the agent execute
+  side-effecting tools unsupervised.
+- **Timeouts per step** — a hanging tool call (a slow API, a stuck subprocess)
+  shouldn't be able to stall the whole agent run indefinitely.
+
+## Agents vs. workflows: know which one you're building
+
+Not every multi-step LLM system needs to be a fully autonomous agent. Anthropic's
+distinction is useful: a **workflow** is a fixed, predefined sequence of LLM and tool
+calls (you control the path); an **agent** dynamically decides its own path based on
+what it observes. Workflows are more predictable, easier to test, and cheaper to
+run — reach for a workflow whenever the task's steps are actually knowable in advance,
+and reserve full agent autonomy for tasks where the right sequence of actions
+genuinely can't be determined ahead of time.

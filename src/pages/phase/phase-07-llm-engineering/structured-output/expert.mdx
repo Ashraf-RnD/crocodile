@@ -1,0 +1,93 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Structured Output"
+level: expert
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "structured-output"
+estReadTime: 11
+resources:
+  - type: article
+    title: "OpenAI — Introducing Structured Outputs in the API"
+    url: "https://openai.com/index/introducing-structured-outputs-in-the-api/"
+  - type: article
+    title: "Outlines — Structured Generation Library"
+    url: "https://github.com/outlines-dev/outlines"
+---
+
+## Two fundamentally different implementation strategies
+
+Not all "structured output" guarantees work the same way, and the mechanism matters
+for what you can rely on:
+
+1. **Constrained decoding (grammar-based).** The provider compiles your JSON Schema
+   into a finite-state grammar and masks the token sampler at every step so only
+   schema-valid tokens are ever eligible for selection. This is what OpenAI's
+   Structured Outputs and open-source engines like `outlines` or `guidance` do — the
+   output is *structurally* guaranteed to match, by construction, not by luck.
+2. **Prompted + retried.** The model is instructed to produce JSON matching a schema,
+   and the client validates the response and retries with an error message on
+   failure (what `instructor` does for providers lacking native constrained decoding).
+   This has no hard guarantee — a sufficiently weird input can exhaust retries — but
+   works across any model, including ones without native structured-output support.
+
+Knowing which one you're using changes your error handling: constrained decoding needs
+none for structural validity (only for semantic correctness); prompted-and-retried
+needs a bounded retry loop and a fallback path for exhaustion.
+
+## What constrained decoding does *not* guarantee
+
+Structural validity is not the same as correctness. A `strict: true` schema guarantees
+every response has the right shape and types — it does not guarantee the *content* is
+accurate. The model can confidently return a syntactically perfect JSON object with a
+hallucinated field value. This is why production extraction pipelines still need
+downstream validation (cross-checking extracted totals against line items, verifying
+extracted dates are plausible, flagging low-confidence extractions for human review) —
+schema conformance is necessary but not sufficient.
+
+## Schema complexity limits and degraded accuracy
+
+Very deeply nested or very large schemas (dozens of fields, several levels of nesting,
+long enum lists) measurably degrade extraction accuracy even under constrained
+decoding — the model still has to *populate* the schema correctly, and constrained
+decoding only prevents malformed structure, not poor field-level judgment under
+cognitive load. In practice this means:
+
+- Prefer flatter schemas where the task allows it; split genuinely independent
+  extractions (e.g. "extract entities" and "extract sentiment") into separate calls
+  rather than one giant combined schema, if latency/cost allow it.
+- For schemas with many optional fields, be explicit in field descriptions about when
+  a field should be `null` versus omitted versus a specific sentinel value — models are
+  inconsistent about this without guidance, and inconsistency here breaks downstream
+  code that assumes one convention.
+
+## Streaming structured output
+
+Full JSON isn't valid until the closing brace, which conflicts with token-by-token
+streaming UX. Two production patterns exist:
+
+- **Stream raw and parse incrementally** using a tolerant streaming JSON parser (e.g.
+  partial-JSON parsers used by `instructor`'s streaming mode) that can render partial
+  objects as fields complete, useful for progressively rendering a UI as extraction
+  fields arrive.
+- **Don't stream at all for structured calls** — buffer the full response, since many
+  structured-output use cases (backend extraction pipelines) have no user-facing
+  streaming requirement and the added complexity isn't worth it.
+
+## Trade-offs across strategies
+
+| Strategy | Structural guarantee | Model/provider coverage | Added latency |
+|---|---|---|---|
+| Native Structured Outputs (`strict: true`) | Guaranteed by construction | Limited to providers/models that support it | Small first-call compile cost, then negligible |
+| `instructor`-style prompt + validate + retry | Best-effort, bounded by retry count | Works across nearly any model | Retry attempts add latency on failure |
+| Plain prompting + manual `json.loads` | None | Universal | None extra, but highest downstream failure rate |
+| Local constrained decoding (`outlines`, `guidance`) | Guaranteed by construction | Requires access to model logits (self-hosted/open-weight models) | Grammar compilation cost per unique schema |
+
+## Designing schemas for LLM-friendliness, not just correctness
+
+A schema that's perfectly valid JSON Schema can still be a poor fit for LLM
+generation. Favor field *orderings* that mirror how a human would naturally reason
+through the extraction (e.g. put `reasoning` or `confidence` fields *before* the
+final answer field in the schema, since the model generates fields in schema order and
+benefits from "thinking" through supporting fields before committing to the final
+one — an application of chain-of-thought to structured output, not just prose).

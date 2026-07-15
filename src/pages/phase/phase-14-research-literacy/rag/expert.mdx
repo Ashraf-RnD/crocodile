@@ -1,0 +1,102 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "RAG"
+level: expert
+phaseSlug: "phase-14-research-literacy"
+phaseName: "Research Literacy"
+topicSlug: "rag"
+estReadTime: 12
+resources:
+  - type: article
+    title: "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks (original paper)"
+    url: "https://arxiv.org/abs/2005.11401"
+  - type: article
+    title: "REALM: Retrieval-Augmented Language Model Pre-Training"
+    url: "https://arxiv.org/abs/2002.08909"
+---
+
+## What the paper actually contributed vs. prior work
+
+Retrieval-augmented language modeling wasn't entirely new — **REALM**
+(Guu et al., 2020) had already integrated a differentiable retriever into
+*pretraining* itself, and open-domain QA systems had long used a
+retrieve-then-read pipeline (retrieve a passage, extract a span as the
+answer). RAG's distinguishing contribution was combining retrieval with a
+**general-purpose sequence-to-sequence generator** rather than an extractive
+span-selection reader, making the approach applicable to open-ended
+generation tasks (not just extractive QA), and doing so with an end-to-end
+differentiable architecture where the retriever and generator are fine-tuned
+together on the downstream task, using only the final answer as supervision —
+no separate retrieval-relevance labels required. This generality (retrieval +
+free-form generation, jointly trained, task-agnostic) is what made RAG a
+template applicable far beyond the QA benchmarks the original paper evaluated.
+
+## Limitations
+
+- **Retrieval quality is a hard ceiling on generation quality.** If the
+  retriever fails to surface a passage containing the needed fact, the
+  generator has no way to compensate — it will either fall back to
+  (potentially wrong) parametric knowledge or hallucinate; RAG doesn't fix
+  hallucination, it reduces its likelihood conditional on good retrieval.
+- **Struggles with multi-hop reasoning.** Questions requiring synthesis across
+  multiple documents (e.g. "who directed the movie based on the book written
+  by the author of X?") are poorly served by a single top-k retrieval pass —
+  each hop may need its own retrieval step, which the original architecture
+  doesn't natively support.
+- **Static passage index at inference time.** The 2020 paper's retriever
+  indexes a fixed Wikipedia snapshot; keeping a production index current with
+  a changing document collection is an infrastructure problem the paper
+  doesn't address, though it's central to why RAG is attractive in practice
+  (swap the index, not the model).
+  Freshness in production requires an actively maintained ingestion and
+  re-indexing pipeline.
+- **Chunking and embedding choices matter enormously in practice** and are
+  underspecified by the paper's method — how documents are split into
+  retrievable passages, and which embedding model is used, dominates
+  real-world RAG quality far more than the generator choice does.
+
+## What came after
+
+- **Hybrid search** (combining dense embedding similarity with sparse
+  keyword-based search like BM25) became standard, since dense retrieval alone
+  can miss exact-match terms (product IDs, names, codes) that keyword search
+  catches reliably.
+- **Rerankers** — a second, more expensive model that re-scores the top-k
+  retrieved candidates before they reach the generator — became a common
+  addition to correct for the coarser recall-oriented first-pass retrieval.
+- **Query rewriting and multi-hop / iterative retrieval** (e.g. RAG-Fusion,
+  self-ask, ReAct-style agents that decide *when* and *what* to retrieve)
+  addressed the original architecture's single-shot retrieval limitation.
+- **Agentic RAG**: instead of a fixed retrieve-then-generate pipeline, modern
+  systems increasingly let the model itself decide whether to retrieve, issue
+  multiple retrieval calls, or use other tools, treating retrieval as one tool
+  among several rather than a mandatory upfront step.
+- **Long-context models** raised (but didn't eliminate) the question of
+  whether retrieval is still needed when a model can ingest very large
+  documents directly — in practice, retrieval remains cheaper and more
+  precise than stuffing entire document collections into context for most
+  production use cases at scale.
+
+## How it's actually used in production today
+
+Virtually every enterprise LLM application built over private or frequently
+updated data (internal wikis, support tickets, codebases, product catalogs)
+uses some form of RAG — though almost none use the original paper's jointly
+trained retriever/generator. The modern default stack is modular: an
+off-the-shelf embedding model (often BERT-family, see the BERT lesson) embeds
+documents into a vector database, a retriever fetches top-k candidates
+(often with hybrid search and reranking), and a general-purpose LLM generates
+the final answer conditioned on retrieved context — the same conceptual
+pipeline the paper introduced, engineered for modularity and operational
+maintainability rather than end-to-end joint training.
+
+## Comparison: pure parametric generation vs. retrieval-augmented generation
+
+| Dimension | Parametric-only LLM | Retrieval-augmented generation |
+|---|---|---|
+| Knowledge source | Frozen weights from training | Weights + a live, searchable document store |
+| Updating knowledge | Requires retraining/fine-tuning | Update the document index — no retraining |
+| Source attribution | Not possible | Can cite retrieved passages |
+| Hallucination on unseen facts | Common, undetectable to the user | Reduced when retrieval succeeds; still possible if retrieval fails |
+| Handling of private/proprietary data | Requires fine-tuning on it (costly, risks leakage) | Documents stay external, retrieved on demand |
+| Failure mode | Confident wrong answer | Wrong or missing answer if retrieval misses the right passage |

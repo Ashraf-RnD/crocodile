@@ -1,0 +1,57 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "SGD"
+level: expert
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "sgd"
+estReadTime: 10
+resources:
+  - type: article
+    title: "Don't Decay the Learning Rate, Increase the Batch Size"
+    url: "https://arxiv.org/abs/1711.00489"
+---
+
+## The linear scaling rule and its limits
+
+Empirically, when increasing batch size by a factor `k`, scaling the learning rate
+linearly by the same factor `k` (with a gradual warmup period) approximately preserves
+training dynamics — this "linear scaling rule" is the standard recipe for large-batch
+distributed training. It breaks down at very large batch sizes: beyond a certain
+point, further increasing batch size and learning rate together stops helping and
+starts hurting final accuracy, revealing a batch-size regime where SGD's implicit
+noise-driven regularization has been scaled away entirely rather than just sped up.
+
+## Distributed SGD: data parallelism and gradient synchronization
+
+Training across multiple GPUs typically uses **data-parallel SGD**: each device holds
+a full model replica, processes a different shard of the batch, computes local
+gradients, then synchronizes via an **all-reduce** operation (averaging gradients
+across all devices) before every device applies the identical update. This keeps model
+replicas in sync without a central parameter server, at the cost of communication
+overhead — the all-reduce cost is why gradient compression, overlapping communication
+with backward-pass computation, and larger local batch sizes are all common
+strategies to keep distributed training compute-bound rather than communication-bound.
+
+## SGD as a stochastic differential equation
+
+In the continuous-time limit, SGD's discrete update rule can be approximated as a
+stochastic differential equation (SDE) — a deterministic gradient flow term plus an
+injected noise term whose variance depends on `learning_rate / batch_size`. This
+framing explains, from first principles, why the *ratio* of learning rate to batch
+size (not either value alone) is often the more meaningful quantity to reason about
+when tuning: the same ratio produces similar effective noise levels and similar
+training dynamics, even at very different absolute batch sizes — a useful mental
+shortcut when scaling a known-good small-batch recipe up to larger hardware.
+
+## Non-convexity and the honest theoretical picture
+
+Classical SGD convergence guarantees (convergence to a global minimum at a known rate)
+apply to convex objectives. Neural network loss landscapes are highly non-convex, and
+strict convergence guarantees for this setting are much weaker — typically only
+guaranteeing convergence to a stationary point (near-zero gradient), not a global or
+even necessarily a good local minimum. That deep learning works as well as it does in
+practice, despite this theoretical gap, remains an active area of research explaining
+*why* — overparameterization, benign loss landscape geometry in practice, and the
+implicit regularization effects discussed elsewhere in this phase are all part of the
+current best explanations, not a fully closed theoretical question.

@@ -1,0 +1,71 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Matrices"
+level: beginner
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "matrices"
+estReadTime: 6
+resources:
+  - type: video
+    title: "3Blue1Brown — Linear transformations"
+    url: "https://www.youtube.com/watch?v=kYB8IZa5AuE"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## A matrix is a grid of vectors
+
+A matrix is just a 2D grid of numbers — think of it as a stack of vectors, or a small
+spreadsheet. In AI, a whole *batch* of data is usually a matrix: each row is one
+example, each column is one feature.
+
+```python
+import numpy as np
+# 3 flowers, 4 measurements each
+flowers = np.array([
+    [5.1, 3.5, 1.4, 0.2],
+    [4.9, 3.0, 1.4, 0.2],
+    [6.2, 3.4, 5.4, 2.3],
+])
+print(flowers.shape)  # (3, 4) — 3 rows, 4 columns
+```
+
+<Mermaid client:visible code={`flowchart LR
+  A["Dataset of 3 flowers"] --> B["Matrix, shape (3, 4)"]
+  B --> C["Each row = one example"]
+  B --> D["Each column = one feature"]`} />
+
+## Shape is everything
+
+The single most common bug in AI code is a **shape mismatch** — trying to combine
+matrices whose dimensions don't line up. Get comfortable checking `.shape` constantly.
+
+```python
+a = np.zeros((3, 4))
+b = np.zeros((4, 5))
+a.shape  # (3, 4)
+b.shape  # (4, 5)
+```
+
+## Indexing and slicing
+
+```python
+flowers[0]       # first row — first flower's 4 measurements
+flowers[:, 0]     # first column — petal length for all 3 flowers
+flowers[0, 2]     # row 0, column 2 — a single value
+```
+
+## Try it yourself
+
+Given a matrix of 5 students × 3 test scores, how would you get "all scores for
+student 2" and "everyone's score on test 1"?
+
+<details>
+<summary>Solution</summary>
+
+```python
+scores = np.random.rand(5, 3)
+scores[2]      # student 2's 3 scores (row)
+scores[:, 1]   # everyone's score on test 1 (column, 0-indexed)
+```
+</details>

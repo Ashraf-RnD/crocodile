@@ -1,0 +1,102 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "pip"
+level: expert
+phaseSlug: "phase-01-python-for-ai"
+phaseName: "Python for AI"
+topicSlug: "pip"
+estReadTime: 11
+resources:
+  - type: docs
+    title: "pip — Dependency resolution process"
+    url: "https://pip.pypa.io/en/stable/topics/dependency-resolution/"
+  - type: article
+    title: "Python Packaging User Guide — Tool recommendations"
+    url: "https://packaging.python.org/en/latest/guides/tool-recommendations/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## pip's resolver: backtracking, not a solver from scratch
+
+Since pip 20.3, pip uses a real backtracking resolver (based on the same algorithm
+family as `resolvelib`): it tries a version, walks its dependencies, and backtracks
+if it hits a conflict, rather than the old "first match wins, hope it's compatible"
+behavior. This is a genuine constraint solver, but it operates independently on
+whatever you feed it in one `pip install` call — it has no persistent view of "the
+project's dependencies" across separate installs the way a lock-file tool does.
+
+```bash
+# pip resolves this single command's requirements together...
+pip install "torch>=2.0" "transformers>=4.30,<4.40"
+
+# ...but running a second install later doesn't re-check compatibility
+# with what's already there — it's easy to end up in a broken state
+pip install "numpy==1.20"   # may silently break torch's numpy requirement
+```
+
+This is pip's central limitation for ML environments specifically: heavy pinned
+stacks (`torch`, `transformers`, `accelerate`, CUDA-specific wheels) frequently have
+narrow, interacting version constraints, and pip won't proactively tell you that
+installing package C broke the compatibility that packages A and B relied on.
+
+<Mermaid client:visible code={`flowchart LR
+  Install1["pip install torch transformers"] --> Resolved1["Resolved together, compatible"]
+  Resolved1 --> Install2["pip install numpy==1.20 (later, separate command)"]
+  Install2 --> Broken["No re-check against torch/transformers — may silently break"]`} />
+
+## No lock file, no environment reproducibility guarantee
+
+`pip freeze > requirements.txt` snapshots what's *currently installed*, but it's a
+manual, after-the-fact step — nothing enforces that it stays in sync with your
+actual requirements, and it doesn't record *why* each transitive package is there
+(which top-level dependency pulled it in), making conflicts hard to debug later.
+Tools like `pip-tools` (see the intermediate lesson) bolt on lock-file behavior, but
+it isn't built into pip itself.
+
+## Wheels vs. sdists, and why ML installs are often huge/slow
+
+Packages distribute as either a **wheel** (`.whl`, prebuilt, ready to copy in) or an
+**sdist** (source distribution, needs building — potentially compiling C/C++/CUDA
+code on your machine). PyPI increasingly ships prebuilt wheels for common platforms,
+but ML packages compiled against specific CUDA versions produce very large,
+platform-specific wheels (a `torch` CUDA wheel can be 2+ GB), which is why ML
+environment installs are often slow and why installing the *wrong* CUDA build is a
+common and confusing failure mode — pip only knows which wheel to grab based on your
+Python version and platform tag, not your installed CUDA driver.
+
+```bash
+# Explicit index for CUDA-specific builds — pip alone doesn't detect your CUDA version
+pip install torch --index-url https://download.pytorch.org/whl/cu121
+```
+
+## pip vs. Poetry vs. uv
+
+All three install packages from PyPI; they differ in dependency resolution
+guarantees, lock-file support, and speed.
+
+| | pip | Poetry | uv |
+|---|---|---|---|
+| Language / runtime | Python | Python | Rust (compiled binary) |
+| Lock file | No (manual `pip freeze`) | Yes (`poetry.lock`) | Yes (`uv.lock`) |
+| Dependency resolution | Backtracking, per-command | Full resolver, whole-project | Full resolver, whole-project |
+| Project/package management | No — just installs | Yes (build, publish, versioning) | Yes (project + build, growing feature set) |
+| Speed | Baseline | Slower than pip on large resolves | 10-100x faster than pip (parallel, Rust, global cache) |
+| Virtualenv management | Manual (`venv`) | Automatic | Automatic, plus can manage Python versions itself |
+| Maturity / ecosystem default | The universal baseline, always present | Popular, especially in app/library packaging | Newer, rapidly becoming the fast default |
+
+**When to reach for which**: pip is the lowest-common-denominator tool that always
+works and every tutorial assumes — fine for a quick script or a Colab cell. Poetry
+is a solid choice when you want reproducible locking plus project/package
+management (building and publishing a library) without needing raw speed. uv is
+increasingly the default recommendation for new projects — it can act as a drop-in,
+much faster `pip`/`pip-tools` replacement, and also has its own project/lock-file
+workflow that competes directly with Poetry, with the main trade-off being that it's
+newer and has a smaller track record.
+
+## Trade-off summary
+
+| Decision | Gains | Costs |
+|---|---|---|
+| Plain pip + requirements.txt | Simple, universally supported, zero extra tooling | No enforced reproducibility, manual conflict debugging |
+| pip + pip-tools | Locked, reproducible, still pip-based | Extra tool, extra compile step in the workflow |
+| Explicit `--index-url` for CUDA wheels | Correct GPU build installed | You must know your CUDA version yourself |

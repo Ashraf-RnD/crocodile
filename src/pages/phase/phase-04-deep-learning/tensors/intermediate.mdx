@@ -1,0 +1,92 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Tensors"
+level: intermediate
+phaseSlug: "phase-04-deep-learning"
+phaseName: "Deep Learning"
+topicSlug: "tensors"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "PyTorch — Broadcasting semantics"
+    url: "https://pytorch.org/docs/stable/notes/broadcasting.html"
+  - type: docs
+    title: "PyTorch — Tensor views"
+    url: "https://pytorch.org/docs/stable/tensor_view.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Broadcasting: operating on mismatched shapes
+
+Real model code constantly combines tensors of different shapes — adding a bias
+vector to every row of a batch, for example. PyTorch handles this via
+**broadcasting**: it implicitly expands smaller tensors to match, without copying
+data, as long as shapes are "compatible" (equal, or one of them is 1).
+
+```python
+import torch
+
+batch = torch.randn(32, 10)      # 32 samples, 10 features each
+bias = torch.randn(10)           # one bias per feature
+
+result = batch + bias            # bias is broadcast across all 32 rows
+print(result.shape)              # torch.Size([32, 10])
+```
+
+<Mermaid client:visible code={`flowchart LR
+  A["batch: (32, 10)"] --> C[element-wise add]
+  B["bias: (10,) broadcast to (32, 10)"] --> C
+  C --> D["result: (32, 10)"]`} />
+
+Broadcasting rules, compared trailing-dimension first: shapes are compatible if each
+pair of dimensions is equal, or one of them is 1, or one is missing entirely.
+
+## Views vs. copies
+
+`.reshape()`, `.view()`, `.transpose()`, and slicing often return a **view** — a new
+tensor object that shares the same underlying memory as the original. Modifying a
+view mutates the original data too, which is a common source of subtle bugs.
+
+```python
+x = torch.arange(6)
+y = x.view(2, 3)
+y[0, 0] = 99
+print(x)   # tensor([99,  1,  2,  3,  4,  5]) — x changed too!
+
+# .clone() breaks the memory link
+z = x.view(2, 3).clone()
+z[0, 0] = -1
+print(x)   # unaffected
+```
+
+`.view()` requires the tensor to be **contiguous** in memory; `.reshape()` is the
+safer default since it falls back to copying when a view isn't possible.
+
+## dtype and device matter as much as shape
+
+Two tensors must match in `dtype` and `device` (CPU vs GPU) before most operations
+will work — this is one of the most common real-world error sources:
+
+```python
+x = torch.randn(4, 4)                       # float32, CPU by default
+x_half = x.half()                           # cast to float16 for cheaper inference
+x_gpu = x.to("cuda") if torch.cuda.is_available() else x
+
+model_input = x.to(dtype=torch.float32, device="cpu")
+```
+
+Production training code typically pins dtype and device explicitly rather than
+relying on defaults, precisely because mismatches throw hard-to-debug runtime errors
+mid-training.
+
+## In-place operations
+
+Methods ending in `_` (like `add_`, `mul_`) modify a tensor in place instead of
+returning a new one. They save memory but can break autograd's ability to compute
+gradients if used carelessly on tensors that require gradients — a frequent gotcha
+you'll hit once you start writing custom training loops.
+
+```python
+a = torch.tensor([1.0, 2.0])
+a.add_(1.0)     # a is now [2.0, 3.0], no new tensor allocated
+```

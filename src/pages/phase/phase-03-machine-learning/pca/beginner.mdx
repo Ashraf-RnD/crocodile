@@ -1,0 +1,61 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "PCA"
+level: beginner
+phaseSlug: "phase-03-machine-learning"
+phaseName: "Machine Learning"
+topicSlug: "pca"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "scikit-learn: PCA (decomposition module)"
+    url: "https://scikit-learn.org/stable/modules/decomposition.html#pca"
+  - type: video
+    title: "StatQuest: Principal Component Analysis (PCA), Step-by-Step"
+    url: "https://www.youtube.com/watch?v=FgakZw6K1QQ"
+---
+
+## Beginner: PCA
+
+Imagine holding a wireframe globe under a lamp and rotating it until its shadow on the wall looks the most "globe-like" — round, with continents recognizably spread out, not a thin line. You just went from 3 dimensions (the globe) to 2 dimensions (the shadow) while keeping as much of the shape's information as possible. That is exactly what **Principal Component Analysis (PCA)** does with data: it finds the "best angle" to flatten many features into fewer ones while preserving as much of the variation (spread) in the data as it can.
+
+Each new axis PCA creates is called a **principal component**. The first component points in the direction of greatest spread in the data; the second is the next-best direction, at a right angle to the first; and so on. Instead of describing each data point with its original features, you describe it with a few coordinates along these new axes.
+
+```python
+from sklearn.decomposition import PCA
+from sklearn.datasets import load_iris
+
+X, y = load_iris(return_X_y=True)
+print(X.shape)  # (150, 4) -- 4 original features
+
+pca = PCA(n_components=2)
+X_reduced = pca.fit_transform(X)
+print(X_reduced.shape)  # (150, 2) -- compressed to 2 components
+
+print("Variance kept by each component:", pca.explained_variance_ratio_)
+```
+
+Running this on the classic iris dataset compresses 4 flower measurements (sepal/petal length and width) down to 2 numbers per flower, and those 2 numbers still capture over 95% of the original variation — enough to plot the flowers on a simple 2D scatter plot and still see the species cluster apart.
+
+## Try it yourself
+
+Load `load_wine` from `sklearn.datasets` (13 features per wine sample). Reduce it to 2 principal components with `PCA`, and print how much of the total variance those 2 components explain (hint: sum `pca.explained_variance_ratio_`).
+
+<details>
+<summary>Solution</summary>
+
+```python
+from sklearn.decomposition import PCA
+from sklearn.datasets import load_wine
+
+X, y = load_wine(return_X_y=True)
+
+pca = PCA(n_components=2)
+X_reduced = pca.fit_transform(X)
+
+total_variance_kept = pca.explained_variance_ratio_.sum()
+print(f"Shape after PCA: {X_reduced.shape}")
+print(f"Variance kept: {total_variance_kept:.2%}")
+```
+
+</details>

@@ -1,0 +1,120 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Structured Output"
+level: intermediate
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "structured-output"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "OpenAI — Structured Outputs vs JSON mode"
+    url: "https://platform.openai.com/docs/guides/structured-outputs"
+  - type: docs
+    title: "Instructor — Structured LLM Outputs Library"
+    url: "https://python.useinstructor.com/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Nested models and lists
+
+Real extraction tasks rarely need one flat object — you usually need nested structures
+and lists of items, which Pydantic handles naturally:
+
+```python
+from pydantic import BaseModel, Field
+from typing import Literal
+
+class LineItem(BaseModel):
+    product: str
+    quantity: int
+    unit_price: float
+
+class Invoice(BaseModel):
+    vendor: str
+    invoice_date: str
+    items: list[LineItem]
+    status: Literal["paid", "unpaid", "overdue"]
+    total: float = Field(description="Sum of all line item totals")
+
+response = client.beta.chat.completions.parse(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": f"Extract invoice data:\n{raw_invoice_text}"}],
+    response_format=Invoice,
+)
+invoice = response.choices[0].message.parsed
+for item in invoice.items:
+    print(item.product, item.quantity, item.unit_price)
+```
+
+`Literal` types are especially useful for constraining a field to a fixed set of
+categories — the model literally cannot return a value outside `"paid"`, `"unpaid"`,
+`"overdue"`.
+
+## JSON mode vs. Structured Outputs — know the difference
+
+Older `response_format={"type": "json_object"}` ("JSON mode") only guarantees the
+output is *syntactically valid JSON* — it does not guarantee it matches any particular
+schema, so a field could be missing or a type could be wrong. The newer Structured
+Outputs (`response_format=<PydanticModel>` or a JSON Schema with `strict: true`)
+constrains generation at the token level so the output is guaranteed to conform to the
+exact schema. For any production extraction pipeline, prefer Structured Outputs — JSON
+mode still requires you to validate the result yourself.
+
+<Mermaid client:visible code={`flowchart LR
+  A[Prompt + schema] --> B[Model generates tokens]
+  B --> C{Structured Outputs mode?}
+  C -->|Yes| D[Token generation constrained to schema — guaranteed valid]
+  C -->|No / JSON mode only| E[Valid JSON syntax, schema not guaranteed]
+  E --> F[Your code must validate]`} />
+
+## Using the `instructor` library for cross-provider consistency
+
+Many teams use the open-source `instructor` library to get the same Pydantic-based
+structured extraction pattern across OpenAI, Anthropic, Gemini, and local models,
+since native structured-output support and syntax differ per provider:
+
+```python
+import instructor
+from anthropic import Anthropic
+
+client = instructor.from_anthropic(Anthropic())
+
+person = client.messages.create(
+    model="claude-sonnet-4-5",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "Extract: 'Maria, 29, Lisbon'"}],
+    response_model=Person,
+)
+```
+
+`instructor` also adds automatic retry-with-error-feedback: if the model's raw output
+fails Pydantic validation, it re-prompts the model with the validation error and asks
+it to correct itself, which meaningfully improves reliability on providers without
+native constrained decoding.
+
+## Validation beyond types: business rules
+
+Pydantic validators let you encode business logic the schema alone can't express —
+useful for catching outputs that are structurally valid but semantically wrong:
+
+```python
+from pydantic import field_validator
+
+class Invoice(BaseModel):
+    items: list[LineItem]
+    total: float
+
+    @field_validator("total")
+    @classmethod
+    def total_matches_items(cls, v, info):
+        items = info.data.get("items", [])
+        computed = sum(i.quantity * i.unit_price for i in items)
+        if abs(v - computed) > 0.01:
+            raise ValueError(f"total {v} doesn't match sum of items {computed}")
+        return v
+```
+
+This catches a subtle but common failure: the model returns a perfectly well-typed
+JSON object where the arithmetic is simply wrong — schema validity alone would let
+that slip through silently.

@@ -1,0 +1,99 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Kimi K2"
+level: expert
+phaseSlug: "phase-14-research-literacy"
+phaseName: "Research Literacy"
+topicSlug: "kimi-k2"
+estReadTime: 12
+resources:
+  - type: article
+    title: "Kimi K2: Open Agentic Intelligence — Technical Report"
+    url: "https://arxiv.org/abs/2507.20534"
+  - type: article
+    title: "DeepSeek-V3 Technical Report"
+    url: "https://arxiv.org/abs/2412.19437"
+---
+
+## What the paper actually contributed vs. prior work
+
+Kimi K2's architecture is explicitly and openly built on DeepSeek-V3's
+template (Multi-head Latent Attention, fine-grained MoE with shared experts)
+— the technical report doesn't claim architectural novelty there. Its two
+genuinely novel contributions are: (1) **MuonClip**, a fix for a specific
+instability failure mode (exploding attention logits) that emerges when the
+Muon optimizer is pushed to trillion-parameter MoE scale, solved by directly
+rescaling query/key projections (qk-clip) rather than the more common,
+blunter fix of gradient clipping; and (2) an unusually heavy investment in
+**synthetic agentic training data and RL for tool-use**, treating agentic
+capability as a first-class training objective rather than an emergent
+side-effect of general capability, and publishing one of the most detailed
+open accounts of how to build agentic SFT and RL pipelines at scale. Combined,
+these let Kimi K2 push open-weight MoE scale to roughly double DeepSeek-V3's
+total parameter count while specifically targeting the agentic capability gap
+between open and closed frontier models.
+
+## Limitations
+
+- **Enormous deployment footprint.** At ~1 trillion total parameters, even
+  with only 32B active per token, simply holding the full model in memory
+  across a serving cluster is a substantially heavier infrastructure
+  commitment than DeepSeek-V3's already-large 671B, which limits practical
+  self-hosting to well-resourced teams despite the open weights.
+- **Muon/MuonClip is less battle-tested than AdamW.** AdamW has years of
+  production track record at frontier LLM scale (see the Adam lesson in
+  Phase 2 for why it remains the default); Muon-family optimizers, even with
+  MuonClip's stabilization, have a much shorter history at this scale, and
+  it's not yet clear how their failure modes generalize across different
+  architectures, data mixtures, or hardware setups beyond what's been
+  reported.
+- **Benchmark-to-real-world agentic gap.** Strong scores on agentic
+  benchmarks don't automatically guarantee robust performance on the long
+  tail of messy, real-world multi-step tasks with ambiguous instructions or
+  unreliable tool outputs — a gap that affects essentially all agentic
+  model evaluations industry-wide, not specific to Kimi K2, but one worth
+  flagging given how central agentic capability is to the paper's framing.
+- **Heavy reliance on synthetic training data for agentic behavior** raises
+  the usual questions about how well synthetic trajectories capture the
+  genuine diversity and failure modes of real tool-use scenarios, versus
+  overfitting to the patterns of whatever generated the synthetic data.
+
+## What came after
+
+- Kimi K2's public, detailed account of MuonClip renewed broader interest in
+  Muon-family optimizers as a genuine alternative to AdamW at frontier scale,
+  with other labs and open researchers exploring similar stabilization
+  techniques for their own large-scale MoE training runs.
+- The strong emphasis on agentic capability as an explicit, heavily invested
+  training objective (rather than incidental to general capability) reflected
+  and reinforced a broader industry shift, visible across both open and
+  closed labs, toward treating "agentic benchmark performance" as a primary
+  competitive axis alongside general knowledge and reasoning benchmarks.
+- Later Kimi K2 point releases continued to iterate specifically on
+  long-horizon agentic coding and tool-use tasks, treating the original K2
+  release as a base to build sustained agentic capability improvements on
+  top of, rather than a one-off release.
+
+## How it's actually used in production today
+
+Kimi K2's open weights are used both directly (self-hosted, for teams with
+the infrastructure to serve a trillion-parameter MoE model) and via API
+access from Moonshot AI and third-party hosts, with adoption concentrated in
+agentic coding assistants and tool-using agent applications — the specific
+use case its post-training was built around. Its influence on the field is
+also indirect: MuonClip's qk-clip technique and the broader emphasis on
+purpose-built agentic training data are being watched closely by other labs
+as a template for how to train future agent-focused models, independent of
+whether they adopt Kimi K2's exact architecture.
+
+## Comparison: DeepSeek-V3 vs. Kimi K2
+
+| Dimension | DeepSeek-V3 | Kimi K2 |
+|---|---|---|
+| Total parameters | 671B | ~1.04T |
+| Active parameters per token | 37B | 32B |
+| Core attention mechanism | Multi-head Latent Attention (MLA) | Multi-head Latent Attention (MLA), adopted from DeepSeek-V3 |
+| Optimizer | AdamW-family (standard) | Muon + MuonClip (qk-clip stabilization) |
+| Primary training emphasis | General capability + training/inference efficiency | General capability + heavy agentic tool-use focus |
+| Training tokens | 14.8T | 15.5T |
+| Reported training stability | Stable, efficiency-focused report | Reported no loss spikes across the full run |

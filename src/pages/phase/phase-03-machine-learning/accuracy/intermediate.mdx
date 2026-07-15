@@ -1,0 +1,114 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Accuracy"
+level: intermediate
+phaseSlug: "phase-03-machine-learning"
+phaseName: "Machine Learning"
+topicSlug: "accuracy"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "scikit-learn: Model evaluation - accuracy_score"
+    url: "https://scikit-learn.org/stable/modules/model_evaluation.html#accuracy-score"
+  - type: docs
+    title: "scikit-learn: DummyClassifier"
+    url: "https://scikit-learn.org/stable/modules/generated/sklearn.dummy.DummyClassifier.html"
+---
+
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Accuracy in a real train/test workflow
+
+In practice, accuracy is almost always computed on held-out test data, either
+via `accuracy_score` or the classifier's `.score()` shortcut:
+
+```python
+from sklearn.datasets import load_breast_cancer
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score
+
+X, y = load_breast_cancer(return_X_y=True)
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.25, random_state=42, stratify=y
+)
+
+clf = RandomForestClassifier(random_state=42).fit(X_train, y_train)
+
+y_pred = clf.predict(X_test)
+print(accuracy_score(y_test, y_pred))  # e.g. 0.965
+print(clf.score(X_test, y_test))       # identical value
+```
+
+<Mermaid client:visible code={`flowchart LR
+  A[Ground truth labels] --> C[Compare element-wise]
+  B[Model predictions] --> C
+  C --> D[Count matches]
+  D --> E["accuracy = matches / total"]`} />
+
+## The core problem: imbalanced classes lie to you
+
+Accuracy treats every correct prediction the same, regardless of which class
+it belongs to. That's fine when classes are roughly balanced, but it becomes
+misleading — sometimes dangerously so — when one class dominates.
+
+Concrete example: fraud detection where 99% of transactions are legitimate
+and 1% are fraudulent.
+
+```python
+import numpy as np
+from sklearn.metrics import accuracy_score
+
+# 990 legitimate (0), 10 fraudulent (1)
+y_true = np.array([0] * 990 + [1] * 10)
+
+# A "model" that always predicts "not fraud"
+y_pred_dumb = np.zeros(1000, dtype=int)
+
+print(accuracy_score(y_true, y_pred_dumb))
+# 0.99
+```
+
+A model that never once flags fraud scores 99% accuracy. It is useless — it
+catches zero fraud cases — but the headline number looks excellent. This is
+sometimes called the **accuracy paradox**: the metric goes up while the
+model's actual usefulness goes to zero.
+
+## Always compare against a baseline
+
+Before trusting a model's accuracy, sanity-check it against a trivial
+baseline that doesn't learn anything. scikit-learn's `DummyClassifier` is
+built for exactly this:
+
+```python
+from sklearn.dummy import DummyClassifier
+from sklearn.metrics import accuracy_score
+
+baseline = DummyClassifier(strategy="most_frequent", random_state=0)
+baseline.fit(X_train, y_train)
+
+print("baseline accuracy:", baseline.score(X_test, y_test))
+print("model accuracy:   ", clf.score(X_test, y_test))
+```
+
+If your trained model's accuracy is barely above the `DummyClassifier`
+baseline, it likely hasn't learned a meaningful decision boundary — it's
+riding the class imbalance, not the signal in your features. A model is only
+worth deploying if it clears this baseline by a meaningful margin, and even
+then, accuracy alone won't tell you *where* it's failing (see the expert
+lesson on precision, recall, and the confusion matrix).
+
+## When accuracy is the right metric
+
+Accuracy is a fine, honest metric when:
+
+- Classes are roughly balanced (say, within 60/40 of each other).
+- False positives and false negatives cost roughly the same amount — you're
+  not in a domain like medical screening or fraud where one type of error is
+  far more expensive than the other.
+- You need a single, easily communicated number for a quick sanity check or
+  a balanced benchmark dataset (e.g. digit classification on MNIST).
+
+Outside those conditions, treat accuracy as a starting point, not the final
+word — pair it with class-wise metrics or a confusion matrix before drawing
+conclusions.

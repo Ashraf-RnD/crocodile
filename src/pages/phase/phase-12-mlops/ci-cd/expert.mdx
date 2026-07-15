@@ -1,0 +1,109 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "CI/CD"
+level: expert
+phaseSlug: "phase-12-mlops"
+phaseName: "MLOps"
+topicSlug: "ci-cd"
+estReadTime: 12
+resources:
+  - type: article
+    title: "CD4ML: Continuous Delivery for Machine Learning (Martin Fowler / ThoughtWorks)"
+    url: "https://martinfowler.com/articles/cd4ml.html"
+  - type: docs
+    title: "Google Cloud — MLOps: Continuous Delivery and Automation Pipelines"
+    url: "https://cloud.google.com/architecture/mlops-continuous-delivery-and-automation-pipelines-in-machine-learning"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The reproducibility boundary CI/CD can't enforce alone
+
+Standard software CI guarantees "this code, tested, becomes this artifact."
+ML CI/CD needs a stronger and harder guarantee: "this code, this data
+version, this environment, tested, becomes this model" — and any of those
+three drifting invalidates reproducibility even if the pipeline reports
+green. In practice this means the CI pipeline must pin and verify all three
+axes explicitly:
+
+```yaml
+- name: Pin and verify environment
+  run: |
+    pip install -r requirements.lock.txt  # exact pinned versions, not requirements.txt ranges
+    python -c "import torch; assert torch.__version__ == '2.1.0'"
+- name: Verify data version
+  run: |
+    dvc pull
+    dvc status --cloud  # fails if local data doesn't match the pinned dvc.lock
+- name: Record container digest for the audit trail
+  run: echo "IMAGE_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' myimage)" >> $GITHUB_ENV
+```
+
+Skipping any one of these means a pipeline that appears reproducible in CI
+can produce a materially different model when rerun later — a gap that only
+surfaces during an incident postmortem, when it's most costly to discover.
+
+## Training compute cost as a CI/CD design constraint
+
+Unlike a typical software test suite (seconds to minutes), a full retraining
+job can take hours on expensive GPU instances — this changes what "fast
+feedback" means and forces explicit tiering of what runs where:
+
+<Mermaid client:visible code={`flowchart TB
+  A["Every PR"] --> B["Fast: lint, unit tests, tiny-data smoke train (~2 min)"]
+  C["Merge to main"] --> D["Medium: full data validation, small-scale training sanity check (~15 min)"]
+  E["Scheduled / manual trigger"] --> F["Slow: full-scale retrain on GPU cluster (~hours)"]`} />
+
+A common and costly mistake is running a full-scale training job on every
+PR — this makes the feedback loop so slow that engineers stop trusting or
+waiting for CI, defeating its purpose. The fix is a smoke-test tier: train
+on a tiny data sample for a handful of steps just to catch crashes and shape
+errors, reserving full-scale training for merge-to-main or scheduled CT runs.
+
+## Rollback is a data-plus-model problem, not just a deployment problem
+
+Rolling back a bad code deploy is well understood — redeploy the previous
+container image. Rolling back a bad *model* deploy is subtler: the model
+depends on a feature schema, possibly a feature store snapshot, and
+sometimes a downstream index (embeddings, lookup tables) that may have been
+rebuilt for the new version. A CD pipeline that only reverts the model
+artifact without reverting or checking compatibility with these dependent
+resources can produce a rollback that's technically "the old model" but
+functionally broken because its expected inputs no longer exist in the form
+it was trained on. Mature CD pipelines version-pin the full serving context
+(model + feature schema + index version) as a single deployable unit, so
+rollback is atomic across all of them, not just the model file.
+
+## Testing in production: the parts CI cannot cover
+
+No pre-deployment test suite can fully validate real-world model behavior
+against live traffic distribution — CI/CD for ML is necessarily extended by
+production-stage validation that traditional software CI/CD doesn't need:
+
+- **Shadow traffic comparison**: run the new model against live requests
+  without serving its output, comparing prediction distributions against the
+  current production model before trusting it with real traffic
+- **Statistical rollback triggers**: automated rollback not just on error
+  rate (a software concern) but on prediction distribution shift or a
+  business KPI regression (conversion rate, false-positive rate) — signals
+  that only emerge from real traffic, which pre-deployment tests can't
+  produce
+- **Progressive exposure with automated abort**: canary rollout tied to a
+  statistical significance test on a chosen guardrail metric, not a fixed
+  timer, so a regression is caught by data rather than by whoever happens to
+  be watching a dashboard
+
+## Trade-offs across CI/CD maturity levels
+
+| Maturity level | What's automated | Typical failure mode without it |
+|---|---|---|
+| Manual | Nothing — models trained and deployed by hand | Untracked, unreproducible deployments |
+| Code CI/CD only | Tests/lint on code, manual retraining | Model quality regressions ship unnoticed |
+| + Continuous Training | Scheduled/triggered retraining, no quality gate | Bad retrains auto-promoted without a check |
+| + Quality gates | Retraining blocked from promotion unless it beats baseline | Gate misses distributional/fairness regressions if not explicitly tested |
+| + Progressive delivery | Shadow/canary rollout with automated rollback on live signals | Requires most operational investment; overkill for low-stakes models |
+
+The right maturity level is a function of blast radius — a low-stakes
+internal recommendation model doesn't need canary rollout and automated
+statistical rollback triggers, while a fraud or credit-decisioning model
+usually needs the full stack, because the cost of a silent regression is
+categorically higher.

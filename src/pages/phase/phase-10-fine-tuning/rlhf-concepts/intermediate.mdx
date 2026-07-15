@@ -1,0 +1,119 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "RLHF Concepts"
+level: intermediate
+phaseSlug: "phase-10-fine-tuning"
+phaseName: "Fine-tuning"
+topicSlug: "rlhf-concepts"
+estReadTime: 11
+resources:
+  - type: docs
+    title: "TRL — PPOTrainer documentation"
+    url: "https://huggingface.co/docs/trl/main/en/ppo_trainer"
+  - type: article
+    title: "InstructGPT paper (the RLHF pipeline OpenAI popularized)"
+    url: "https://arxiv.org/abs/2203.02155"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The full pipeline, with each model's role
+
+RLHF involves juggling up to four models at once during the RL stage — this is the
+main reason it's operationally heavier than SFT or DPO.
+
+<Mermaid client:visible code={`flowchart TB
+  SFT["SFT model (starting point)"] --> Policy["Policy model (being trained)"]
+  SFT --> Ref["Reference model (frozen copy of SFT)"]
+  Prompts["Prompt batch"] --> Policy
+  Policy --> Gen["Generated response"]
+  Gen --> RM["Reward model scores response"]
+  Gen --> KL["KL penalty vs reference model"]
+  RM --> Reward["Combined reward signal"]
+  KL --> Reward
+  Reward --> PPO["PPO updates the policy model"]
+  PPO --> Policy`} />
+
+- **Policy model**: the model actually being trained — starts as a copy of the SFT
+  model.
+- **Reference model**: a frozen copy of the SFT model, used only to compute a KL
+  penalty so the policy doesn't drift too far and start "reward hacking" degenerate
+  outputs the reward model happens to score highly.
+- **Reward model**: a separate model trained on human preference comparisons, scoring
+  how good a given response is.
+- **Value model** (in full PPO setups): estimates expected future reward, used to
+  reduce variance in the policy gradient estimate.
+
+## Training a reward model
+
+```python
+from trl import RewardTrainer, RewardConfig
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
+from datasets import load_dataset
+
+model = AutoModelForSequenceClassification.from_pretrained("meta-llama/Llama-3.1-8B", num_labels=1)
+tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.1-8B")
+
+# Dataset has "chosen" and "rejected" response pairs per prompt
+dataset = load_dataset("Anthropic/hh-rlhf", split="train")
+
+trainer = RewardTrainer(
+    model=model,
+    train_dataset=dataset,
+    args=RewardConfig(output_dir="./reward-model-out", per_device_train_batch_size=4),
+)
+trainer.train()
+```
+
+The reward model is trained with a pairwise loss: `-log(sigmoid(reward(chosen) -
+reward(rejected)))`, pushing the score of the preferred response higher than the
+rejected one. It outputs a single scalar reward, not text.
+
+## Running the PPO stage
+
+```python
+from trl import PPOTrainer, PPOConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+policy = AutoModelForCausalLM.from_pretrained("./sft-model-out")
+ref_model = AutoModelForCausalLM.from_pretrained("./sft-model-out")  # frozen reference
+reward_model = AutoModelForSequenceClassification.from_pretrained("./reward-model-out")
+tokenizer = AutoTokenizer.from_pretrained("./sft-model-out")
+
+ppo_config = PPOConfig(
+    learning_rate=1.4e-5,
+    batch_size=64,
+    mini_batch_size=8,
+    kl_penalty="kl",             # penalize divergence from the reference model
+    init_kl_coef=0.2,
+)
+
+trainer = PPOTrainer(ppo_config, policy, ref_model, tokenizer, reward_model=reward_model)
+
+for batch in dataloader:
+    responses = trainer.generate(batch["input_ids"])
+    rewards = reward_model(responses)
+    trainer.step(batch["input_ids"], responses, rewards)
+```
+
+## Why the KL penalty is essential, not optional
+
+Without a penalty keeping the policy close to the reference model, PPO will happily
+exploit any weakness in the reward model — producing outputs that score artificially
+high without actually being better (a phenomenon called **reward hacking**, e.g. the
+policy learning to always end responses with an enthusiastic exclamation because the
+reward model has a subtle bias toward that). The KL term acts as a leash, trading off
+some optimization power for staying grounded in the SFT model's original, more
+naturally-distributed behavior.
+
+## Why teams increasingly reach for DPO instead
+
+Full RLHF-with-PPO requires training and hosting four models simultaneously during the
+RL stage, careful hyperparameter tuning (KL coefficient, PPO clip range, value function
+learning rate), and is notoriously unstable to get right. This operational overhead is
+the primary reason [DPO](/phase/phase-10-fine-tuning/dpo/intermediate) has become the
+default starting point for most teams doing preference tuning — it achieves a similar
+end goal (aligning outputs with human preferences) using only the policy and reference
+model, with a closed-form loss instead of an RL loop. RLHF-with-PPO remains relevant
+where the reward signal genuinely needs to be a learned, generalizing model rather than
+a fixed preference dataset (e.g. reward models that generalize to prompts unseen during
+preference collection).

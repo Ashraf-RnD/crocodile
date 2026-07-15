@@ -1,0 +1,91 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Python Advanced"
+level: intermediate
+phaseSlug: "phase-01-python-for-ai"
+phaseName: "Python for AI"
+topicSlug: "python-advanced"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "Real Python — Python Generators"
+    url: "https://realpython.com/introduction-to-python-generators/"
+  - type: article
+    title: "Python data model — `__call__`"
+    url: "https://docs.python.org/3/reference/datamodel.html#object.__call__"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Generators and lazy evaluation
+
+Training pipelines rarely load an entire dataset into memory. Instead they stream
+batches lazily using **generators** — functions that `yield` values one at a time
+instead of returning a full list.
+
+```python
+def batch_reader(path, batch_size=32):
+    batch = []
+    with open(path) as f:
+        for line in f:
+            batch.append(line.strip())
+            if len(batch) == batch_size:
+                yield batch
+                batch = []
+    if batch:
+        yield batch
+```
+
+This is exactly the shape of a PyTorch `DataLoader` iterator or a Hugging Face
+`datasets.IterableDataset` under the hood: pull one batch, do work, ask for the next.
+
+<Mermaid client:visible code={`sequenceDiagram
+  participant Loop as Training loop
+  participant Gen as batch_reader()
+  Loop->>Gen: next()
+  Gen-->>Loop: yield batch 1
+  Loop->>Gen: next()
+  Gen-->>Loop: yield batch 2
+  Loop->>Gen: next()
+  Gen-->>Loop: StopIteration`} />
+
+## Callable classes (`__call__`)
+
+Model objects in PyTorch aren't functions, but you call them like one: `model(x)`.
+That works because `nn.Module` implements `__call__`:
+
+```python
+class Doubler:
+    def __call__(self, x):
+        return x * 2
+
+doubler = Doubler()
+doubler(21)  # 42 — behaves like a function, but keeps state
+```
+
+This pattern — an object that behaves like a function but carries state (weights,
+config) — is the backbone of almost every model class you'll subclass.
+
+## Decorators with arguments
+
+`@torch.no_grad()` isn't just a decorator, it's a **decorator factory** — a function
+that returns a decorator, so it can accept configuration:
+
+```python
+def retry(times=3):
+    def decorator(fn):
+        def wrapper(*args, **kwargs):
+            for attempt in range(times):
+                try:
+                    return fn(*args, **kwargs)
+                except Exception as e:
+                    if attempt == times - 1:
+                        raise
+        return wrapper
+    return decorator
+
+@retry(times=5)
+def call_llm_api(prompt):
+    ...
+```
+
+You'll write exactly this pattern for retrying flaky LLM API calls.

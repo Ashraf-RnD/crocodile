@@ -1,0 +1,77 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "GPT"
+level: beginner
+phaseSlug: "phase-06-transformers"
+phaseName: "Transformers"
+topicSlug: "gpt"
+estReadTime: 6
+resources:
+  - type: article
+    title: "Jay Alammar — The Illustrated GPT-2"
+    url: "https://jalammar.github.io/illustrated-gpt2/"
+  - type: docs
+    title: "Hugging Face — GPT-2 model docs"
+    url: "https://huggingface.co/docs/transformers/en/model_doc/gpt2"
+---
+
+## GPT: a very good "guess the next word" machine
+
+GPT (Generative Pre-trained Transformer) is built entirely from **decoder** layers —
+the "write, one word at a time" half of the Transformer. Its training game is even
+simpler than BERT's: given all the words so far, predict the *next* one.
+
+"The cat sat on the ___" → GPT predicts "mat" is likely, "moon" is less likely, and
+"purple" is very unlikely. Do this over and over, across a massive amount of text,
+and the model gradually learns grammar, facts, reasoning patterns, and style — all
+as a side effect of getting extremely good at next-word prediction.
+
+Unlike BERT, GPT never gets to see future words while training or generating — it's
+strictly left-to-right, which is exactly what lets it be used to *generate* new text
+by repeatedly predicting one more word and appending it to the input.
+
+### Generating text with a pretrained GPT model
+
+```python
+from transformers import pipeline
+
+generator = pipeline("text-generation", model="gpt2")
+result = generator(
+    "The best way to learn about transformers is",
+    max_new_tokens=30,
+    do_sample=True,
+    temperature=0.8,
+)
+print(result[0]["generated_text"])
+```
+
+Under the hood, this repeats a simple loop: feed the current text in, get a
+probability distribution over the next word, pick one (`do_sample=True` picks
+somewhat randomly, weighted by probability; `temperature` controls how random),
+append it, and repeat until `max_new_tokens` is reached.
+
+## Try it yourself
+
+Run the generator above twice with `do_sample=True` and the same prompt. Then try it
+with `do_sample=False` (greedy decoding) twice. What difference do you expect?
+
+<details>
+<summary>Solution</summary>
+
+```python
+result1 = generator(prompt, max_new_tokens=30, do_sample=False)
+result2 = generator(prompt, max_new_tokens=30, do_sample=False)
+# result1 and result2 should be IDENTICAL — greedy decoding always
+# picks the single highest-probability next word, so there's no randomness.
+
+result3 = generator(prompt, max_new_tokens=30, do_sample=True, temperature=0.8)
+result4 = generator(prompt, max_new_tokens=30, do_sample=True, temperature=0.8)
+# result3 and result4 will likely DIFFER — sampling introduces randomness
+# at each step, weighted by the model's predicted probabilities.
+```
+
+This is why chatbots and creative writing tools use sampling (varied, interesting
+output) while some deterministic pipelines prefer greedy or low-temperature decoding
+(consistent, repeatable output).
+
+</details>

@@ -1,0 +1,96 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "pgvector"
+level: expert
+phaseSlug: "phase-08-retrieval-augmented-generation"
+phaseName: "Retrieval-Augmented Generation"
+topicSlug: "pgvector"
+estReadTime: 12
+resources:
+  - type: article
+    title: "pgvector vs. dedicated vector databases — a benchmark discussion"
+    url: "https://supabase.com/blog/pgvector-vs-pinecone"
+  - type: docs
+    title: "pgvector — HNSW build parameters and query-time ef_search"
+    url: "https://github.com/pgvector/pgvector#hnsw"
+---
+
+## IVFFlat vs. HNSW: a genuinely different trade-off than in dedicated vector databases
+
+Both index types exist in pgvector, but their operational profile differs from
+standalone vector databases because they're built as Postgres index access methods,
+subject to Postgres's own storage and maintenance model:
+
+| Index | Build behavior | Query behavior | Update behavior | Best for |
+|---|---|---|---|---|
+| IVFFlat | Requires existing data to train cluster centroids (`lists` param) before building — an empty or near-empty table produces a poor index | Approximate; `lists`/`probes` tune recall vs. speed | New rows inserted after build aren't well-clustered until a rebuild — recall degrades gradually as unclustered data accumulates | Batch-loaded, relatively static or append-light corpora |
+| HNSW | No training data required; graph builds incrementally | Approximate; `ef_search` tunes recall vs. speed per query | Handles inserts/updates gracefully without periodic rebuilds | The general-purpose default for most RAG workloads, especially with ongoing writes |
+
+pgvector's own documentation now steers most users toward HNSW as the default for
+exactly this reason — IVFFlat's requirement to train on representative data before
+building, and its degrading quality under ongoing inserts without rebuilds, makes it
+a worse fit for the incrementally-updated corpora typical of production RAG.
+
+## Index build cost and Postgres's maintenance model
+
+Building an HNSW index over millions of rows is CPU- and memory-intensive, and unlike
+a dedicated vector database where index building is a core, highly-optimized path,
+it competes for resources with Postgres's regular workload (`maintenance_work_mem`
+governs how much memory the build can use, and undersizing it measurably slows index
+creation). Rebuilding or adding an index on a large existing table also takes an
+`ACCESS EXCLUSIVE` lock unless built `CONCURRENTLY`, which has its own cost (slower,
+non-transactional build) — a genuinely different operational reality than a dedicated
+vector database's typically online, purpose-built index management, and worth
+planning for explicitly in migration and deployment runbooks rather than discovering
+under production load.
+
+## Filtered search and the index-selectivity interaction
+
+Like other ANN indexes, pgvector's HNSW index doesn't inherently understand
+relational `WHERE` clause filters — the query planner decides, based on estimated
+selectivity, whether to use the vector index and then filter, or filter first via a
+relational index and fall back to an unindexed scan for similarity ranking:
+
+```sql
+EXPLAIN ANALYZE
+SELECT text FROM support_tickets
+WHERE status = 'open' AND department = 'billing'
+ORDER BY embedding <=> %s::vector LIMIT 5;
+```
+
+For highly selective filters (a small `department` matching few rows), the planner
+may reasonably choose to filter first via a B-tree index on `department` and compute
+exact distances on the small remaining set, sidestepping the ANN index entirely —
+actually a *sound* choice, since exact search on a small filtered set can beat
+approximate search on the full table. Understanding this planner behavior (and
+reading `EXPLAIN ANALYZE` output) matters for pgvector specifically because unlike a
+dedicated vector database with filter-aware ANN, you're relying on the general-purpose
+Postgres query planner's cost model to make a good choice, and it's worth verifying
+rather than assuming.
+
+## Vertical vs. horizontal scaling ceiling
+
+pgvector fundamentally inherits Postgres's single-primary-write architecture — scaling
+reads is possible via read replicas (each maintaining its own copy of the vector
+index), but scaling writes and the working index size is bounded by what a single
+primary instance's CPU/RAM/disk can support. Dedicated vector databases built with
+sharding and disaggregated storage (Milvus, or Qdrant's distributed mode) can scale
+write throughput and index size horizontally in ways pgvector, tied to Postgres's
+architecture, fundamentally cannot without moving to a distributed Postgres variant
+(e.g. Citus) — itself a substantial operational shift. This is the concrete technical
+boundary behind the common guidance that pgvector is excellent up to moderate scale
+(low tens of millions of vectors, depending on hardware) and a deliberate trade against
+a dedicated vector database beyond it, rather than a soft rule of thumb.
+
+## The consistency guarantee dedicated vector databases usually give up
+
+pgvector vector columns participate fully in Postgres transactions — an insert of a
+document row and its embedding can be wrapped in the same transaction as other
+relational writes, with full ACID guarantees and immediate read-your-writes
+consistency for any subsequent query on the same connection. Most dedicated vector
+databases, by contrast, trade this away for write throughput and distributed
+scalability (eventual consistency between write and query nodes, as seen in Milvus's
+tunable consistency levels or Weaviate's replication settings). For RAG use cases
+where a user uploads a document and expects to immediately query it back reliably,
+this is a real, underappreciated advantage of pgvector's tighter coupling to a
+mature, fully transactional relational database.

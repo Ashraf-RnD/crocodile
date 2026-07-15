@@ -1,0 +1,88 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Logistic Regression"
+level: beginner
+phaseSlug: "phase-03-machine-learning"
+phaseName: "Machine Learning"
+topicSlug: "logistic-regression"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "scikit-learn: Logistic Regression"
+    url: "https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression"
+  - type: video
+    title: "StatQuest: Logistic Regression"
+    url: "https://www.youtube.com/watch?v=yIYKR4sgzI8"
+---
+
+## Beginner: Logistic Regression
+
+Despite the name, logistic regression is a **classification** algorithm, not a regression one.
+Think of a spam filter: you want to know "is this email spam?" — a yes/no answer, but one where
+you also care how confident the model is. Logistic regression produces exactly that: a
+probability between 0 and 1.
+
+It does this by taking a linear combination of your features (just like linear regression,
+`w1*x1 + w2*x2 + ... + b`) and squashing the result through the **sigmoid function**:
+
+```
+sigmoid(z) = 1 / (1 + e^-z)
+```
+
+No matter how large or small `z` is, sigmoid always outputs something between 0 and 1. Values
+close to 1 mean "very likely positive class"; values close to 0 mean "very likely negative
+class." A threshold (usually 0.5) turns that probability into a hard label.
+
+## A tiny example
+
+```python
+from sklearn.linear_model import LogisticRegression
+import numpy as np
+
+# hours studied vs. pass (1) / fail (0)
+X = np.array([[1], [2], [3], [4], [5], [6], [7], [8]])
+y = np.array([0, 0, 0, 0, 1, 1, 1, 1])
+
+model = LogisticRegression()
+model.fit(X, y)
+
+print(model.predict([[3.5]]))        # class prediction, e.g. [0]
+print(model.predict_proba([[3.5]]))  # probability of each class, e.g. [[0.62 0.38]]
+```
+
+`predict` gives you the final label; `predict_proba` gives you the underlying probabilities the
+sigmoid produced — useful when you want to know *how* confident the model is, not just its
+guess.
+
+## Try it yourself
+
+Using the same study-hours dataset above, add one more feature: `hours_slept`. Build a small
+`X` with two columns (`hours_studied`, `hours_slept`) and a matching `y`, fit a
+`LogisticRegression` model, and predict the outcome for a student who studied 4 hours and slept
+6 hours.
+
+<details>
+<summary>Solution</summary>
+
+```python
+from sklearn.linear_model import LogisticRegression
+import numpy as np
+
+# columns: [hours_studied, hours_slept]
+X = np.array([
+    [1, 8], [2, 7], [3, 5], [4, 4],
+    [5, 6], [6, 7], [7, 8], [8, 6],
+])
+y = np.array([0, 0, 0, 0, 1, 1, 1, 1])
+
+model = LogisticRegression()
+model.fit(X, y)
+
+prediction = model.predict([[4, 6]])
+probability = model.predict_proba([[4, 6]])
+
+print(prediction)    # predicted class
+print(probability)   # [P(fail), P(pass)]
+```
+
+</details>

@@ -1,0 +1,74 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Voice AI"
+level: beginner
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "voice-ai"
+estReadTime: 6
+resources:
+  - type: article
+    title: "OpenAI — Introducing the Realtime API"
+    url: "https://openai.com/index/introducing-the-realtime-api/"
+  - type: docs
+    title: "Deepgram — What is a voice AI pipeline?"
+    url: "https://deepgram.com/learn"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Three models pretending to be one conversation
+
+A voice AI assistant — think a phone support bot or a voice assistant app —
+usually isn't one model. It's three, chained together, working so fast it
+feels like a single conversation:
+
+1. **Speech-to-text (STT)** turns your spoken words into text.
+2. **The LLM** reads that text and decides what to say back, just like a
+   chat model.
+3. **Text-to-speech (TTS)** turns the LLM's written reply back into spoken
+   audio.
+
+<Mermaid client:visible code={`flowchart LR
+  You["You speak"] --> STT["Speech-to-text"]
+  STT --> Text["Your words as text"]
+  Text --> LLM["LLM decides a reply"]
+  LLM --> ReplyText["Reply as text"]
+  ReplyText --> TTS["Text-to-speech"]
+  TTS --> Audio["Spoken reply plays back"]`} />
+
+## Why speed matters more here than almost anywhere else
+
+In a text chat, waiting two seconds for a reply feels normal. In a spoken
+conversation, a two-second gap after you stop talking feels like the other
+person went silent and awkward — human conversation has pauses typically
+under a second. That means a voice AI system has to run all three stages
+(listen, think, speak) fast enough that the total delay stays under roughly
+that threshold, every single turn. This is a much tighter latency budget than
+a text-based chat product ever has to hit.
+
+## Knowing when you've stopped talking
+
+One surprisingly hard problem: the system has to detect that you've finished
+your sentence, not just paused to think. Say "well, I think..." with a
+pause, and a naive system might jump in and respond mid-thought. Real
+systems use **voice activity detection** (VAD) — listening for a long enough
+silence, combined with cues like falling intonation — to guess when it's
+actually your turn to hear a reply.
+
+## Try it yourself
+
+If a voice AI system waits a full 2 seconds of silence before deciding
+you're done talking (to avoid interrupting you), what's the trade-off it's
+making?
+
+<details>
+<summary>Solution</summary>
+
+It trades responsiveness for accuracy: waiting longer reduces the chance of
+rudely interrupting someone mid-sentence, but it also adds that same delay to
+every single reply, making the whole conversation feel slower and less
+natural. Real voice AI systems tune this silence threshold carefully, and
+some use smarter cues (intonation, sentence completion signals) instead of a
+fixed timer, so they can respond quickly to a clearly finished sentence while
+still waiting appropriately through a mid-thought pause.
+</details>

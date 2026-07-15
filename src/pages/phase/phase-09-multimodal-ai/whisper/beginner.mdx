@@ -1,0 +1,68 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Whisper"
+level: beginner
+phaseSlug: "phase-09-multimodal-ai"
+phaseName: "Multimodal AI"
+topicSlug: "whisper"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "openai/whisper GitHub repository"
+    url: "https://github.com/openai/whisper"
+  - type: article
+    title: "Whisper (paper): Robust Speech Recognition via Large-Scale Weak Supervision"
+    url: "https://cdn.openai.com/papers/whisper.pdf"
+---
+
+## Turning speech into text
+
+**Whisper** is OpenAI's speech recognition model — you give it an audio file, it gives
+you back the transcribed text, and it works across dozens of languages without you
+telling it which one is being spoken.
+
+Think of it as an extremely well-traveled stenographer: it's listened to hundreds of
+thousands of hours of speech across many languages and accents, so it can transcribe
+almost anything you throw at it, from a clean podcast recording to a noisy phone call.
+
+### Your first transcription
+
+```python
+import whisper
+
+model = whisper.load_model("base")
+result = model.transcribe("meeting.mp3")
+
+print(result["text"])
+```
+
+That's the whole thing. `whisper.load_model("base")` downloads a mid-sized pretrained
+model (there are five main sizes: `tiny`, `base`, `small`, `medium`, `large`) and
+`transcribe` handles chunking the audio, running inference, and stitching the text back
+together.
+
+### Getting timestamps
+
+```python
+for segment in result["segments"]:
+    print(f"[{segment['start']:.1f}s - {segment['end']:.1f}s] {segment['text']}")
+```
+
+Each segment comes with start/end timestamps — this is what powers subtitle generation
+and "jump to this point in the audio" features.
+
+## Try it yourself
+
+Whisper can also translate non-English speech directly into English text, instead of
+just transcribing it in its original language. Look up the `task` parameter to
+`transcribe()`.
+
+<details>
+<summary>Solution</summary>
+
+```python
+result = model.transcribe("french_interview.mp3", task="translate")
+print(result["text"])  # English text, even though the audio is French
+```
+
+</details>

@@ -1,0 +1,69 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Observability"
+level: beginner
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "observability"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "LangSmith Docs — Observability for LLM applications"
+    url: "https://docs.smith.langchain.com/observability"
+  - type: article
+    title: "Honeycomb — What is observability?"
+    url: "https://www.honeycomb.io/what-is-observability"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Knowing what your AI system is actually doing
+
+Observability means being able to answer "what happened, and why?" when
+something goes wrong (or even when things go right) in a running system.
+For AI products this is trickier than for typical software: a normal bug
+report says "the button didn't work," but an AI bug report might be "the
+assistant gave a weird answer" — and figuring out *why* means being able to
+see exactly what was sent to the model and what it produced.
+
+<Mermaid client:visible code={`flowchart LR
+  User["User sends a message"] --> Log1["Logged: the exact prompt sent"]
+  Log1 --> Model["Model generates a response"]
+  Model --> Log2["Logged: the exact response, timing, cost"]
+  Log2 --> Dashboard["Dashboards & alerts show patterns over time"]
+  Log2 --> Trace["Individual requests can be inspected one by one"]`} />
+
+## The three basics: logs, metrics, traces
+
+- **Logs** — a record of individual events ("user X sent this prompt at
+  this time and got this response").
+- **Metrics** — numbers tracked over time ("average response time this
+  hour," "how many requests failed today").
+- **Traces** — the step-by-step path a single request took through the
+  system, useful when a request goes through multiple stages (like search,
+  then the model, then a safety check).
+
+## Why this matters specifically for AI products
+
+Unlike a login button that either works or doesn't, an AI response can be
+"technically successful" (no error, response returned) while still being a
+bad or wrong answer. Observability for AI systems has to go beyond "did it
+crash" and start capturing "was the answer actually good" — which is a much
+fuzzier, harder question that traditional monitoring wasn't built to
+answer.
+
+## Try it yourself
+
+A user complains "the chatbot told me something wrong yesterday." Without
+any logging of what was actually sent to and returned by the model, how
+would you even start investigating?
+
+<details>
+<summary>Solution</summary>
+
+You basically couldn't — without a record of the exact prompt sent and the
+exact response generated for that specific interaction, you have no way to
+reproduce or even inspect what happened. This is exactly why AI systems log
+full prompts and responses (subject to privacy rules) rather than just
+"request succeeded/failed" — the content itself is the thing you need to
+debug, not just whether the request technically completed.
+</details>

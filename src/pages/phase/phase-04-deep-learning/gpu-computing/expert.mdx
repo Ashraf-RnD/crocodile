@@ -1,0 +1,82 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "GPU Computing"
+level: expert
+phaseSlug: "phase-04-deep-learning"
+phaseName: "Deep Learning"
+topicSlug: "gpu-computing"
+estReadTime: 12
+resources:
+  - type: docs
+    title: "PyTorch — CUDA caching allocator notes"
+    url: "https://pytorch.org/docs/stable/notes/cuda.html#memory-management"
+  - type: docs
+    title: "PyTorch Profiler"
+    url: "https://pytorch.org/tutorials/recipes/recipes/profiler_recipe.html"
+---
+
+## CUDA streams and asynchronous execution
+
+CUDA kernel launches from PyTorch are asynchronous by default: the Python call
+returns immediately while the GPU executes the operation in the background on a
+**stream** — an ordered queue of work. This is why naive wall-clock timing of GPU
+code is misleading without an explicit `torch.cuda.synchronize()`:
+
+```python
+import time
+torch.cuda.synchronize()
+start = time.time()
+y = model(x)                    # returns almost instantly — launch is async
+torch.cuda.synchronize()        # blocks until the GPU actually finishes
+print(time.time() - start)      # only now is the timing meaningful
+```
+
+Multiple streams let independent work (e.g., data prefetch H2D copy and compute on
+the previous batch) overlap. `DataLoader(pin_memory=True, non_blocking=True)` copies
+exploit this by running the transfer on a separate stream from compute.
+
+## The caching allocator and memory fragmentation
+
+PyTorch doesn't call `cudaMalloc`/`cudaFree` for every tensor — that would be far too
+slow. Instead it maintains a **caching allocator**: freed GPU memory is kept in a
+pool and reused for future allocations of similar size, rather than returned to the
+driver. This explains two things practitioners routinely find confusing:
+
+- `nvidia-smi` shows more memory "used" by your process than `torch.cuda.memory_allocated()`
+  reports — the gap is memory PyTorch is holding in its cache (`memory_reserved()`),
+  not memory that's actually leaked.
+- Repeated allocate/free cycles of varying tensor sizes (e.g., variable-length
+  sequence batches) can fragment the cache, causing `CUDA out of memory` errors even
+  when the *total* free memory would be enough — because no single contiguous block
+  is large enough. `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` mitigates this
+  on newer PyTorch versions.
+
+## NCCL and the real cost of multi-GPU/multi-node training
+
+DDP's gradient synchronization uses **NCCL** all-reduce, whose cost scales with
+message size and is sensitive to interconnect bandwidth: NVLink between GPUs on one
+node is far faster than PCIe, which is in turn far faster than Ethernet between
+nodes. This is why large-scale training infrastructure invests heavily in
+InfiniBand/NVLink topology — at multi-node scale, communication, not compute, is
+often the actual bottleneck, and gradient bucketing (DDP groups small gradients into
+larger all-reduce calls) exists specifically to amortize per-call communication
+overhead.
+
+## Comparing scaling strategies
+
+| Strategy | Model copies | Memory per GPU | Communication | When it's the right call |
+|---|---|---|---|---|
+| DataParallel | 1 (single process) | Full model + activations, uneven load | Funnels through 1 GPU | Legacy code only, avoid for new work |
+| DistributedDataParallel (DDP) | 1 full copy per GPU | Full model + optimizer state + activations | All-reduce gradients | Model fits comfortably on one GPU |
+| FSDP / ZeRO (sharded) | Sharded across GPUs | Fraction of model + optimizer state per GPU | All-gather params, reduce-scatter grads | Model too large for one GPU's memory |
+| Pipeline parallelism | Different layers per GPU | Depends on partition | Activation hand-off between stages | Very deep models, combined with the above |
+
+## Profiling before optimizing
+
+`torch.profiler` traces both CPU (Python dispatch overhead, data loading) and CUDA
+(kernel execution) timelines, exportable to a Chrome trace viewer. The most common
+finding in unoptimized training loops isn't a slow model — it's the GPU sitting idle
+waiting on the CPU: slow `Dataset.__getitem__`, insufficient `num_workers`, or
+synchronizing calls (`.item()`, `print(loss)`) breaking the async pipeline. Profiling
+data, not intuition, is what should drive optimization effort here — GPU compute is
+frequently not the bottleneck it's assumed to be.

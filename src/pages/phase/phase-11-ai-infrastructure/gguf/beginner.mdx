@@ -1,0 +1,81 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "GGUF"
+level: beginner
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "gguf"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "llama.cpp — GGUF format documentation"
+    url: "https://github.com/ggml-org/llama.cpp/blob/master/docs/gguf.md"
+---
+
+## One file that just works
+
+Most model formats you'll meet split a model across several files: weight
+shards, a separate tokenizer file, a config JSON, and so on — fine for a GPU
+server, annoying if you just want to run a model on your laptop. **GGUF** is a
+single-file format (used by `llama.cpp` and, under the hood, by Ollama) that
+bundles the weights, the tokenizer, and metadata all in one `.gguf` file. Copy
+one file to a machine, point a tool at it, and it runs — no separate downloads,
+no version-mismatch between a tokenizer and its weights. GGUF models are also
+usually quantized (compressed to 4-bit, 5-bit, or 8-bit) specifically so they can
+run well on CPUs and consumer GPUs, not just data-center hardware.
+
+A typical GGUF filename tells you what's inside before you even open it:
+
+```
+llama-3.1-8b-instruct.Q4_K_M.gguf
+```
+
+`llama-3.1-8b-instruct` — the model. `Q4_K_M` — quantized to roughly 4 bits per
+weight, using the "k-quant" method, "medium" variant (more on what that means in
+the intermediate lesson).
+
+## Running one
+
+With Ollama, everything — download, conversion awareness, running — is one
+command:
+
+```bash
+ollama run llama3.1:8b-instruct-q4_K_M
+```
+
+With `llama.cpp` directly, once you have a `.gguf` file on disk:
+
+```bash
+llama-cli -m llama-3.1-8b-instruct.Q4_K_M.gguf -p "Explain GGUF in one sentence:"
+```
+
+`-m` points at the model file, `-p` is your prompt. No GPU required — `llama.cpp`
+runs on CPU by default and can optionally offload some layers to a GPU if one's
+available (`-ngl N` to offload `N` layers).
+
+## Why quantized GGUF models are so popular for local use
+
+A full-precision (16-bit) 8B-parameter model needs roughly 16GB just for weights
+— out of reach for most laptops. The same model quantized to 4-bit needs roughly
+a quarter of that, around 4-5GB, small enough to run comfortably on a machine
+with 16GB of RAM. GGUF's quantization is specifically tuned to keep this
+compression from destroying output quality, which is why "download a GGUF and
+run it locally" has become the default on-ramp for anyone experimenting with
+open-weight LLMs outside a GPU server.
+
+## Try it yourself
+
+You see two files: `phi-3-mini.Q8_0.gguf` (4.1GB) and `phi-3-mini.Q4_K_M.gguf`
+(2.3GB). Your laptop has 8GB of RAM total. Which one should you try first, and
+why?
+
+<details>
+<summary>Solution</summary>
+
+`Q4_K_M` — at 2.3GB it leaves much more headroom for your OS and other running
+programs on an 8GB machine, whereas the 4.1GB `Q8_0` file, plus the runtime's own
+overhead and context/KV-cache memory, risks running out of RAM or swapping
+heavily. `Q8_0` is closer to full precision and would give slightly better
+output quality, but on constrained hardware the lower-bit quantization is
+usually the more usable choice.
+</details>

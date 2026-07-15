@@ -1,0 +1,79 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Vectors"
+level: beginner
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "vectors"
+estReadTime: 6
+resources:
+  - type: video
+    title: "3Blue1Brown — Vectors, what even are they?"
+    url: "https://www.youtube.com/watch?v=fNk_zzaMoSs"
+  - type: docs
+    title: "NumPy — Array creation"
+    url: "https://numpy.org/doc/stable/user/basics.creation.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## A vector is just a list of numbers
+
+In AI, a vector is an ordered list of numbers that represents *something* —
+a point in space, a word, an image, a user. Example: `[5.1, 3.5, 1.4, 0.2]` could be
+four measurements of a flower (petal length, petal width, etc).
+
+```python
+import numpy as np
+flower = np.array([5.1, 3.5, 1.4, 0.2])
+print(flower.shape)  # (4,) — a vector of 4 numbers
+```
+
+That's it. Everything else — embeddings, images, audio — is "turn the thing into a
+list of numbers" so a computer can do math with it.
+
+## Why "dimensions"?
+
+Each number in the vector is one **dimension**. A 2D vector `[x, y]` is a point on a
+flat plane. A word embedding might have 768 dimensions — you can't draw it, but the
+math works exactly the same as 2D, just with more numbers.
+
+<Mermaid client:visible code={`flowchart LR
+  A["Raw thing (flower, word, image)"] --> B["Feature extraction"]
+  B --> C["Vector: [5.1, 3.5, 1.4, 0.2]"]
+  C --> D["Math: distance, similarity, addition"]`} />
+
+## The two operations that matter most
+
+**Addition** — combine two vectors element by element:
+```python
+a = np.array([1, 2])
+b = np.array([3, 4])
+a + b  # [4, 6]
+```
+
+**Dot product** — multiply matching elements and sum them. This single operation is
+the basis of nearly every neural network layer and every "similarity" score in AI:
+```python
+np.dot(a, b)  # 1*3 + 2*4 = 11
+```
+
+## Try it yourself
+
+Two word embeddings, `cat = [0.9, 0.1]` and `dog = [0.8, 0.2]`, are close together
+(both are pets). A third, `car = [0.1, 0.9]`, is far from both. Compute the dot product
+of `cat` and `dog`, then `cat` and `car` — which is bigger?
+
+<details>
+<summary>Solution</summary>
+
+```python
+cat = np.array([0.9, 0.1])
+dog = np.array([0.8, 0.2])
+car = np.array([0.1, 0.9])
+print(np.dot(cat, dog))  # 0.74 — higher, they're "similar"
+print(np.dot(cat, car))  # 0.18 — lower, they're "different"
+```
+
+Higher dot product ≈ more similar direction. This is the seed idea behind cosine
+similarity, used everywhere in embeddings and RAG search.
+</details>

@@ -1,0 +1,61 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Conditional Probability"
+level: intermediate
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "conditional-probability"
+estReadTime: 8
+resources:
+  - type: article
+    title: "The chain rule of probability, explained"
+    url: "https://www.probabilitycourse.com/chapter1/1_4_3_conditional_probability.php"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The chain rule: how autoregressive models actually work
+
+Any joint probability can be factored into a product of conditionals:
+
+```
+P(w1, w2, w3) = P(w1) · P(w2 | w1) · P(w3 | w1, w2)
+```
+
+This **chain rule** is exactly the mathematical basis for how GPT-style models
+generate text: predicting the probability of an entire sentence is decomposed into
+predicting one token at a time, each conditioned on everything before it.
+
+<Mermaid client:visible code={`flowchart LR
+  W1["P('The')"] --> W2["P('cat' | 'The')"]
+  W2 --> W3["P('sat' | 'The cat')"]
+  W3 --> W4["P('down' | 'The cat sat')"]`} />
+
+```python
+# conceptually, generating text = repeatedly sampling from a conditional
+def generate(model, prompt, steps=5):
+    tokens = prompt
+    for _ in range(steps):
+        next_token_probs = model(tokens)  # P(next | tokens so far)
+        next_token = sample(next_token_probs)
+        tokens = tokens + [next_token]
+    return tokens
+```
+
+## Conditional independence
+
+Two events are **conditionally independent** given a third if, once you know that
+third thing, learning about one tells you nothing new about the other:
+`P(A | B, C) = P(A | C)`. This assumption underlies Naive Bayes classifiers — they
+assume features are conditionally independent given the class, which is rarely
+literally true but works well enough in practice because the assumption mainly
+affects calibration, not the ranking of which class is most likely.
+
+## Conditioning changes the sample space, not just the number
+
+A subtle but important point: `P(A | B)` isn't just "shrink P(A) by some factor" — it's
+computed over a *restricted* sample space (only the cases where B is true). This is
+why conditional probabilities can sometimes be *larger* than the unconditional one,
+and why sloppy intuition ("more info should make things more certain") can mislead —
+conditioning on the wrong or irrelevant variable can leave a probability unchanged or
+even shift it the "wrong" way if there's a lurking confound (Simpson's paradox is the
+classic example of this going wrong).

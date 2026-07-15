@@ -1,0 +1,74 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "GPT-3"
+level: beginner
+phaseSlug: "phase-14-research-literacy"
+phaseName: "Research Literacy"
+topicSlug: "gpt-3"
+estReadTime: 7
+resources:
+  - type: article
+    title: "Language Models are Few-Shot Learners (original paper)"
+    url: "https://arxiv.org/abs/2005.14165"
+  - type: article
+    title: "The Illustrated GPT-2 — Jay Alammar"
+    url: "https://jalammar.github.io/illustrated-gpt2/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The problem before this paper
+
+BERT and GPT-2 had already shown that pretraining a Transformer on huge amounts of
+text produced useful general-purpose language understanding. But using that
+pretrained model for a specific task — sentiment analysis, translation,
+summarization — still normally required a **fine-tuning** step: collecting a
+labeled dataset for that exact task and updating the model's weights on it. That
+meant a new dataset and a new training run for every new task, even though the
+model had already "read" nearly the entire internet.
+
+## The core idea, in plain language
+
+GPT-3's authors asked: what if a language model, made large enough, could learn a
+new task just from a few examples typed directly into the prompt — no weight
+updates, no separate training run at all? They called this **in-context
+learning**. You simply show the model a handful of examples of the task
+(input/output pairs) as text, followed by a new input, and it predicts a
+plausible output by pattern-matching against the examples it just read.
+
+A useful analogy: instead of sending a new employee to a multi-week training
+course every time you need them to do a slightly different task (fine-tuning),
+you just show them two or three worked examples on a sticky note and let them
+figure out the pattern (in-context learning). GPT-3 scaled the underlying model
+from GPT-2's 1.5 billion parameters to 175 billion, and the striking discovery
+was that this "read a few examples, then generalize" ability got dramatically
+better as the model got bigger — it wasn't explicitly trained to do this, it
+emerged from scale.
+
+<Mermaid client:visible code={`flowchart TB
+  A["Fine-tuning (before): new labeled dataset + training run per task"] --> B["Task-specific model"]
+  C["Few-shot prompting (GPT-3): a few examples typed into the prompt"] --> D["Same frozen model handles the new task"]`} />
+
+## Why it mattered
+
+GPT-3 demonstrated that scale itself — more parameters, more data, more compute —
+could substitute for task-specific training, at least for many tasks. That
+observation reframed how the field thought about building AI systems: instead of
+training a new model per task, you train one very large model once and *prompt*
+it differently for each use case. This is the direct ancestor of how you interact
+with ChatGPT, Claude, and virtually every modern LLM product today — through
+natural-language prompts, not custom training runs.
+
+## Try it yourself
+
+Can you explain the core idea of this paper in one sentence to a non-technical
+friend?
+
+<details>
+<summary>Solution</summary>
+
+Something like: "Instead of retraining a language model every time you want it to
+do something new, this paper showed that if you make the model big enough, you can
+just show it a few examples of what you want directly in your question, and it
+will figure out the pattern and do it — no retraining required."
+
+</details>

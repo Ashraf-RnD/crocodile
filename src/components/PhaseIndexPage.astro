@@ -1,0 +1,46 @@
+---
+import Base from "../layouts/Base.astro";
+import Sidebar from "./Sidebar.astro";
+import PhaseProgressBar from "./PhaseProgressBar.tsx";
+
+interface Topic {
+  slug: string;
+  title: string;
+  category: string | null;
+}
+
+interface Phase {
+  id: number;
+  slug: string;
+  name: string;
+  duration: string | null;
+  objective: string | null;
+  topicCount: number;
+  topics: Topic[];
+}
+
+const { phase } = Astro.props as { phase: Phase };
+const topicSlugs = phase.topics.map((t) => t.slug);
+---
+<Base title={phase.name}>
+  <div class="app-shell">
+    <Sidebar activePhaseSlug={phase.slug} />
+    <main class="main">
+      <div class="breadcrumb"><a href="/">Roadmap</a> / {phase.name}</div>
+      <h1>{phase.id}. {phase.name}</h1>
+      {phase.objective && <p style="color: var(--text-muted);">{phase.objective}</p>}
+      {phase.duration && <p style="font-size: 0.8rem; color: var(--text-muted);">Duration: {phase.duration}</p>}
+
+      <PhaseProgressBar client:load phaseSlug={phase.slug} topicSlugs={topicSlugs} />
+
+      <ul class="topic-list" style="margin-top: 1.5rem;">
+        {phase.topics.map((topic) => (
+          <li class="topic-card">
+            <a href={`/phase/${phase.slug}/${topic.slug}/beginner/`}>{topic.title}</a>
+            {topic.category && <span class="topic-card-meta">{topic.category}</span>}
+          </li>
+        ))}
+      </ul>
+    </main>
+  </div>
+</Base>

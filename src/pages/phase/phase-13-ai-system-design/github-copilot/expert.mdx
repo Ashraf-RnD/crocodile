@@ -1,0 +1,101 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "GitHub Copilot"
+level: expert
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "github-copilot"
+estReadTime: 11
+resources:
+  - type: article
+    title: "GitHub Blog — Inside GitHub: Working with the LLMs behind Copilot"
+    url: "https://github.blog/ai-and-ml/github-copilot/inside-github-working-with-the-llms-behind-github-copilot/"
+  - type: article
+    title: "GitHub Blog — How we improved push processing on GitHub (scale/infra engineering)"
+    url: "https://github.blog/engineering/infrastructure/how-we-improved-push-processing-on-github/"
+---
+
+## A note on sourcing
+
+GitHub has published high-level engineering posts about Copilot but not a
+full architecture spec. The following reasons from those posts, general LLM
+serving practice, and the hard constraints any inline code-completion product
+at this scale must satisfy — treat specifics as plausible engineering, not
+confirmed internals.
+
+## The core tension: cancellation-heavy traffic at massive volume
+
+Inline completions are requested on close to every keystroke pause across
+millions of developers, and the overwhelming majority are **never accepted**
+— the developer keeps typing, invalidating the suggestion before it's even
+useful. This makes Copilot's traffic pattern fundamentally different from
+chat products: the system has to optimize for **cheap speculative work that's
+usually thrown away**, not for maximizing the value of every request.
+
+Practical consequences:
+
+- **Aggressive client-side debouncing and cancellation**: the editor extension
+  cancels in-flight requests the moment the cursor context changes materially,
+  so wasted generations don't run to completion server-side either — this
+  needs a fast cancel signal, not just "stop rendering the response."
+- **Prompt-prefix caching at the inference layer**: consecutive keystrokes
+  typically share a long common prefix with the previous request. Serving
+  infrastructure that can reuse the KV cache from a very recent, near-
+  identical prompt avoids recomputing attention over most of the context,
+  turning many requests into cheap incremental work instead of full inference
+  passes.
+- **Small model bias**: given the volume and the fact that most output is
+  discarded, the cost/latency case for smaller, distilled, or quantized
+  models is much stronger here than for a chat product where every response
+  is read.
+
+## Fill-in-the-middle changes the objective, not just the prompt
+
+Inline completion isn't "continue this text" — the model must produce code
+that's coherent with content **after** the cursor too (the rest of the
+function, the closing brace already present). This requires training and
+serving with a fill-in-the-middle (FIM) objective and prompt format (prefix,
+suffix, and a special infill token), not the plain left-to-right generation a
+chat model uses. Getting FIM prompt construction wrong — e.g. truncating the
+suffix inconsistently with how the model was trained to expect it — silently
+degrades suggestion quality in ways that are hard to detect from top-line
+metrics.
+
+## Context relevance at repo scale
+
+For chat/agent flows, the hard problem isn't generation, it's **picking the
+right dozen files out of tens of thousands** without an expensive full-repo
+scan on every request. This generally means maintaining a repo-level index
+(semantic embeddings, symbol graphs, or both) that's incrementally updated as
+commits land — a background system with its own scaling and staleness
+concerns, separate from the request-time inference path. A stale index after
+a large refactor can quietly cause the model to suggest code against
+functions that no longer exist, which is a correctness failure mode that's
+invisible until a suggestion is accepted and fails to compile.
+
+## Tool-use / agent mode: correctness and blast radius
+
+Agent-mode flows that can read files, run tests, or apply edits introduce a
+class of problems inline completion never had: a tool call can have side
+effects. This pushes toward:
+
+- **Sandboxed execution** for anything that runs code, isolated per-session,
+  with resource and time limits so one runaway agent loop doesn't consume
+  shared infrastructure.
+- **A hard cap on tool-call iterations** per user request, since an agent
+  loop that keeps calling tools without converging is both a cost problem and
+  a UX problem (the user is waiting).
+- **Explicit user confirmation gates** before higher-risk actions (multi-file
+  edits, running arbitrary shell commands), which trades some autonomy for
+  safety — a product decision with real latency and friction cost.
+
+## Trade-off summary
+
+| Concern | Inline completions | Chat / agent mode |
+|---|---|---|
+| Latency budget | Low hundreds of ms | Seconds, streaming acceptable |
+| Model size | Small/fast, often distilled | Larger, more capable |
+| Context source | Local file(s), tight token budget | Repo-wide retrieval, chat history |
+| Dominant cost driver | Volume x mostly-discarded generations | Fewer requests, but retrieval + larger model per request |
+| Caching strategy | Prompt-prefix / KV-cache reuse across keystrokes | Retrieval index caching, response caching less useful (queries vary more) |
+| Failure mode to guard against | Stale/irrelevant suggestion, wasted GPU cycles | Side-effecting tool calls, runaway agent loops |

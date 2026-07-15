@@ -1,0 +1,85 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Confusion Matrix"
+level: beginner
+phaseSlug: "phase-03-machine-learning"
+phaseName: "Machine Learning"
+topicSlug: "confusion-matrix"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "scikit-learn: confusion_matrix"
+    url: "https://scikit-learn.org/stable/modules/generated/sklearn.metrics.confusion_matrix.html"
+  - type: video
+    title: "StatQuest: The Confusion Matrix"
+    url: "https://www.youtube.com/watch?v=Kdsp6soqA7o"
+---
+
+## A scoreboard for a classifier
+
+Every other classification metric — accuracy, precision, recall, F1 — is just a summary
+computed from one underlying table: the **confusion matrix**. For a binary classifier, it's
+a 2x2 grid that splits every prediction into four buckets:
+
+- **True Positive (TP)** — predicted positive, actually positive
+- **True Negative (TN)** — predicted negative, actually negative
+- **False Positive (FP)** — predicted positive, actually negative (a false alarm)
+- **False Negative (FN)** — predicted negative, actually positive (a miss)
+
+## In code
+
+```python
+from sklearn.metrics import confusion_matrix
+
+# 1 = has disease, 0 = healthy
+y_true = [1, 0, 1, 1, 0, 1, 0, 0, 1, 0]
+y_pred = [1, 0, 0, 1, 0, 1, 1, 0, 1, 0]
+
+cm = confusion_matrix(y_true, y_pred)
+print(cm)
+# [[4 1]   <- actual 0: 4 correctly predicted 0, 1 wrongly predicted 1 (FP)
+#  [1 4]]  <- actual 1: 1 wrongly predicted 0 (FN), 4 correctly predicted 1 (TP)
+```
+
+scikit-learn's convention: **rows are the actual (true) class, columns are the predicted
+class**. Reading row 0 tells you what happened to every example that was truly negative;
+reading row 1 tells you what happened to every example that was truly positive.
+
+```python
+tn, fp, fn, tp = cm.ravel()
+print(f"TP={tp} TN={tn} FP={fp} FN={fn}")
+# TP=4 TN=4 FP=1 FN=1
+```
+
+`.ravel()` flattens the 2x2 grid into `tn, fp, fn, tp` in that fixed order — a handy
+shortcut once you know a matrix is binary.
+
+## Try it yourself
+
+A spam filter produces these predictions on 10 emails (`1` = spam, `0` = not spam):
+
+```python
+y_true = [1, 1, 0, 1, 0, 0, 1, 1, 0, 1]
+y_pred = [1, 0, 0, 1, 0, 0, 0, 1, 1, 1]
+```
+
+Compute the confusion matrix and identify how many false positives (legit emails wrongly
+flagged as spam) it made.
+
+<details>
+<summary>Solution</summary>
+
+```python
+from sklearn.metrics import confusion_matrix
+
+y_true = [1, 1, 0, 1, 0, 0, 1, 1, 0, 1]
+y_pred = [1, 0, 0, 1, 0, 0, 0, 1, 1, 1]
+
+cm = confusion_matrix(y_true, y_pred)
+tn, fp, fn, tp = cm.ravel()
+print(cm)
+print(f"False positives: {fp}")
+# False positives: 1 (one legitimate email, index 8, was wrongly flagged as spam)
+```
+
+</details>

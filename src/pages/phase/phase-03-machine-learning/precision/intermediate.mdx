@@ -1,0 +1,112 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Precision"
+level: intermediate
+phaseSlug: "phase-03-machine-learning"
+phaseName: "Machine Learning"
+topicSlug: "precision"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "scikit-learn: Precision, recall and F-measures"
+    url: "https://scikit-learn.org/stable/modules/model_evaluation.html#precision-recall-f-measure-metrics"
+  - type: docs
+    title: "sklearn.metrics.precision_recall_curve"
+    url: "https://scikit-learn.org/stable/modules/generated/sklearn.metrics.precision_recall_curve.html"
+---
+
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Precision in a real classification workflow
+
+`precision_score` takes real predicted labels, not probabilities, so it reflects whatever threshold you already applied (0.5 by default for most classifiers).
+
+```python
+from sklearn.datasets import make_classification
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import precision_score, classification_report
+
+X, y = make_classification(n_samples=2000, weights=[0.9, 0.1], random_state=42)
+X_train, X_test, y_train, y_test = train_test_split(X, y, stratify=y, random_state=42)
+
+clf = LogisticRegression().fit(X_train, y_train)
+y_pred = clf.predict(X_test)
+
+print(f"Precision: {precision_score(y_test, y_pred):.3f}")
+print(classification_report(y_test, y_pred))
+```
+
+## Multiclass: the `average` parameter
+
+Precision is naturally defined for binary problems (positive vs. negative). For multiclass, `average` controls how per-class precision scores are combined:
+
+- `average='binary'` (default): only valid for two classes, precision of the designated positive class.
+- `average='micro'`: aggregate TP and FP across all classes first, then compute one global precision. Dominated by the most frequent class.
+- `average='macro'`: compute precision per class, then take the unweighted mean. Every class counts equally, so rare classes matter as much as common ones.
+- `average='weighted'`: like macro, but weighted by each class's support (number of true instances). Less sensitive to rare-class noise than macro.
+
+```python
+from sklearn.metrics import precision_score
+
+y_true = [0, 1, 2, 2, 1, 0, 2, 1]
+y_pred = [0, 2, 2, 2, 1, 0, 0, 1]
+
+print("macro:   ", precision_score(y_true, y_pred, average="macro"))
+print("micro:   ", precision_score(y_true, y_pred, average="micro"))
+print("weighted:", precision_score(y_true, y_pred, average="weighted"))
+print("per-class:", precision_score(y_true, y_pred, average=None))
+```
+
+Use `macro` when every class matters regardless of frequency (e.g. rare defect types), `weighted` when overall correctness weighted by class prevalence is what matters, and `micro` when you care about aggregate correctness across all predictions (common in multi-label settings).
+
+## The precision-recall trade-off
+
+Most classifiers don't output labels directly — they output a probability, which is then thresholded (usually at 0.5) to produce a label. Moving that threshold trades precision against recall.
+
+<Mermaid client:visible code={`flowchart LR
+  A[predict_proba scores] --> B{threshold}
+  B -->|raise threshold| C[fewer predicted positives]
+  B -->|lower threshold| D[more predicted positives]
+  C --> E[higher precision, lower recall]
+  D --> F[lower precision, higher recall]`} />
+
+```python
+import numpy as np
+from sklearn.metrics import precision_score, recall_score
+
+probs = clf.predict_proba(X_test)[:, 1]
+
+for threshold in [0.3, 0.5, 0.7, 0.9]:
+    preds_at_threshold = (probs >= threshold).astype(int)
+    p = precision_score(y_test, preds_at_threshold, zero_division=0)
+    r = recall_score(y_test, preds_at_threshold, zero_division=0)
+    print(f"threshold={threshold:.1f}  precision={p:.3f}  recall={r:.3f}")
+```
+
+As the threshold rises, the model only predicts positive when it's very confident. Fewer positive predictions means each one is more likely correct (precision up), but more true positives get missed (recall down).
+
+## When to optimize for precision
+
+Optimize for precision when a **false positive is costly or annoying**:
+
+- Flagging content for manual moderation review — each false positive wastes a reviewer's time.
+- Spam filters — a false positive buries a legitimate email, which users notice immediately and resent.
+- Fraud alerts that block a transaction — falsely blocking a legitimate purchase damages trust.
+
+Precision is the wrong metric to chase *alone* when missing positives is the bigger risk — e.g. cancer screening, where a missed case (false negative) is far worse than a false alarm. In those cases recall, or a combined metric like F1, is more appropriate.
+
+## Pitfall: precision is trivially gameable
+
+A model that predicts positive exactly once, and only when overwhelmingly confident, can post excellent precision while catching almost nothing.
+
+```python
+# A degenerate "high precision" model: only ever predicts positive
+# for the single most confident sample.
+very_high_threshold_preds = (probs >= 0.999).astype(int)
+print(f"Positives predicted: {very_high_threshold_preds.sum()}")
+print(f"Precision: {precision_score(y_test, very_high_threshold_preds, zero_division=0):.3f}")
+print(f"Recall:    {recall_score(y_test, very_high_threshold_preds, zero_division=0):.3f}")
+```
+
+High precision with near-zero recall is a red flag, not a win. Always report precision alongside recall (or F1) — never in isolation — so a reviewer can catch this kind of gaming.

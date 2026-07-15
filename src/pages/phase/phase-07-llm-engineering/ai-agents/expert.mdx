@@ -1,0 +1,92 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "AI Agents"
+level: expert
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "ai-agents"
+estReadTime: 13
+resources:
+  - type: article
+    title: "Anthropic — Building Effective Agents"
+    url: "https://www.anthropic.com/engineering/building-effective-agents"
+  - type: article
+    title: "METR — Measuring AI Ability to Complete Long Tasks"
+    url: "https://metr.org/blog/2025-03-19-measuring-ai-ability-to-complete-long-tasks/"
+---
+
+## The core failure mode: compounding error over a trajectory
+
+A single LLM call has one shot at being wrong. An agent making N sequential decisions
+has its overall success probability bounded roughly by the product of each step's
+correctness — even a model that's 95% reliable per step degrades to well under 60%
+success over a 10-step trajectory if errors aren't caught and corrected along the way.
+This compounding is the single biggest reason agent reliability engineering looks
+different from single-call prompt engineering: the goal isn't maximizing per-call
+accuracy in isolation, it's maximizing the probability that the *whole trajectory*
+recovers from the inevitable per-step errors rather than compounding them.
+
+## Error recovery is the actual differentiator between agent systems
+
+Given that some steps will fail or go sideways, what matters is whether the agent
+architecture *notices* and *recovers*:
+
+- **Self-correction loops** — feeding tool errors, validation failures, or explicit
+  "did this actually work?" checks back into the model's context so it can retry with
+  corrected reasoning, rather than assuming success and forging ahead.
+- **Reflection steps** — an explicit step where the agent (or a separate critic model)
+  evaluates its own recent progress against the original goal before continuing,
+  catching drift before it compounds further.
+- **Checkpointing and rollback** — persisting state at each step (LangGraph's
+  checkpointer abstraction) so a failed trajectory can be resumed from a known-good
+  point rather than restarted from scratch, and so human review can intervene at a
+  specific step without losing all prior progress.
+
+Systems that skip these and rely purely on "the model will figure it out" tend to
+degrade sharply on tasks requiring more than a handful of sequential decisions —
+consistent with what benchmarks measuring long-horizon task completion (e.g. METR's
+work on task-length scaling) have found: current models' reliability drops off as a
+function of the number of sequential steps and time-horizon a task requires, not just
+its individual-step difficulty.
+
+## Autonomy level is a spectrum, and higher isn't always better
+
+Full autonomy (agent decides everything, executes without checkpoints) is a design
+choice with real costs, not a maturity milestone to always aim for. A useful way to
+reason about it: match the autonomy level to the reversibility and stakes of the
+actions involved. Read-only, low-stakes agents (research, drafting) can run with
+minimal supervision; agents that take side-effecting, hard-to-reverse actions
+(financial transactions, sending communications, modifying production data) warrant
+explicit human checkpoints regardless of how capable the underlying model is — the
+risk profile, not the model's raw capability, is what should set the autonomy level.
+
+## Determinism, testability, and the workflow-vs-agent trade-off
+
+The more autonomous an agent's control flow, the harder it is to write deterministic
+tests for it — the same input can legitimately produce different valid trajectories
+across runs. This pushes evaluation toward trajectory-level and outcome-level testing
+(did the task get completed correctly, regardless of exact path) rather than
+step-by-step assertion testing, which is a real loss of the tight, deterministic test
+coverage a fixed workflow affords. This is the concrete engineering cost behind
+Anthropic's workflow-vs-agent framing: every increment of autonomy you grant an agent
+is traded directly against how precisely you can test and predict its behavior ahead
+of time.
+
+## Trade-offs across agent design choices
+
+| Design choice | Reliability | Predictability / testability | Engineering cost |
+|---|---|---|---|
+| Fixed workflow (no agentic branching) | Highest, for known task shapes | Highest — deterministic paths | Lowest |
+| Bounded agent (limited tool set, max steps, checkpoints) | Good — errors caught early | Moderate — trajectory-level testing needed | Moderate |
+| Fully autonomous agent (broad tools, high step budget, no checkpoints) | Degrades on long/complex tasks without recovery mechanisms | Low — near-impossible to fully pre-specify | Highest, but least explicit control |
+| Multi-agent decomposition (see Multi-Agent Systems) | Can improve reliability per sub-task via narrower scope | Moderate — coordination adds its own failure modes | Highest overall system complexity |
+
+## What "production-ready agent" actually requires
+
+Beyond the model and the tool loop: structured logging of every decision and tool
+call for post-hoc debugging, cost and latency budgets enforced per run (not just
+monitored after the fact), a defined fallback behavior when the agent can't make
+progress (escalate to a human, return a partial result, fail closed rather than
+open), and a trajectory-level eval suite that's re-run on every prompt or tool change —
+treating the agent as a system with a reliability SLA, not a demo that happened to
+work on the cases you tried.

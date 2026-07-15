@@ -1,0 +1,89 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Sentence Embeddings"
+level: beginner
+phaseSlug: "phase-05-natural-language-processing"
+phaseName: "Natural Language Processing"
+topicSlug: "sentence-embeddings"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "Sentence-Transformers — official documentation"
+    url: "https://www.sbert.net/"
+  - type: article
+    title: "Reimers & Gurevych — Sentence-BERT paper"
+    url: "https://arxiv.org/abs/1908.10084"
+---
+
+## Turning a whole sentence into one meaningful vector
+
+Word2Vec gives you a vector per *word*. But often you need to compare whole
+*sentences* — "how similar are these two questions?" A **sentence embedding**
+compresses an entire sentence into a single fixed-size vector, chosen so that
+sentences with similar meaning end up with similar vectors, no matter how they're
+worded.
+
+Think of it like a movie's one-line summary: two movies with completely different
+dialogue can still have nearly identical loglines if their plots are similar. Sentence
+embeddings are the model's way of writing that "logline vector" for any piece of text.
+
+### Comparing sentences with cosine similarity
+
+```python
+from sentence_transformers import SentenceTransformer, util
+
+model = SentenceTransformer("all-MiniLM-L6-v2")
+
+sentences = [
+    "The cat sat on the mat.",
+    "A kitten was resting on the rug.",
+    "The stock market crashed today.",
+]
+
+embeddings = model.encode(sentences)
+print(embeddings.shape)
+# (3, 384) -- 3 sentences, each a 384-number vector
+
+similarity = util.cos_sim(embeddings[0], embeddings[1])
+print(similarity)
+# tensor([[0.72]])  -- high: similar meaning, totally different words
+
+similarity2 = util.cos_sim(embeddings[0], embeddings[2])
+print(similarity2)
+# tensor([[0.05]])  -- low: unrelated topics
+```
+
+Notice sentence 1 and 2 share almost no words in common (`"cat"` vs `"kitten"`,
+`"mat"` vs `"rug"`), yet the model correctly scores them as highly similar — that's
+the whole point of a *semantic* embedding rather than a keyword-matching approach.
+
+### Where this shows up in real products
+
+Sentence embeddings power semantic search ("find documents about X" even when they
+don't contain the word X), duplicate question detection, and recommendation systems
+that group similar items by meaning rather than exact text match.
+
+## Try it yourself
+
+Using `SentenceTransformer("all-MiniLM-L6-v2")`, embed the sentences
+`"How do I reset my password?"` and `"I forgot my login credentials"`, then compute
+their cosine similarity. Predict whether it will be high or low before running it.
+
+<details>
+<summary>Solution</summary>
+
+```python
+from sentence_transformers import SentenceTransformer, util
+
+model = SentenceTransformer("all-MiniLM-L6-v2")
+emb = model.encode([
+    "How do I reset my password?",
+    "I forgot my login credentials",
+])
+print(util.cos_sim(emb[0], emb[1]))
+# tensor([[0.6x]]) -- fairly high. The two sentences share no exact
+# words but describe the same underlying problem, which is exactly
+# what a well-trained sentence embedding model is designed to capture.
+```
+
+</details>

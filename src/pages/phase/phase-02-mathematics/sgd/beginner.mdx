@@ -1,0 +1,66 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "SGD"
+level: beginner
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "sgd"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "PyTorch — torch.optim.SGD"
+    url: "https://pytorch.org/docs/stable/generated/torch.optim.SGD.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## SGD is gradient descent, applied to small batches
+
+You already met the gradient descent update rule in the previous topic:
+`weight -= learning_rate * gradient`. **Stochastic Gradient Descent (SGD)** is what
+you get when you compute that gradient on a small random batch of data instead of the
+whole dataset — which is how essentially all neural network training actually works
+day to day.
+
+<Mermaid client:visible code={`flowchart LR
+  Data["Full training set"] --> Shuffle["Shuffle and split into batches"]
+  Shuffle --> B1["Batch 1"] --> U1["Update weights"]
+  U1 --> B2["Batch 2"] --> U2["Update weights"]
+  U2 --> More["... repeat for every batch, every epoch"]`} />
+
+## In code (PyTorch)
+
+```python
+import torch
+
+model = torch.nn.Linear(10, 1)
+optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+
+for batch_x, batch_y in data_loader:
+    optimizer.zero_grad()               # clear old gradients
+    predictions = model(batch_x)
+    loss = torch.nn.functional.mse_loss(predictions, batch_y)
+    loss.backward()                     # compute gradients
+    optimizer.step()                    # weights -= lr * gradient
+```
+
+This four-line pattern — zero grad, forward, backward, step — is the core of nearly
+every PyTorch training loop you'll ever write.
+
+## Why "stochastic"?
+
+Because each batch is a small random sample, the gradient computed from it is a noisy
+*estimate* of the true gradient over the whole dataset — not the exact same number
+you'd get from a full pass. That randomness is a feature, not just a limitation: it
+lets training run on datasets far too large to fit in memory at once, and gives the
+process a chance to jiggle out of small, unhelpful dips in the loss surface.
+
+## Try it yourself
+
+If your dataset has 10,000 examples and your batch size is 100, how many weight
+updates happen in one epoch (one full pass through the data)?
+
+<details>
+<summary>Solution</summary>
+
+`10,000 / 100 = 100` updates per epoch — one update per batch, not one per example.
+</details>

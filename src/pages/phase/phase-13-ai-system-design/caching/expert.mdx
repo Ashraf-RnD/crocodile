@@ -1,0 +1,99 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Caching"
+level: expert
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "caching"
+estReadTime: 12
+resources:
+  - type: docs
+    title: "Anthropic Docs — Prompt caching"
+    url: "https://docs.claude.com/en/docs/build-with-claude/prompt-caching"
+  - type: article
+    title: "vLLM / PagedAttention paper — Efficient Memory Management for LLM Serving"
+    url: "https://arxiv.org/abs/2309.06180"
+---
+
+## Semantic cache correctness is a precision/recall trade-off with real cost
+
+Semantic caching's core risk is **false positives**: serving a cached answer
+to a query that's similar but not equivalent to the one that generated it.
+Unlike a traditional exact-match cache, where a "hit" is unambiguously
+correct, a semantic cache hit is a probabilistic judgment, and the failure
+mode is silent — the system confidently returns a wrong-but-plausible
+answer with no error signal. This is qualitatively worse than a cache miss
+(which just costs latency). Mitigating this requires either a conservative
+similarity threshold (accepting a lower hit rate to avoid false positives)
+or a secondary cheap verification step (a fast classifier or heuristic
+confirming the cached answer is actually still valid for the new query)
+before serving from cache — both are real engineering investments, not a
+config flag.
+
+## Prefix caching interacts with routing at the infrastructure level
+
+Prompt/prefix caching lives in GPU memory as part of the inference engine's
+KV cache, which means its effectiveness depends entirely on whether
+requests sharing a prefix land on a replica that already has that prefix's
+state cached. This turns caching into a **routing/affinity problem**: naive
+load balancing that spreads requests evenly across replicas will
+systematically destroy prefix cache hit rates, because a request sharing a
+prefix with a previous one has no better than 1/N chance of landing back on
+the replica that cached it. Production systems that care about prefix
+caching implement affinity-aware routing (hashing on prefix content to
+consistently route related requests to the same replica pool), which then
+creates its own load-balancing tension — perfect affinity can create hot
+spots if one prefix (e.g. a popular system prompt) drives disproportionate
+traffic to a small subset of replicas.
+
+## Cache poisoning and staleness under adversarial or fast-changing input
+
+A cache trained purely on observed traffic can be poisoned — if attackers
+(or just unlucky ordering) can influence what gets cached, they can cause
+future users to receive a manipulated cached response. This matters more
+for AI systems than typical caches because the "correct" answer is often
+subjective or context-dependent, making poisoned-cache detection harder than
+detecting a corrupted cached webpage. Separately, caches tied to any
+external ground truth (prices, availability, policy text) need
+invalidation tied to the actual source of truth changing, not just a fixed
+TTL — a TTL that's too long serves stale data with real business
+consequences (a returned item priced wrong), and one that's too short
+defeats the purpose of caching for genuinely stable content. The right
+answer is usually **event-driven invalidation** for anything with a known
+source of truth, with TTL as a fallback safety net, not the primary
+mechanism.
+
+## Multi-layer cache coherency
+
+A system with response caching, prefix caching, and embedding caching
+simultaneously has to reason about how a change propagates across all three
+— e.g. updating a system prompt should invalidate cached responses that
+depended on the old prompt (via a cache key that includes prompt version)
+and should also invalidate any prefix-cached KV state for the old prompt
+text, since serving a cached response generated under an old system prompt
+after a prompt update can be a compliance or correctness issue (the model
+was supposed to follow new instructions). Designing cache keys to include
+every dimension the output actually depends on (model version, prompt
+version, relevant feature flags) — not just the user-visible query — is
+what prevents this class of subtle staleness bug.
+
+## Cost accounting: caching shifts, not eliminates, spend
+
+Caching reduces LLM inference cost, but the infrastructure to make it
+effective (a distributed low-latency key-value store, an embedding index for
+semantic matching, affinity-aware routing) has its own real cost and
+operational burden. For workloads with low cache hit rates (highly
+personalized, highly time-sensitive queries), the caching infrastructure can
+cost more than the inference it's meant to save — cache hit rate needs to be
+measured and the ROI validated per workload, not assumed universally
+positive.
+
+## Trade-off summary
+
+| Concern | Simple approach | Production-grade approach | Cost |
+|---|---|---|---|
+| Cache matching | Exact string match | Semantic (embedding-based) matching | Risk of false-positive hits, needs threshold tuning |
+| Prefix reuse | None — recompute every request | Prefix/prompt caching with affinity routing | Routing complexity, potential hot spots |
+| Invalidation | Fixed TTL for everything | Event-driven invalidation tied to source of truth | Requires wiring cache to upstream change events |
+| Cache keys | Query text only | Query + model/prompt version + relevant flags | More cache misses on legitimate changes, but correct |
+| Infra cost | Assume caching always saves money | Measure hit rate and ROI per workload | Caching infra can cost more than it saves for low-hit-rate workloads |

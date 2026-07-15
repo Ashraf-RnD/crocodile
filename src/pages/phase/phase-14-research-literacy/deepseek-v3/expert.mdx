@@ -1,0 +1,100 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "DeepSeek-V3"
+level: expert
+phaseSlug: "phase-14-research-literacy"
+phaseName: "Research Literacy"
+topicSlug: "deepseek-v3"
+estReadTime: 13
+resources:
+  - type: article
+    title: "DeepSeek-V3 Technical Report"
+    url: "https://arxiv.org/abs/2412.19437"
+  - type: article
+    title: "Mixtral of Experts"
+    url: "https://arxiv.org/abs/2401.04088"
+---
+
+## What the paper actually contributed vs. prior work
+
+None of DeepSeek-V3's individual techniques were entirely new in isolation —
+MoE, low-precision training, and latent-compressed attention had all been
+explored in prior research (including DeepSeek's own earlier V2 report, which
+introduced MLA and DeepSeekMoE). The paper's real contribution was **systems
+integration at frontier scale**: combining multi-head latent attention,
+fine-grained MoE with shared experts, auxiliary-loss-free load balancing,
+multi-token prediction, and FP8 mixed-precision training into a single
+671B-parameter (37B active) model, trained stably on 14.8 trillion tokens for
+a reported 2.788 million H800 GPU-hours (~$5.5M), while matching or
+approaching the benchmark performance of leading closed frontier models. That
+combination — this many efficiency techniques stacked simultaneously, at this
+scale, released as open weights with a detailed technical report — was
+without precedent, and the transparency of the report (unusual for a
+frontier-scale training run) let the rest of the field verify and build on
+the specific techniques rather than just the headline result.
+
+## Limitations
+
+- **Reported training cost excludes substantial hidden costs.** The ~$5.5M
+  figure covers only the final training run's GPU-hours — it doesn't include
+  R&D, failed experiments, data curation and cleaning, infrastructure
+  build-out, or the cost of the researchers and engineers involved, all of
+  which are real costs any lab (including DeepSeek) incurs. The figure is
+  best read as "marginal compute cost of the final run," not "total cost to
+  produce a frontier model."
+- **Hardware export-control context.** The model was trained on H800 GPUs — a
+  China-market variant with reduced interconnect bandwidth compared to H100s
+  — because of US export restrictions; some of the efficiency engineering
+  (MLA's memory compression in particular) is partly a response to working
+  around that specific hardware constraint, which is worth keeping in mind
+  when generalizing the cost figures to unconstrained hardware.
+- **Distillation dependence for some capabilities.** Portions of the model's
+  training data and later reasoning-focused successors leaned on outputs
+  distilled from other, larger models — a common but not universally
+  disclosed practice across the field, and one that raises questions about
+  how much of the reported efficiency is genuinely novel versus inherited
+  from prior frontier models' capabilities.
+- **Alignment and content-moderation behavior tied to its origin** attracted
+  scrutiny (e.g. refusal patterns on certain politically sensitive topics),
+  a consideration for any deployment context, distinct from its technical
+  architecture.
+
+## What came after
+
+- **DeepSeek-R1** built a reasoning-focused model on top of the V3 base using
+  large-scale reinforcement learning, achieving strong performance on math
+  and coding benchmarks and triggering its own wave of attention to
+  RL-based reasoning training for open models.
+- **Market and industry reaction ("the DeepSeek moment", January 2025)**
+  prompted a broad re-examination of assumptions about compute requirements
+  for frontier AI, with visible effects on AI-related equity markets and
+  renewed debate over the actual bottlenecks (compute, data, or engineering
+  talent) in frontier model development.
+- **A wave of efficiency-focused open releases** followed, with multiple labs
+  (including Kimi K2, covered in this phase) explicitly building on or
+  extending DeepSeek-V3's architectural choices (MLA in particular).
+- **Renewed attention to FP8 and lower-precision training** across the field,
+  as DeepSeek-V3 served as one of the largest public demonstrations that
+  frontier-scale training could be done reliably below 16-bit precision.
+
+## How it's actually used in production today
+
+DeepSeek-V3 (and its R1 reasoning successor) are widely self-hosted and
+served via low-cost API access, and are commonly used as a base for further
+fine-tuning by teams that want frontier-adjacent capability without frontier
+API pricing. Its architectural choices — MLA for KV-cache efficiency in
+particular — have influenced how other labs design MoE models for efficient
+serving, not just efficient training, since inference cost (not just training
+cost) is what ultimately determines a model's practical deployability at
+scale.
+
+## Comparison: DeepSeek-V3 vs. a dense frontier model of comparable capability
+
+| Dimension | Dense frontier model (illustrative) | DeepSeek-V3 |
+|---|---|---|
+| Total parameters | Often undisclosed, likely dense or coarse MoE | 671B total |
+| Active parameters per token | ~= total (dense) | 37B (MoE-routed) |
+| Attention KV-cache memory | Standard multi-head, larger cache | Compressed via MLA, smaller cache |
+| Training precision | Typically bf16/fp16 | Largely FP8 mixed precision |
+| Reported training compute cost | Not typically disclosed in detail | ~$5.5M / 2.788M H800 GPU-hours (reported) |
+| Weight availability | Closed | Open weights |

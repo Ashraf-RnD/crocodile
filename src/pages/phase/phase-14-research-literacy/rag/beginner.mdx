@@ -1,0 +1,81 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "RAG"
+level: beginner
+phaseSlug: "phase-14-research-literacy"
+phaseName: "Research Literacy"
+topicSlug: "rag"
+estReadTime: 7
+resources:
+  - type: article
+    title: "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks (original paper)"
+    url: "https://arxiv.org/abs/2005.11401"
+  - type: article
+    title: "Pinecone — What is Retrieval-Augmented Generation?"
+    url: "https://www.pinecone.io/learn/retrieval-augmented-generation/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The problem before this paper
+
+A language model's knowledge is baked into its weights during training and
+frozen the moment training ends. That creates two persistent problems: the
+model can't know about anything that happened after its training cutoff, and
+when it doesn't actually know something, it tends to confidently generate a
+plausible-sounding but wrong answer — a **hallucination** — rather than
+admitting uncertainty, because generating fluent text is exactly what it was
+trained to do, with or without the right facts to back it up. Retraining a huge
+model just to update its knowledge is far too expensive to do routinely.
+
+## The core idea, in plain language
+
+The RAG paper's answer: instead of relying purely on what the model
+memorized during training (**parametric** knowledge), give it access to an
+external, searchable collection of documents, and let it **retrieve** relevant
+passages at the moment it needs to answer a question — then generate its
+answer conditioned on those retrieved passages, alongside its own trained
+knowledge.
+
+A useful analogy: think of the difference between a closed-book exam and an
+open-book exam. A model without retrieval is taking a closed-book exam — it
+must recall everything from memory, and if its memory is wrong or incomplete,
+so is its answer. A model with retrieval gets to open a relevant reference book
+to the right page before answering — it can look up the actual fact instead of
+guessing from memory, and if the underlying document collection is updated,
+its "knowledge" updates immediately, with no retraining required.
+
+<Mermaid client:visible code={`flowchart LR
+  Q["User question"] --> R["Retriever: search a document collection"]
+  R --> D["Relevant passages"]
+  Q --> G["Generator (language model)"]
+  D --> G
+  G --> A["Answer, grounded in retrieved text"]`} />
+
+## Why it mattered
+
+RAG showed that combining a retriever with a generator measurably reduced
+factual errors and let a single model answer questions about far more
+information than it could ever memorize in its weights alone — including
+information it never saw during training at all, as long as it's in the
+retrievable document collection. That combination — up-to-date, inspectable,
+swappable knowledge plus a fluent generator — is exactly why RAG became the
+default architecture for building chatbots and assistants over private or
+frequently changing data (internal company documents, recent news, personal
+files) rather than fine-tuning a model on that data directly.
+
+## Try it yourself
+
+Can you explain the core idea of this paper in one sentence to a non-technical
+friend?
+
+<details>
+<summary>Solution</summary>
+
+Something like: "Instead of expecting an AI model to remember every fact
+perfectly from its training, this method lets it look up relevant information
+from a document collection right before answering — like letting a student
+consult their notes during an exam instead of relying purely on memory — which
+makes answers more accurate and lets you update its 'knowledge' just by
+updating the documents, no retraining needed."
+
+</details>

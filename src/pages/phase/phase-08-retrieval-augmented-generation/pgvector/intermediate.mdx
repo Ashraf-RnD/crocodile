@@ -1,0 +1,101 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "pgvector"
+level: intermediate
+phaseSlug: "phase-08-retrieval-augmented-generation"
+phaseName: "Retrieval-Augmented Generation"
+topicSlug: "pgvector"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "pgvector — Indexing (IVFFlat & HNSW)"
+    url: "https://github.com/pgvector/pgvector#indexing"
+  - type: docs
+    title: "LangChain — PGVector integration"
+    url: "https://python.langchain.com/docs/integrations/vectorstores/pgvector/"
+---
+
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Indexing: pgvector needs an ANN index too, above small scale
+
+Without an index, pgvector's similarity search is an exact, sequential scan over
+every row — correct, but linear in table size. Past roughly tens of thousands of
+rows, this gets too slow for interactive queries, so pgvector supports the same kind
+of approximate nearest-neighbor indexes as dedicated vector databases:
+
+```sql
+-- HNSW: better recall/speed trade-off, higher build cost, generally preferred
+CREATE INDEX ON articles USING hnsw (embedding vector_cosine_ops)
+    WITH (m = 16, ef_construction = 64);
+
+-- IVFFlat: cheaper to build, needs to be trained on existing data first
+CREATE INDEX ON articles USING ivfflat (embedding vector_cosine_ops)
+    WITH (lists = 100);
+```
+
+<Mermaid client:visible code={`flowchart LR
+  App["Application"] --> PG["PostgreSQL"]
+  PG --> Table["articles table"]
+  Table --> Rel["Relational columns (id, user_id, status...)"]
+  Table --> Vec["embedding VECTOR(384) column"]
+  Vec --> Idx["HNSW/IVFFlat index"]`} />
+
+Note the operator class (`vector_cosine_ops` above) must match the distance operator
+you query with (`<=>` for cosine) — using a mismatched operator class silently falls
+back to a sequential scan instead of using the index, a common and easy-to-miss
+performance bug.
+
+## Combining vector search with relational filters and joins
+
+This is pgvector's core advantage: filtering and joining against normal relational
+data in the same query, using the query planner you already understand:
+
+```sql
+SELECT t.text, u.email, t.embedding <=> %s::vector AS distance
+FROM support_tickets t
+JOIN users u ON u.id = t.user_id
+WHERE t.status = 'open' AND t.created_at > NOW() - INTERVAL '90 days'
+ORDER BY distance
+LIMIT 5;
+```
+
+A dedicated vector database would need this same filtering expressed as its own query
+DSL and would require the relational data (`status`, `created_at`, `user_id` → email)
+to either be duplicated into the vector store's payload or fetched in a separate
+round trip and joined in application code. In Postgres, it's one query, using
+Postgres's existing query planner, indexes, and transactional guarantees.
+
+## Using pgvector through LangChain
+
+```python
+from langchain_postgres import PGVector
+from langchain_huggingface import HuggingFaceEmbeddings
+
+embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+
+vectorstore = PGVector(
+    embeddings=embeddings,
+    collection_name="support_docs",
+    connection="postgresql+psycopg://user:pass@localhost:5432/mydb",
+)
+
+vectorstore.add_texts(["Our refund policy allows returns within 30 days."])
+results = vectorstore.similarity_search("How do I get my money back?", k=3)
+```
+
+This lets pgvector slot into standard LangChain RAG chains identically to a dedicated
+vector store, while still being queryable with plain SQL for anything outside the
+LangChain abstraction.
+
+## Choosing pgvector vs. a dedicated vector database
+
+pgvector is the pragmatic choice when your data already lives in Postgres, your scale
+is moderate (up to a few million vectors is comfortable; tens of millions is workable
+with tuning), and you value transactional consistency between vectors and relational
+data over specialized vector-search features. Dedicated vector databases pull ahead
+when you need billion-scale vectors, advanced features like native multi-tenancy or
+built-in hybrid fusion, or when vector search load would otherwise compete for
+resources with your primary transactional Postgres workload — a real operational
+concern, since heavy ANN index builds and large vector scans can affect the
+performance of unrelated queries sharing the same database instance.

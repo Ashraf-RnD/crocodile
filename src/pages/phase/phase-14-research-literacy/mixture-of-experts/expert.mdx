@@ -1,0 +1,100 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Mixture of Experts"
+level: expert
+phaseSlug: "phase-14-research-literacy"
+phaseName: "Research Literacy"
+topicSlug: "mixture-of-experts"
+estReadTime: 12
+resources:
+  - type: article
+    title: "Outrageously Large Neural Networks: The Sparsely-Gated Mixture-of-Experts Layer"
+    url: "https://arxiv.org/abs/1701.06538"
+  - type: article
+    title: "Mixtral of Experts"
+    url: "https://arxiv.org/abs/2401.04088"
+---
+
+## What the paper actually contributed vs. prior work
+
+Mixture of Experts as a general machine learning concept predates deep
+learning by decades (Jacobs et al., 1991). Shazeer et al.'s 2017 contribution
+was making sparse gating **practical inside deep neural networks trained with
+backpropagation**, at a scale (thousands of experts, 130B+ total parameters)
+no prior work had attempted. The core technical obstacles it solved: making
+the discrete top-k selection differentiable enough to train end-to-end, and
+introducing the load-balancing auxiliary loss to prevent gate collapse onto a
+small expert subset. Its explicit framing — decoupling total model capacity
+from per-example compute cost — became the conceptual foundation nearly all
+subsequent MoE language models (including Switch Transformer, GShard,
+Mixtral, and the DeepSeek/Kimi models covered elsewhere in this phase) build
+on directly.
+
+## Limitations
+
+- **Training instability.** Sparse routing decisions are inherently
+  discontinuous, and MoE training runs are empirically more prone to loss
+  spikes and divergence than equivalent dense models — a persistent
+  engineering challenge that later papers (DeepSeek-V3's auxiliary-loss-free
+  balancing, for instance) specifically targeted.
+- **Distributed training communication overhead.** Because different experts
+  typically live on different accelerators, routing tokens to their assigned
+  expert requires all-to-all communication across devices — this
+  cross-device traffic can become the actual bottleneck at scale, not compute
+  itself, which is why efficient MoE implementations invest heavily in
+  routing/communication engineering (e.g. GShard's sharding strategies).
+- **Expert underutilization and the load-balancing trade-off.** The
+  auxiliary load-balancing loss is itself an approximation — forcing more
+  uniform routing can conflict with letting the gate route tokens to
+  wherever they'd genuinely be handled best, a tension between load
+  efficiency and specialization quality that later routing schemes continued
+  to refine.
+- **Larger memory footprint despite lower compute.** All experts' parameters
+  must typically be resident in memory (across a device cluster) even though
+  only a few are used per token — MoE reduces FLOPs per token, not total
+  memory required to serve the model, which is a frequently
+  misunderstood trade-off.
+
+## What came after
+
+- **GShard (2020)** scaled MoE Transformers to hundreds of billions of
+  parameters for machine translation, contributing practical sharding and
+  routing strategies for distributed training.
+- **Switch Transformer (2021)** simplified routing to top-1 and scaled to over
+  a trillion parameters, showing simpler routing could be both more stable
+  and more efficient than the original's denser gating.
+- **Mixtral of Experts (2024)** brought MoE to the open-weight ecosystem at a
+  practical, widely-deployable scale (8 experts, top-2 routing, ~47B total /
+  ~13B active parameters), demonstrating strong quality-per-active-parameter
+  efficiency outside a frontier lab's exclusive infrastructure.
+- **Fine-grained expert architectures with shared experts** (DeepSeekMoE,
+  used in DeepSeek-V3, covered elsewhere in this phase) split experts into
+  many smaller, more specialized units plus a small number of "always-on"
+  shared experts that capture common knowledge — improving specialization
+  while reducing redundant capacity across experts.
+- **Auxiliary-loss-free load balancing** (also introduced in DeepSeek-V3)
+  replaced the classic auxiliary loss with a bias-adjustment mechanism, aiming
+  to balance load without the training-signal interference an auxiliary loss
+  can introduce.
+
+## How it's actually used in production today
+
+MoE is now the architecture of choice for essentially every lab pursuing
+maximum capability per unit of inference compute at the frontier: Mixtral,
+DeepSeek-V3, Kimi K2, and (widely believed, though not officially confirmed
+for all cases) some of the largest closed models all use sparse MoE layers.
+The appeal in production is direct: users get access to a very large total
+knowledge base while the serving cost per request tracks the much smaller
+*active* parameter count, not the full model size — a decisive economic
+advantage at the scale frontier labs now operate.
+
+## Comparison: dense Transformer vs. Mixture-of-Experts Transformer
+
+| Dimension | Dense Transformer | Mixture-of-Experts Transformer |
+|---|---|---|
+| Parameters used per token | All of them | Only the routed subset (e.g. 2 of many experts) |
+| Total capacity vs. compute cost | Tightly coupled | Decoupled — capacity can scale far ahead of per-token compute |
+| Training stability | Well understood, stable | More prone to instability; requires load-balancing techniques |
+| Memory to serve the model | Proportional to active compute | Must hold all experts, even though few run per token |
+| Distributed training complexity | Standard data/model parallelism | Requires expert parallelism and all-to-all routing communication |
+| Typical use case today | Smaller/mid-size models, simpler deployment | Frontier-scale models optimizing capability per inference dollar |

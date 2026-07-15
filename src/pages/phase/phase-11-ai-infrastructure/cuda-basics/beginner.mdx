@@ -1,0 +1,96 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "CUDA Basics"
+level: beginner
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "cuda-basics"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "NVIDIA — CUDA C Programming Guide (Introduction)"
+    url: "https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#introduction"
+  - type: docs
+    title: "PyTorch — CUDA semantics"
+    url: "https://pytorch.org/docs/stable/notes/cuda.html"
+---
+
+## A CPU is a few chefs, a GPU is a thousand line cooks
+
+A CPU has a handful of powerful cores, each great at doing one complicated thing
+quickly — branching logic, sequential steps, one task after another. A GPU has
+thousands of small, simple cores that aren't individually clever, but can all do the
+*same* simple arithmetic operation on different data *at the same time*. Matrix
+multiplication — the operation that neural networks are built almost entirely out of
+— is exactly this shape: the same multiply-and-add repeated millions of times over
+different numbers. That's why deep learning runs on GPUs, not CPUs.
+
+```python
+import torch
+
+print(torch.cuda.is_available())   # True if a CUDA GPU is visible
+print(torch.cuda.get_device_name(0))  # e.g. "NVIDIA A100-SXM4-40GB"
+
+x = torch.randn(4096, 4096)
+x = x.to("cuda")          # move the tensor from CPU (host) memory to GPU (device) memory
+y = x @ x                 # matrix multiply runs on the GPU's thousands of cores at once
+```
+
+That `.to("cuda")` call matters more than it looks — it's physically copying data
+across the PCIe bus from your computer's RAM into the GPU's own onboard memory. Until
+data lives on the GPU, the GPU can't touch it.
+
+## Reading `nvidia-smi`
+
+`nvidia-smi` is the command every AI engineer runs first when something feels slow or
+a job crashes with an out-of-memory error:
+
+```
++-----------------------------------------------------------------------------------+
+| NVIDIA-SMI 550.54.15    Driver Version: 550.54.15    CUDA Version: 12.4          |
+|-------------------------------+----------------------+----------------------------+
+| GPU  Name        Persistence-M| Bus-Id        Disp.A | Volatile Uncorr. ECC       |
+| Fan  Temp  Perf   Pwr:Usage/Cap|         Memory-Usage | GPU-Util  Compute M.       |
+|===============================+======================+============================|
+|   0  A100-SXM4-40GB       On  | 00000000:00:04.0 Off |                    0       |
+| 30%   45C    P0    68W / 400W |  18211MiB / 40960MiB |      92%      Default      |
++-----------------------------------------------------------------------------------+
+| Processes:                                                                        |
+|  PID   Type   Process name                              GPU Memory Usage          |
+|   4821   C    python train.py                                    18190MiB         |
++-----------------------------------------------------------------------------------+
+```
+
+Three numbers matter most day-to-day: **Memory-Usage** (18211MiB / 40960MiB — how much
+of the GPU's memory your job is using, and how much you have left before an OOM
+crash), **GPU-Util** (92% — how busy the compute cores actually are; a training job
+sitting at 20% util usually means it's waiting on data, not doing math), and the
+**Processes** table (which PID owns which chunk of memory — essential for finding a
+zombie process hogging a GPU someone else needs).
+
+## Why frameworks hide all of this
+
+PyTorch and TensorFlow handle memory transfers, kernel launches, and parallelism for
+you — you rarely write CUDA code directly. But the abstraction leaks in exactly two
+ways every AI engineer eventually hits: **CUDA out of memory** errors (you tried to
+put more data on the GPU than it has room for), and **low GPU utilization** (your
+GPU is idle waiting for the CPU to hand it more data, e.g. slow disk I/O or an
+un-batched data loader). Understanding what's underneath `.to("cuda")` is what lets
+you diagnose those two problems instead of just restarting the job and hoping.
+
+## Try it yourself
+
+You run `nvidia-smi` during a training job and see `GPU-Util: 15%` but
+`Memory-Usage: 35000MiB / 40960MiB`. Is this GPU compute-bound or waiting on
+something else? What would you check next?
+
+<details>
+<summary>Solution</summary>
+
+Low utilization (15%) with high memory usage means the GPU has a lot of data loaded
+but isn't spending much time actually computing — it's most likely starved, waiting
+on the CPU/data loader to hand it the next batch (e.g. slow disk reads, heavy
+CPU-side preprocessing, or too few `DataLoader` worker processes). The fix is usually
+on the data-pipeline side, not the model or GPU — increasing `num_workers`, enabling
+prefetching, or moving preprocessing off the critical path — not buying a faster GPU.
+</details>

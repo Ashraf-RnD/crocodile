@@ -1,0 +1,86 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "pip"
+level: beginner
+phaseSlug: "phase-01-python-for-ai"
+phaseName: "Python for AI"
+topicSlug: "pip"
+estReadTime: 5
+resources:
+  - type: docs
+    title: "pip — Official user guide"
+    url: "https://pip.pypa.io/en/stable/user_guide/"
+  - type: docs
+    title: "Python Packaging — Installing packages with pip"
+    url: "https://packaging.python.org/en/latest/tutorials/installing-packages/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Installing code someone else already wrote
+
+Almost no AI project starts from scratch — you install libraries like `numpy`,
+`torch`, or `transformers` and build on top of them. **pip** is Python's default
+package installer: it downloads a package from PyPI (the Python Package Index) and
+puts it somewhere your `import` statements can find it.
+
+```bash
+pip install numpy
+pip install torch transformers   # install multiple at once
+pip install pandas==2.2.0        # a specific version
+pip uninstall pandas
+pip list                         # see what's installed
+```
+
+<Mermaid client:visible code={`flowchart LR
+  You["pip install torch"] --> PyPI["Downloads from PyPI"]
+  PyPI --> Local["Installed into your Python environment"]
+  Local --> Import["import torch now works"]`} />
+
+### `requirements.txt`: sharing what your project needs
+
+Instead of telling teammates to run five separate `pip install` commands, projects
+list their dependencies in a text file.
+
+```
+# requirements.txt
+numpy==1.26.4
+pandas==2.2.1
+scikit-learn==1.4.0
+```
+
+```bash
+pip install -r requirements.txt   # installs everything listed, at those versions
+```
+
+This is how you reproduce someone else's environment — clone their repo, run one
+command, get the same libraries at the same versions they used.
+
+### Why a virtual environment matters
+
+Installing packages "globally" means every project on your machine shares the same
+package versions — and one project needing `numpy==1.20` while another needs
+`numpy==2.0` becomes impossible to satisfy at once. A **virtual environment** gives
+each project its own isolated set of installed packages.
+
+```bash
+python -m venv .venv        # create an isolated environment in ./.venv
+source .venv/bin/activate   # activate it (Windows: .venv\Scripts\activate)
+pip install numpy           # installs into .venv, not globally
+deactivate                  # leave the environment
+```
+
+## Try it yourself
+
+You're starting a new project that needs `requests` and `pandas`. Write the commands
+to create a virtual environment, activate it, and install both packages.
+
+<details>
+<summary>Solution</summary>
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install requests pandas
+```
+
+</details>

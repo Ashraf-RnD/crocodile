@@ -1,0 +1,70 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Gradient Descent"
+level: intermediate
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "gradient-descent"
+estReadTime: 9
+resources:
+  - type: article
+    title: "Why Momentum Really Works (distill.pub)"
+    url: "https://distill.pub/2017/momentum/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Batch, stochastic, and mini-batch gradient descent
+
+Computing the gradient over your *entire* training set before each step (**batch
+gradient descent**) gives an accurate direction but is extremely slow for large
+datasets — one weight update per full pass. **Stochastic gradient descent (SGD)**
+updates after every single example — fast but noisy. The practical middle ground,
+**mini-batch gradient descent**, computes the gradient over a small batch (e.g. 32-256
+examples) — this is what "SGD" almost always means in a modern training loop.
+
+<Mermaid client:visible code={`flowchart TB
+  Batch["Batch GD: full dataset per step — accurate, very slow"]
+  Mini["Mini-batch GD: 32-256 examples per step — practical default"]
+  Stoch["Pure SGD: 1 example per step — fast, very noisy"]`} />
+
+```python
+for epoch in range(num_epochs):
+    for batch in data_loader:              # mini-batches, e.g. size 32
+        gradients = compute_gradient(model, batch)
+        weights -= learning_rate * gradients
+```
+
+## Local minima, saddle points, and why it still works
+
+The loss surface of a neural network is not a single smooth bowl — it has many local
+minima and (far more commonly, in high dimensions) saddle points. In practice, SGD
+works well anyway for two main reasons: mini-batch noise helps escape shallow saddle
+points and flat regions, and empirically, most local minima found by SGD in
+overparameterized networks generalize about as well as the (intractable to find)
+global minimum.
+
+## Learning rate schedules
+
+A fixed learning rate is rarely optimal for the whole training run — too large late in
+training causes oscillation near the minimum; too small early wastes time. Common
+schedules:
+
+```python
+# step decay: cut learning rate by 10x every N epochs
+lr = initial_lr * (0.1 ** (epoch // step_size))
+
+# cosine annealing: smooth decay following a cosine curve
+lr = min_lr + 0.5 * (initial_lr - min_lr) * (1 + math.cos(math.pi * epoch / total_epochs))
+```
+
+Warmup (starting with a very small learning rate and ramping up over the first few
+hundred steps) is now standard for transformer training — large initial steps on
+randomly initialized weights can destabilize training before the model has found any
+reasonable direction.
+
+## Convergence criteria
+
+Training loop stops when the loss plateaus (stops improving by more than some
+threshold across several evaluations), a fixed number of epochs is reached, or a
+validation metric starts getting worse (early stopping) — the last one specifically
+guards against overfitting, not just under-optimization.

@@ -1,0 +1,75 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Perplexity"
+level: beginner
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "perplexity"
+estReadTime: 6
+resources:
+  - type: article
+    title: "Perplexity — How our search & answer engine works (blog)"
+    url: "https://www.perplexity.ai/hub/blog"
+  - type: article
+    title: "Perplexity — Introducing pplx-api"
+    url: "https://blog.perplexity.ai/blog/introducing-pplx-api"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## A search engine that reads the results for you
+
+A normal search engine gives you a list of ten blue links and leaves you to
+read them. Perplexity does the reading for you: it searches the web, pulls in
+the top results, and asks a language model to write a short answer **based on
+those results**, with citations pointing back to where each fact came from.
+
+The key difference from ChatGPT-style chat is that Perplexity is not relying
+on the model's memorized training data for facts — it's grounding the answer
+in pages it fetched moments ago. This is why it can answer questions about
+today's news, and why it shows you sources.
+
+<Mermaid client:visible code={`flowchart LR
+  You["You ask a question"] --> Search["Web search for relevant pages"]
+  Search --> Fetch["Fetch & extract text from top results"]
+  Fetch --> Model["LLM reads the question + the fetched text"]
+  Model --> Answer["Answer written with inline citations"]
+  Answer --> You2["You see the answer + source links"]`} />
+
+## Why citations matter here
+
+If the model just answered from memory, it could confidently state something
+outdated or simply wrong, with no way for you to check it (this is the
+classic "hallucination" problem). By forcing the model to answer using
+specific fetched passages and cite which passage each claim came from,
+Perplexity gives you a way to verify — click the citation, read the source
+yourself. This pattern — **retrieve real documents, then generate an answer
+grounded in them** — is called Retrieval-Augmented Generation (RAG), and it's
+one of the most common architectures in production AI products, not just
+search engines.
+
+## The trade-off you're making
+
+Because Perplexity has to search the web and fetch pages before it can even
+start writing an answer, a Perplexity query is inherently slower to *start*
+than a ChatGPT query with no search — there's a whole extra round trip to the
+internet in the critical path. In exchange, you get answers that are current
+and checkable instead of answers that are frozen at whatever date the model
+was trained.
+
+## Try it yourself
+
+If you asked Perplexity "what's 15% of 340?" — a question that needs no
+outside facts at all — do you think it still goes out and searches the web
+first?
+
+<details>
+<summary>Solution</summary>
+
+A well-designed system shouldn't need to — this is a pure math question the
+model can answer directly, and searching the web for it would just add
+latency for no benefit. Real systems like this typically have a **routing
+step** that decides whether a query even needs retrieval before doing the
+expensive search-and-fetch pipeline; simple factual/math/conversational
+queries can skip straight to the model. You'll see this "route before you
+retrieve" idea again at the intermediate level.
+</details>

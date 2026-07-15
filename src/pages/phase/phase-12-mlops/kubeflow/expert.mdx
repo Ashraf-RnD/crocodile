@@ -1,0 +1,100 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Kubeflow"
+level: expert
+phaseSlug: "phase-12-mlops"
+phaseName: "MLOps"
+topicSlug: "kubeflow"
+estReadTime: 12
+resources:
+  - type: docs
+    title: "Kubeflow — Multi-Tenancy and Namespace Isolation"
+    url: "https://www.kubeflow.org/docs/components/central-dash/profiles/"
+  - type: article
+    title: "Kubeflow Pipelines v2 architecture (Argo Workflows backend)"
+    url: "https://www.kubeflow.org/docs/components/pipelines/v2/introduction/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Kubeflow's operational cost is Kubernetes' operational cost
+
+The single biggest thing beginners underestimate about Kubeflow: it is not a
+managed service, it's a large collection of Kubernetes CRDs and controllers
+(Pipelines, backed by Argo Workflows; Katib; the notebook controller; the
+central dashboard) that you deploy and operate on your own cluster — or pay a
+provider (GCP Vertex AI Pipelines, AWS SageMaker with Kubeflow support) to
+operate for you. The full open-source Kubeflow distribution is notoriously
+heavy to install and upgrade cleanly; component version compatibility across
+Pipelines/Katib/Istio/Dex/cert-manager has historically been a source of real
+operational pain. Teams without dedicated platform engineers frequently
+underestimate this and end up either running a managed variant (trading
+Kubernetes control for reduced ops burden) or a lighter-weight orchestrator
+(Argo Workflows directly, without the rest of Kubeflow) that gets 80% of the
+pipeline value with a fraction of the operational surface area.
+
+## Container cold-start latency compounds across pipeline steps
+
+Each Kubeflow Pipelines component is a separate container, which means each
+step pays a pod scheduling + image pull + container start cost before any
+actual work happens. For a pipeline with 15 short steps (a few seconds of
+real compute each), cold-start overhead can dominate total pipeline runtime —
+this is invisible in a demo with 3 steps but becomes the primary latency
+driver at real pipeline complexity. Mitigations: keep frequently-run steps'
+images small and cached on nodes (node-level image pre-pulling), combine
+trivially cheap steps into a single component rather than over-decomposing
+for the sake of visual DAG granularity, and use `PodDisruptionBudget`/warm
+node pools to avoid autoscaler cold-start on every run.
+
+<Mermaid client:visible code={`flowchart LR
+  A["Step 1: 2s pull + 1s work"] --> B["Step 2: 2s pull + 1s work"]
+  B --> C["Step 3: 2s pull + 1s work"]
+  C --> D["...12 more steps"]
+  D --> E["Total: ~45s overhead vs ~15s real compute"]`} />
+
+## Multi-tenancy: namespace isolation is necessary but not sufficient
+
+Kubeflow's profile/namespace model gives each team an isolated namespace with
+RBAC — but production multi-tenant clusters need more than namespace
+isolation to be genuinely safe:
+
+- **Resource quotas per namespace** must be set explicitly, or one team's
+  runaway hyperparameter sweep can starve GPU nodes cluster-wide.
+- **Network policies** between namespaces aren't on by default — without
+  them, workloads in one team's namespace can reach services in another's,
+  undermining the isolation the namespace boundary implies.
+- **Shared artifact/metadata stores** (the underlying MySQL/MinIO backing
+  Pipelines) are often *not* tenant-isolated even when compute is — a
+  misconfigured pipeline can technically read another team's pipeline run
+  metadata unless the store itself enforces access control.
+
+Kubeflow's multi-tenancy model is a starting point, not a complete
+compliance boundary — teams with real isolation requirements (separate
+cost centers, regulated data) layer additional cluster-level policy
+(Kyverno/OPA Gatekeeper, dedicated node pools) on top.
+
+## Kubeflow Pipelines v1 vs v2: a breaking migration, not an upgrade
+
+KFP v2 rearchitected around Kubernetes-native artifact tracking (ML Metadata
+backed by a proper artifact lineage graph) and moved to a different Argo
+Workflows compilation target than v1. Pipelines written for v1's DSL are not
+drop-in compatible with v2 — component definitions, artifact I/O syntax, and
+the SDK's `dsl` API all changed meaningfully. Teams on a large v1 pipeline
+codebase face a real migration cost, not a version bump, when moving to v2 —
+a good example of why choosing a pipeline orchestrator is a long-term
+infrastructure commitment, not a lightweight tooling choice.
+
+## Trade-offs vs. Airflow and managed alternatives
+
+| Concern | Kubeflow Pipelines | Airflow (KubernetesExecutor) | Vertex AI Pipelines / SageMaker Pipelines |
+|---|---|---|---|
+| GPU/accelerator scheduling | Native, fine-grained per-step | Possible via K8s executor, less ML-native | Native, fully managed |
+| Operational burden | High (self-hosted K8s stack) | Moderate (still self-hosted) | None — fully managed |
+| ML metadata/artifact lineage | Native (ML Metadata) | Bolt-on via XCom/external tool | Native |
+| Vendor lock-in | Low (CNCF, portable) | Low | High (cloud-specific) |
+| Best fit | Teams with platform engineering capacity wanting full control | Teams already standardized on Airflow for data eng | Teams prioritizing time-to-value over control |
+
+The practical decision is rarely "Kubeflow vs. nothing" but "self-hosted
+Kubeflow vs. its managed cloud equivalent vs. bolting GPU-aware execution
+onto an orchestrator you already run" — and the right answer tracks how much
+platform engineering capacity the org actually has, not which tool has the
+most features on paper.

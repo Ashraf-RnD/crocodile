@@ -1,0 +1,77 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Autograd"
+level: beginner
+phaseSlug: "phase-04-deep-learning"
+phaseName: "Deep Learning"
+topicSlug: "autograd"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "PyTorch — A Gentle Introduction to torch.autograd"
+    url: "https://pytorch.org/tutorials/beginner/blitz/autograd_tutorial.html"
+  - type: video
+    title: "PyTorch Autograd Explained"
+    url: "https://www.youtube.com/watch?v=MswxJw-8PvE"
+---
+
+## Autograd keeps a receipt for every calculation
+
+Imagine baking a cake and writing down every single step: "added 2 cups flour, then
+mixed, then added sugar..." If the cake turns out too sweet, you can look at your
+receipt and know exactly which step to adjust, and by how much.
+
+PyTorch's **autograd** does exactly this for math. When you do calculations on
+tensors with `requires_grad=True`, PyTorch silently records every operation. Then,
+when you call `.backward()`, it walks the receipt backward and calculates exactly
+how much each input contributed to the final result — the gradient.
+
+```python
+import torch
+
+x = torch.tensor(3.0, requires_grad=True)
+y = x ** 2 + 2 * x + 1     # y = x^2 + 2x + 1
+
+y.backward()               # compute dy/dx
+print(x.grad)              # tensor(8.) -> because dy/dx = 2x + 2 = 2(3)+2 = 8
+```
+
+You never had to write the derivative `2x + 2` yourself — autograd derived it
+automatically by tracking the chain of operations that produced `y`.
+
+### Why this matters for training
+
+Training a neural network means repeatedly asking "if I nudge this weight slightly,
+how does the loss change?" That question is a derivative. Autograd computes
+derivatives for millions of weights simultaneously, which is what makes training
+deep networks with plain gradient descent practical at all.
+
+```python
+w = torch.tensor(0.5, requires_grad=True)
+target = torch.tensor(10.0)
+
+prediction = w * 4.0
+loss = (prediction - target) ** 2
+
+loss.backward()
+print(w.grad)   # how much loss changes per unit change in w
+```
+
+### Try it yourself
+
+Given `x = torch.tensor(2.0, requires_grad=True)` and `y = x ** 3`, use autograd to
+find `dy/dx` at `x = 2`. (By hand, `dy/dx = 3x^2 = 12`.)
+
+<details>
+<summary>Solution</summary>
+
+```python
+import torch
+
+x = torch.tensor(2.0, requires_grad=True)
+y = x ** 3
+y.backward()
+print(x.grad)   # tensor(12.)
+```
+
+</details>

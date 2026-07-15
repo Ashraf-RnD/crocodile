@@ -1,0 +1,87 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Tokenization"
+level: intermediate
+phaseSlug: "phase-05-natural-language-processing"
+phaseName: "Natural Language Processing"
+topicSlug: "tokenization"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "Hugging Face — Tokenizers library docs"
+    url: "https://huggingface.co/docs/tokenizers/index"
+  - type: article
+    title: "Hugging Face — Fast tokenizers' special powers"
+    url: "https://huggingface.co/learn/nlp-course/chapter6/3"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The tokenization pipeline
+
+A production tokenizer is not one step, it's a pipeline: normalize → pre-tokenize →
+model (BPE/WordPiece/Unigram) → post-process. Understanding each stage explains why
+two "similar" tokenizers can produce different token counts for the same string.
+
+<Mermaid client:visible code={`flowchart LR
+  A[Raw text] --> B["Normalization\n(lowercase, unicode NFC/NFD, strip accents)"]
+  B --> C["Pre-tokenization\n(split on whitespace/punctuation)"]
+  C --> D["Sub-word model\n(BPE / WordPiece / Unigram)"]
+  D --> E["Post-processing\n(add [CLS]/[SEP], build attention mask)"]
+  E --> F[Token IDs + attention mask]`} />
+
+```python
+from transformers import AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained("bert-base-cased")
+encoded = tokenizer(
+    "Tokenizers handle padding and truncation.",
+    padding="max_length",
+    truncation=True,
+    max_length=16,
+    return_tensors="pt",
+)
+print(encoded["input_ids"])
+print(encoded["attention_mask"])
+```
+
+The `attention_mask` tells the model which positions are real tokens (`1`) versus
+padding (`0`) — critical when you batch sequences of different lengths together.
+
+## Special tokens carry meaning
+
+Every pretrained tokenizer reserves a handful of IDs for structural tokens:
+
+| Token | Purpose |
+|---|---|
+| `[CLS]` / `<s>` | Marks sequence start; BERT uses its final embedding for classification |
+| `[SEP]` / `</s>` | Marks sequence end or separates sentence pairs |
+| `[PAD]` | Fills batches to equal length, ignored via the attention mask |
+| `[UNK]` | Fallback for characters truly outside the vocabulary (rare with sub-word tokenizers) |
+| `[MASK]` | Used only during masked-language-model pretraining (BERT-style) |
+
+```python
+tokenizer("How does this work?", "It uses [SEP] internally.")
+# input_ids: [CLS] How does this work ? [SEP] It uses [SEP] internally . [SEP]
+```
+
+## Fast tokenizers and offset mapping
+
+The Rust-backed "fast" tokenizers (the default for most `AutoTokenizer` calls) expose
+**offset mapping** — the exact character span each token came from in the original
+string. This is essential for tasks like named entity recognition, where you predict a
+label per token but need to report results against the original text:
+
+```python
+encoded = tokenizer("Hugging Face is based in NYC", return_offsets_mapping=True)
+for token, offset in zip(encoded.tokens(), encoded["offset_mapping"]):
+    print(token, offset)
+# ('Hu', (0, 2)), ('##gging', (2, 8)), ('Face', (9, 13)), ... ('NYC', (26, 29))
+```
+
+## Sequence length limits in practice
+
+Every transformer has a fixed maximum context length (512 for base BERT, 4k-128k+ for
+modern LLMs). In real pipelines you decide upfront whether to **truncate** (drop
+tokens past the limit), **stride** (split a long document into overlapping windows and
+aggregate predictions), or pre-chunk documents before they ever reach the tokenizer —
+this decision has a bigger effect on downstream accuracy than most model choices.

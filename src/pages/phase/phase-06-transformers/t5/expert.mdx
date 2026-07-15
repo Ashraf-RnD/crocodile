@@ -1,0 +1,97 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "T5"
+level: expert
+phaseSlug: "phase-06-transformers"
+phaseName: "Transformers"
+topicSlug: "t5"
+estReadTime: 12
+resources:
+  - type: article
+    title: "Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer (T5 paper)"
+    url: "https://arxiv.org/abs/1910.10683"
+  - type: article
+    title: "Scaling Instruction-Finetuned Language Models (FLAN / FLAN-T5)"
+    url: "https://arxiv.org/abs/2210.11416"
+---
+
+## T5 as a systematic ablation study, not just a model
+
+The T5 paper's actual contribution is arguably less "T5 the model" and more the
+enormous controlled ablation study behind it — the authors held the text-to-text
+framework fixed and swept architecture (encoder-decoder vs. decoder-only vs.
+prefix-LM), pretraining objective (span corruption vs. alternatives), corruption
+rate, pretraining dataset (introducing the C4 corpus), and scaling — a rare
+apples-to-apples comparison in a field where papers usually change many variables at
+once. The practical value for practitioners is that many "obvious" architecture
+questions (does encoder-decoder beat decoder-only for a given task class? does span
+corruption beat token masking?) were answered with actual controlled evidence rather
+than folklore, at the cost the paper itself acknowledges: findings were established
+at a specific scale and may not hold identically at every scale.
+
+## Why encoder-decoder despite decoder-only's later dominance
+
+T5's encoder-decoder split is a deliberate inductive bias: the encoder handles input
+understanding with full bidirectional context, while the decoder only needs to model
+the (typically much shorter) output distribution conditioned on that fully-processed
+input. For genuinely asymmetric tasks — long source document, short target summary,
+or a translation pair — this split can be more parameter-efficient than a
+decoder-only model that must re-derive bidirectional-style understanding of the
+prompt purely through causal self-attention over it. The trade-off is architectural
+and infrastructural complexity: two attention types per decoder layer
+(self + cross), two separate parameter pools, and less natural support for
+open-ended multi-turn interaction, where "input" and "output" aren't cleanly
+separable the way they are in translation/summarization.
+
+## Relative position bias instead of the original sinusoidal encoding
+
+T5 doesn't use the original Transformer's sinusoidal positional encoding at all — it
+uses a **learned relative position bias** added directly to attention scores, binned
+into buckets by relative distance (with coarser buckets for larger distances). This
+is conceptually closer to ALiBi than to sinusoidal/learned-absolute schemes, and it
+reflects an early recognition (predating ALiBi and RoPE's popularity) that relative
+position information is often more useful to the attention computation than absolute
+position — the model cares much more about "how far apart are these two tokens"
+than "what is this token's absolute index."
+
+## The 11B model and multi-task pretraining mixture ratios
+
+T5-11B demonstrated the encoder-decoder paradigm scales competitively with
+decoder-only models of similar compute class on the benchmarks the paper evaluated
+(GLUE, SuperGLUE, SQuAD, summarization). A subtler contribution is the paper's
+analysis of **pretraining data mixture strategies** for multi-task training — naive
+uniform task sampling underperforms carefully tuned mixture rates that account for
+dataset size disparities, a finding that generalized directly into later
+instruction-tuning mixture design (FLAN, T0) where balancing hundreds of
+heterogeneous task datasets is a first-order design decision, not an afterthought.
+
+## FLAN-T5: instruction tuning as a near-free upgrade
+
+FLAN-T5 fine-tunes the base T5 checkpoints on a large, diverse mixture of
+instruction-phrased tasks (1800+ tasks in the FLAN collection). The measured result:
+substantial zero-shot and few-shot improvement over base T5 on held-out task types,
+at a fine-tuning compute cost that's small relative to the original pretraining run.
+This is a recurring pattern worth internalizing broadly: instruction tuning is
+usually one of the highest quality-per-compute-dollar investments available on top
+of an already-pretrained base model, which is why virtually every production model
+release today ships an instruction-tuned variant rather than the raw pretrained
+checkpoint.
+
+## Trade-off summary
+
+| | T5 (encoder-decoder) | Decoder-only (GPT-style) |
+|---|---|---|
+| Positional scheme | Learned relative position bias | Learned absolute (older) or RoPE (modern) |
+| Best suited for | Well-defined text-in/text-out tasks with moderate data | Open-ended generation, in-context learning, chat |
+| Parameter efficiency for asymmetric I/O | Potentially higher (bidirectional encoder for input) | Lower (input processed causally too) |
+| Infrastructure complexity | Higher (two stacks, cross-attention) | Lower (single stack) |
+| Dominant use in 2024+ general-purpose LLMs | Niche/specialized | Near-universal |
+
+## The practical engineering takeaway
+
+T5's lasting influence is less about its specific architecture winning out (it
+didn't, for general-purpose LLMs) and more about the "unify everything as text
+transformation" framing and the rigorous scaling/ablation methodology it
+popularized — both of which shaped how the field subsequently reasoned about
+instruction tuning, task unification, and controlled architecture comparisons, well
+beyond T5-derived models specifically.

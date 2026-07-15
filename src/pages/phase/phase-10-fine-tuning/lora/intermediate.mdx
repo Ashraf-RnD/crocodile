@@ -1,0 +1,104 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "LoRA"
+level: intermediate
+phaseSlug: "phase-10-fine-tuning"
+phaseName: "Fine-tuning"
+topicSlug: "lora"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "Hugging Face PEFT — LoraConfig API reference"
+    url: "https://huggingface.co/docs/peft/package_reference/lora"
+  - type: article
+    title: "Practical Tips for Finetuning LLMs Using LoRA (Sebastian Raschka)"
+    url: "https://magazine.sebastianraschka.com/p/practical-tips-for-finetuning-llms"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Applying LoRA with Hugging Face PEFT
+
+In practice you rarely hand-roll the `A`/`B` matrices — you use the `peft` library,
+which wraps a base model and injects LoRA adapters into the layers you specify.
+
+```python
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from peft import LoraConfig, get_peft_model, TaskType
+
+model = AutoModelForCausalLM.from_pretrained("meta-llama/Llama-3.1-8B")
+tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.1-8B")
+
+lora_config = LoraConfig(
+    task_type=TaskType.CAUSAL_LM,
+    r=16,                       # rank of the adapter matrices
+    lora_alpha=32,               # scaling factor, usually 2x r
+    lora_dropout=0.05,
+    target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],  # which layers get adapters
+    bias="none",
+)
+
+model = get_peft_model(model, lora_config)
+model.print_trainable_parameters()
+# trainable params: 20,971,520 || all params: 8,051,232,768 || trainable%: 0.26%
+```
+
+Only `q_proj`, `k_proj`, `v_proj`, and `o_proj` (the attention projections) get LoRA
+adapters here — everything else, including all the MLP layers and embeddings, stays
+completely frozen and contributes zero gradient computation.
+
+### The three knobs that matter most
+
+- **`r` (rank)**: controls adapter capacity. Common values are 8–64. Higher rank means
+  more trainable parameters and more expressiveness, but diminishing returns kick in
+  fast — going from `r=8` to `r=64` rarely gives a proportional accuracy gain, and
+  Raschka's ablations found rank often matters less than which modules you target.
+- **`lora_alpha`**: a scaling factor applied to the LoRA output (`alpha / r` is the
+  effective multiplier). The common convention is `alpha = 2 * r`, which keeps the
+  effective learning rate stable across different rank choices.
+- **`target_modules`**: which weight matrices get adapters. Targeting only attention
+  projections is cheapest; adding MLP projections (`gate_proj`, `up_proj`, `down_proj`)
+  usually improves quality on harder tasks at the cost of more trainable parameters.
+
+<Mermaid client:visible code={`flowchart TB
+  Base["Frozen base model (all layers)"] --> Attn["Attention projections"]
+  Base --> MLP["MLP projections"]
+  Attn -->|LoRA adapter added here| AttnOut["q/k/v/o with adapters"]
+  MLP -.optionally adapted too.-> MLPOut["gate/up/down with adapters"]`} />
+
+## Merging adapters back into the base model
+
+For deployment, you often want a single set of weights instead of a base model plus a
+separate adapter — this avoids the small runtime overhead of computing `A @ B` on every
+forward pass:
+
+```python
+merged_model = model.merge_and_unload()
+merged_model.save_pretrained("./llama-3.1-8b-support-tone-merged")
+```
+
+`merge_and_unload()` folds `alpha/r * A @ B` directly into the frozen weight `W`,
+producing ordinary dense weights indistinguishable from a fully fine-tuned model —
+useful for serving, but it means you lose the ability to swap adapters at runtime.
+
+## Multi-adapter serving
+
+A common production pattern is to keep one base model resident in GPU memory and
+attach different LoRA adapters per request or per tenant — this is what makes serving
+frameworks like vLLM's multi-LoRA support economically attractive: dozens of
+customer-specific adapters can share one copy of the expensive base weights.
+
+```python
+model.load_adapter("./adapters/customer-a-tone", adapter_name="customer_a")
+model.load_adapter("./adapters/customer-b-tone", adapter_name="customer_b")
+model.set_adapter("customer_a")  # switch active adapter without reloading the base model
+```
+
+## Common pitfalls
+
+- **Forgetting `target_modules` includes the right names** — module names differ across
+  architectures (`c_attn` for GPT-2 vs `q_proj`/`k_proj`/`v_proj` for Llama-style
+  models); PEFT will silently do nothing useful if the names don't match.
+- **Setting rank too low for a hard task** — very low ranks (`r=1` or `r=2`) can
+  underfit on tasks that need real behavioral shifts, not just style adjustments.
+- **Not saving the tokenizer alongside the adapter** — adapters only contain weight
+  deltas, so downstream loading code needs the original tokenizer too.

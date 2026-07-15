@@ -1,0 +1,99 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "QLoRA"
+level: expert
+phaseSlug: "phase-14-research-literacy"
+phaseName: "Research Literacy"
+topicSlug: "qlora"
+estReadTime: 11
+resources:
+  - type: article
+    title: "QLoRA: Efficient Finetuning of Quantized LLMs (original paper)"
+    url: "https://arxiv.org/abs/2305.14314"
+  - type: article
+    title: "GPTQ: Accurate Post-Training Quantization for GPT"
+    url: "https://arxiv.org/abs/2210.17323"
+---
+
+_This lesson is a critical analysis of the QLoRA paper. The hands-on
+fine-tuning guide lives in Phase 10: Fine-tuning; the two are complementary._
+
+## What the paper actually contributed vs. prior work
+
+Weight quantization for inference was already well established (GPTQ, AWQ, and
+others had shown 4-bit post-training quantization could preserve most model
+quality for *inference-only* use). LoRA had separately shown low-rank adapters
+could fine-tune effectively while touching very few parameters. QLoRA's
+contribution was showing these two ideas could be **combined for training, not
+just inference**, without the quantization error compounding into
+unacceptable fine-tuning quality loss — a nontrivial result, since gradients
+have to flow through the frozen quantized weights during backpropagation even
+though those weights themselves aren't updated. The paper's specific technical
+additions (NF4's distribution-aware quantization levels, double quantization
+of the scaling constants, and paged optimizers to smooth out memory spikes)
+were what made this combination work reliably at the 65B-parameter scale the
+paper demonstrates, with reported quality matching full 16-bit fine-tuning on
+their evaluated benchmarks.
+
+## Limitations
+
+- **Compute time cost.** Dequantizing 4-bit weights back to bf16 on every
+  forward and backward pass adds real overhead — QLoRA fine-tuning runs are
+  typically slower in wall-clock time than LoRA fine-tuning on the same
+  hardware, even though QLoRA enables scales LoRA alone couldn't reach on that
+  hardware at all.
+- **Quantization error is a real, if usually small, cost.** NF4 is well-suited
+  to typical near-normal weight distributions, but atypical weight
+  distributions (outlier-heavy layers) can degrade more under aggressive 4-bit
+  quantization — a known failure mode of low-bit quantization in general, not
+  specific to QLoRA's implementation.
+- **Still fundamentally inherits LoRA's low-rank-update ceiling.** QLoRA
+  solves the *memory* problem of loading and fine-tuning a large frozen base;
+  it doesn't change the fact that the *update itself* is a low-rank
+  approximation, with the same expressiveness limitations discussed in the
+  LoRA lesson.
+- **Hardware-specific kernel dependency.** The reported memory and speed
+  numbers depend on efficient 4-bit dequantization kernels (bitsandbytes at
+  the time); different hardware/software stacks can see meaningfully different
+  practical performance.
+
+## What came after
+
+- **QLoRA became the default recipe for community fine-tuning of large
+  open-weight models** almost immediately — the majority of instruction-tuned
+  variants of LLaMA, Mistral, and other open base models released by
+  individuals or small labs in 2023-2024 used QLoRA rather than full
+  fine-tuning or plain LoRA, purely because of the hardware accessibility it
+  unlocked.
+- **Further quantization research** (GPTQ, AWQ, GGUF/llama.cpp formats)
+  continued to push inference-time quantization separately, and some of that
+  progress has fed back into training-time quantization approaches.
+- **QA-LoRA and other quantization-aware variants** attempted to close the
+  remaining quality gap between quantized and full-precision fine-tuning
+  further, and to produce adapters that merge more cleanly back into a
+  quantized deployment model.
+- Combined with **multi-LoRA serving** (see the LoRA expert lesson), QLoRA
+  made it practical for individuals to produce many task-specific large-model
+  adapters cheaply, feeding the broader trend of serving many fine-tuned
+  "variants" from one quantized base.
+
+## How it's actually used in production today
+
+QLoRA (or close variants) remains the standard choice when fine-tuning a large
+model on limited hardware — a single GPU, a research lab without a large
+compute cluster, or a cost-conscious startup. In production inference,
+however, teams often re-quantize or merge the trained adapter back into a
+purpose-built inference quantization format (like GPTQ or AWQ) rather than
+serving directly on the training-time QLoRA setup, since inference-time
+quantization tooling is optimized differently (throughput and latency) than
+training-time tooling (gradient flow through frozen quantized weights).
+
+## Comparison: LoRA vs. QLoRA
+
+| Dimension | LoRA | QLoRA |
+|---|---|---|
+| Base model precision | 16-bit (bf16/fp16) | 4-bit (NF4), dequantized on-the-fly for compute |
+| Memory to fine-tune a 65B model | ~130GB+ (multi-GPU) | ~35-40GB (single high-end GPU) |
+| Training speed | Faster (no dequantization overhead) | Slower (dequantization on every pass) |
+| Quality vs. full fine-tuning | Competitive | Competitive, reported near-parity in the paper's benchmarks |
+| Hardware accessibility | Requires substantial GPU memory | Single consumer/prosumer GPU feasible |

@@ -1,0 +1,97 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "pip"
+level: intermediate
+phaseSlug: "phase-01-python-for-ai"
+phaseName: "Python for AI"
+topicSlug: "pip"
+estReadTime: 8
+resources:
+  - type: docs
+    title: "pip — Requirements File Format"
+    url: "https://pip.pypa.io/en/stable/reference/requirements-file-format/"
+  - type: article
+    title: "Real Python — pip-tools for pinned, reproducible installs"
+    url: "https://realpython.com/what-is-pip/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Pinning versions: the difference between "works" and "works for me"
+
+An unpinned `requirements.txt` (`numpy` instead of `numpy==1.26.4`) installs
+whatever the *latest* version is at install time — which means the exact same file
+can produce different environments a month apart. This is a common source of "it
+worked on my machine" bugs, especially painful in ML where a library upgrade can
+silently change numerical results.
+
+```
+# loose — reproducibility depends on when you install
+numpy
+torch
+transformers
+
+# pinned — same install every time, anywhere
+numpy==1.26.4
+torch==2.2.1
+transformers==4.38.2
+```
+
+```bash
+pip freeze > requirements.txt   # snapshot exact versions of everything installed
+```
+
+`pip freeze` captures *all* installed packages, including transitive dependencies —
+useful for full reproducibility, but it also means the file mixes "packages I
+actually chose" with "packages pip pulled in for me," which gets messy to maintain
+by hand as the project evolves.
+
+## Separating direct and transitive dependencies
+
+A cleaner pattern many projects use: keep a short hand-written file of what *you*
+actually depend on, and generate a fully pinned lock file from it.
+
+```
+# requirements.in — what you actually chose
+numpy
+torch
+transformers
+```
+
+```bash
+pip install pip-tools
+pip-compile requirements.in    # resolves and writes requirements.txt, fully pinned
+pip-sync requirements.txt      # installs exactly what's pinned, removes anything extra
+```
+
+<Mermaid client:visible code={`flowchart LR
+  In["requirements.in (direct deps)"] -->|"pip-compile"| Txt["requirements.txt (fully pinned, incl. transitive)"]
+  Txt -->|"pip-sync"| Env["Environment matches exactly"]`} />
+
+`pip-compile` resolves the whole dependency tree once and writes it down — so every
+teammate, CI run, and production deploy installs the identical set of versions,
+without you tracking transitive dependencies by hand.
+
+## Editable installs for local development
+
+When you're developing a package that other code in the same project imports,
+`pip install -e .` installs it in "editable" mode — Python imports it straight from
+your working directory, so edits take effect immediately without reinstalling.
+
+```bash
+pip install -e .              # install the current project in editable mode
+pip install -e ".[dev]"       # editable install, plus the "dev" extras group from pyproject.toml
+```
+
+This is the standard way to work on a local Python package (e.g. your own `src/`
+library that a training script imports) while iterating on it.
+
+## Constraints vs. requirements
+
+`-c constraints.txt` caps versions *without* installing the package unless
+something else already requires it — useful for pinning a transitive dependency
+(e.g. forcing a specific `numpy` version that a dozen other packages depend on)
+without adding it as a direct requirement of your project.
+
+```bash
+pip install -r requirements.txt -c constraints.txt
+```

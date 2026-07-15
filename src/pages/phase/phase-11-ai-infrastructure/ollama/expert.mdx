@@ -1,0 +1,73 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Ollama"
+level: expert
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "ollama"
+estReadTime: 9
+resources:
+  - type: article
+    title: "llama.cpp — GGUF format specification"
+    url: "https://github.com/ggml-org/llama.cpp/blob/master/docs/gguf.md"
+---
+
+## What Ollama adds on top of llama.cpp
+
+llama.cpp is the inference engine; Ollama is the packaging and ergonomics layer around
+it. Running llama.cpp directly means managing model files, quantization choices,
+context-length flags, and a build toolchain yourself. Ollama adds: a model registry
+(pull by name/tag instead of hunting for GGUF files), the Modelfile system for
+declarative customization, automatic hardware detection (GPU offload layers chosen
+for you), and a persistent background server with a stable REST API. The trade-off is
+control — llama.cpp exposes many more low-level tuning flags (custom RoPE scaling,
+fine-grained thread/batch tuning, exotic quantization schemes) directly, some of which
+Ollama doesn't surface.
+
+## Why Ollama isn't a production serving engine
+
+The core architectural difference from vLLM/SGLang/TensorRT-LLM is what each one
+optimizes the GPU *for*. Ollama (via llama.cpp) is built around efficiently running
+**one model, for one or a few concurrent users, with good single-stream latency**,
+including on CPU-only or consumer-GPU hardware. It does not implement continuous
+batching, PagedAttention-style KV-cache paging, or tensor parallelism across multiple
+GPUs in the way vLLM does — because those are throughput optimizations for many
+*simultaneous, independent* requests sharing one GPU, a problem Ollama's design center
+doesn't target. Point 500 concurrent users at an Ollama instance and requests queue up
+and serialize rather than sharing GPU compute efficiently across a large batch.
+
+## Comparison: Ollama vs llama.cpp vs vLLM
+
+| Axis | Ollama | llama.cpp (direct) | vLLM / production serving stacks |
+|---|---|---|---|
+| Setup friction | Lowest — one install, one command | Medium — build from source or grab binaries, manage files yourself | Medium-high — Python env, GPU drivers, launch flags |
+| Concurrent request handling | Serialized / limited, no continuous batching | Serialized / limited, no continuous batching | Continuous batching, many concurrent requests efficiently |
+| Multi-GPU (tensor parallelism) | No | No (partial: layer-split across GPUs, not true TP) | Yes, first-class |
+| Hardware target | CPU, consumer GPU, Apple Silicon | Same, more manual control | Data-center GPUs (A100/H100 etc.), though CPU/consumer support exists |
+| Low-level tuning control | Limited — Ollama abstracts most flags | Full — every llama.cpp flag exposed | Full — extensive engine args |
+| Best fit | Local dev, prototyping, personal use, small internal tools | Embedded/custom local deployments needing fine control | Multi-tenant production APIs at scale |
+
+## When to graduate off Ollama
+
+The signal isn't "Ollama is bad," it's workload shape crossing a threshold: once you
+have concurrent users whose requests would benefit from sharing GPU compute (continuous
+batching), need multi-GPU sharding for a model too large for one card, or need to
+push raw tokens/sec/dollar as a serious cost lever, that's the point to move to vLLM,
+SGLang, or TensorRT-LLM. A common real path: prototype the prompt/product with Ollama
+locally (fast iteration, zero infra), then re-point the same OpenAI-compatible-style
+client code at a vLLM deployment once the product needs to serve real concurrent
+traffic — the prompts and application logic largely carry over, only the serving layer
+changes.
+
+## Quantization trade-offs you inherit from GGUF
+
+Because Ollama models are GGUF-packaged, you inherit llama.cpp's quantization scheme
+naming (`Q4_K_M`, `Q5_K_S`, `Q8_0`, etc.) — the letter/number roughly indicates bits
+per weight, and the suffix indicates the specific mixed-precision strategy used across
+layers. `Q4_K_M` is a common default: a good quality/size balance for consumer
+hardware. Going lower (`Q2`, `Q3`) saves more memory but degrades output quality
+measurably, especially on reasoning-heavy tasks; going higher (`Q8_0`, or full fp16)
+approaches original model quality at several times the disk/memory cost. This is the
+same underlying trade-off AWQ/GPTQ quantization makes for production servers — Ollama
+just defaults you into a sensible middle point (`Q4_K_M`) so most users never have to
+think about it explicitly.

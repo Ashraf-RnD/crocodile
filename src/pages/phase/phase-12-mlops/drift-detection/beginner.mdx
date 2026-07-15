@@ -1,0 +1,81 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Drift Detection"
+level: beginner
+phaseSlug: "phase-12-mlops"
+phaseName: "MLOps"
+topicSlug: "drift-detection"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "Evidently AI — Data Drift Documentation"
+    url: "https://docs.evidentlyai.com/user-guide/customization/options-for-statistical-tests"
+  - type: article
+    title: "Machine Learning Model Drift Explained"
+    url: "https://www.evidentlyai.com/ml-in-production/data-drift"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The world changes, but your model doesn't
+
+A model trained in January learns patterns from January's data. If customer
+behavior, prices, or the mix of incoming requests changes by June — a new
+competitor, a seasonal shift, a change in your product — the model is still
+making predictions as if it were January. This mismatch is called **drift**,
+and it's one of the main reasons a model that worked great at launch quietly
+gets worse over time without any code changing at all.
+
+There are two common kinds:
+
+- **Data drift**: the *input* data looks different than what the model was
+  trained on (e.g. average order value has doubled)
+- **Concept drift**: the *relationship* between inputs and the correct
+  answer has changed (e.g. what used to predict fraud no longer does)
+
+### A simple drift check
+
+```python
+from scipy.stats import ks_2samp
+
+# Compare a feature's distribution: training data vs. this week's live data
+training_values = training_df["transaction_amount"]
+live_values = live_df["transaction_amount"]
+
+statistic, p_value = ks_2samp(training_values, live_values)
+
+if p_value < 0.05:
+    print("Significant drift detected in transaction_amount")
+else:
+    print("Distribution looks stable")
+```
+
+The Kolmogorov-Smirnov test compares two distributions and tells you how
+likely it is they came from the same underlying population — a small p-value
+means "these look meaningfully different," a signal worth investigating.
+
+### The mental model
+
+<Mermaid client:visible code={`flowchart LR
+  A["Training data distribution"] --> C{"Compare"}
+  B["This week's live data distribution"] --> C
+  C -->|similar| D["No drift — model likely still valid"]
+  C -->|different| E["Drift detected — investigate or retrain"]`} />
+
+## Try it yourself
+
+Your model was trained on user ages ranging mostly 20-40. This month's live
+traffic shows ages mostly 50-70. Is this data drift or concept drift, and
+what would you check next?
+
+<details>
+<summary>Solution</summary>
+
+This is **data drift** — the input feature (age) distribution has shifted,
+but we don't yet know if the age-to-outcome relationship itself changed. The
+next step is running a statistical test (like `ks_2samp` above) to quantify
+how different the distributions are, and checking whether the model's
+prediction quality (accuracy, precision) has actually degraded on the new
+population — drift doesn't always mean the model got worse, but it's a
+signal worth investigating.
+
+</details>

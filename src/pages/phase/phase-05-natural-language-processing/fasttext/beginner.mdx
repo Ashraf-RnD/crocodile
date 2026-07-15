@@ -1,0 +1,69 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "FastText"
+level: beginner
+phaseSlug: "phase-05-natural-language-processing"
+phaseName: "Natural Language Processing"
+topicSlug: "fasttext"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "fastText — official documentation"
+    url: "https://fasttext.cc/docs/en/support.html"
+  - type: article
+    title: "Bojanowski et al. — Enriching Word Vectors with Subword Information"
+    url: "https://arxiv.org/abs/1607.04606"
+---
+
+## Word2Vec's cousin that understands word pieces
+
+Word2Vec gives up on any word it hasn't seen during training — ask it for
+`"unhappily"` when it only ever saw `"happy"` and `"happily"`, and it draws a blank.
+**FastText** fixes this by representing each word as a bag of its character
+**n-grams** (chunks of 3-6 letters) instead of treating the whole word as an
+indivisible unit.
+
+Think of it like reading an unfamiliar word by sounding out its parts: even if you've
+never seen `"unhappily"` before, you recognize `"un-"`, `"happ"`, and `"-ily"` from
+other words, and can guess its meaning.
+
+### Seeing it in action
+
+```python
+import fasttext.util
+
+# Downloads and loads a pretrained FastText model (English, 300-dim)
+fasttext.util.download_model("en", if_exists="ignore")
+model = fasttext.load_model("cc.en.300.bin")
+
+# A completely made-up word -- Word2Vec would fail here
+print(model.get_word_vector("unhappily")[:5])
+# still returns a real vector, e.g. [0.02, -0.05, 0.11, ...]
+
+print(model.get_nearest_neighbors("unhappily", k=3))
+# [(0.71, 'unhappy'), (0.68, 'happily'), (0.62, 'sadly')]
+```
+
+Because FastText builds each word's vector from its sub-word pieces, it can produce a
+sensible vector for words it never saw during training — including typos, slang, and
+rare technical terms.
+
+## Try it yourself
+
+Predict what happens if you ask a FastText model trained on English text for the
+nearest neighbors of a misspelled word like `"recieve"` (missing the correct spelling
+`"receive"`), then check your intuition.
+
+<details>
+<summary>Solution</summary>
+
+```python
+print(model.get_nearest_neighbors("recieve", k=3))
+# FastText will likely return something close to
+# [(0.85, 'receive'), (0.71, 'receiving'), (0.65, 'received')]
+# because "recieve" shares almost all of its character n-grams
+# with "receive" -- a plain Word2Vec model would have no vector
+# for "recieve" at all unless it happened to appear in training data.
+```
+
+</details>

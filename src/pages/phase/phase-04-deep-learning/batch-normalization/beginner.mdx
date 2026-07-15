@@ -1,0 +1,83 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Batch Normalization"
+level: beginner
+phaseSlug: "phase-04-deep-learning"
+phaseName: "Deep Learning"
+topicSlug: "batch-normalization"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "PyTorch — BatchNorm1d/2d documentation"
+    url: "https://pytorch.org/docs/stable/generated/torch.nn.BatchNorm2d.html"
+  - type: article
+    title: "Batch Normalization (original paper, Ioffe & Szegedy)"
+    url: "https://arxiv.org/abs/1502.03167"
+---
+
+## Putting every layer's inputs on the same scale
+
+Imagine grading exams where one test is scored out of 10 points and another out of
+1000. Comparing raw scores across the two would be meaningless — you'd want to
+normalize them onto a common scale first. **Batch Normalization (BatchNorm)** does
+this for the numbers flowing through a neural network: at each layer, it rescales
+the batch of activations to have mean 0 and standard deviation 1, then lets the
+network learn its own preferred scale and shift on top of that.
+
+This keeps values flowing through the network in a consistent, well-behaved range as
+they pass through dozens of layers, which makes training faster and more stable.
+
+```python
+import torch
+import torch.nn as nn
+
+bn = nn.BatchNorm1d(num_features=4)
+
+batch = torch.tensor([[10.0, 200.0, -5.0, 0.1],
+                       [12.0, 190.0, -3.0, 0.2],
+                       [ 8.0, 210.0, -7.0, 0.15]])
+
+normalized = bn(batch)
+print(normalized.mean(dim=0))   # roughly [0, 0, 0, 0]
+print(normalized.std(dim=0))    # roughly [1, 1, 1, 1]
+```
+
+### Where it goes in a model
+
+BatchNorm is typically inserted right after a linear or convolutional layer, before
+the activation function:
+
+```python
+model = nn.Sequential(
+    nn.Linear(20, 64),
+    nn.BatchNorm1d(64),
+    nn.ReLU(),
+    nn.Linear(64, 10),
+)
+```
+
+### Try it yourself
+
+Create a small model with `nn.Linear(8, 16)`, followed by `nn.BatchNorm1d(16)`, then
+`nn.ReLU()`, then `nn.Linear(16, 2)`. Run a batch of 5 samples through it and print
+the output shape.
+
+<details>
+<summary>Solution</summary>
+
+```python
+import torch
+import torch.nn as nn
+
+model = nn.Sequential(
+    nn.Linear(8, 16),
+    nn.BatchNorm1d(16),
+    nn.ReLU(),
+    nn.Linear(16, 2),
+)
+x = torch.randn(5, 8)
+out = model(x)
+print(out.shape)   # torch.Size([5, 2])
+```
+
+</details>

@@ -1,0 +1,80 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Random Forest"
+level: beginner
+phaseSlug: "phase-03-machine-learning"
+phaseName: "Machine Learning"
+topicSlug: "random-forest"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "scikit-learn: Random Forests"
+    url: "https://scikit-learn.org/stable/modules/ensemble.html#random-forests"
+  - type: video
+    title: "StatQuest: Random Forests Part 1"
+    url: "https://www.youtube.com/watch?v=J4Wdy0Wc_xQ"
+---
+
+## Beginner: Random Forest
+
+A single decision tree learns the training data almost too well — it memorizes quirks and
+noise along with the real patterns, so it often gets confused on new data. A **random forest**
+fixes this by asking a whole crowd of trees to vote instead of trusting just one.
+
+Each tree in the forest is trained on a slightly different, randomly resampled version of the
+data, and each tree is only allowed to consider a random subset of features at every split.
+That randomness means the trees make different mistakes. One overfit tree might be wrong about
+a particular customer, but if 200 independently-trained trees each see the data a little
+differently, their individual errors tend to cancel out when you average their votes. This is
+the "wisdom of the crowd" effect: a forest of imperfect, decorrelated trees is usually more
+accurate and far less overfit than any single tree in it.
+
+## A tiny example
+
+```python
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.datasets import make_classification
+from sklearn.model_selection import train_test_split
+
+X, y = make_classification(n_samples=200, n_features=4, random_state=0)
+X_train, X_test, y_train, y_test = train_test_split(X, y, random_state=0)
+
+forest = RandomForestClassifier(n_estimators=100, random_state=0)
+forest.fit(X_train, y_train)
+
+print(forest.score(X_test, y_test))
+```
+
+Each of the 100 trees votes on a class for every sample, and `RandomForestClassifier` returns
+the majority vote. `RandomForestRegressor` works the same way but averages numeric predictions
+instead of voting.
+
+```python
+from sklearn.ensemble import RandomForestRegressor
+
+reg = RandomForestRegressor(n_estimators=100, random_state=0)
+reg.fit(X_train, y_train)
+print(reg.predict(X_test[:5]))
+```
+
+## Try it yourself
+
+Train a `RandomForestClassifier` with only 3 trees (`n_estimators=3`) on the same data above,
+then compare its test accuracy to the 100-tree forest. Which one looks more reliable, and why
+might a small forest be less stable?
+
+<details>
+<summary>Solution</summary>
+
+```python
+small_forest = RandomForestClassifier(n_estimators=3, random_state=0)
+small_forest.fit(X_train, y_train)
+print(small_forest.score(X_test, y_test))
+```
+
+With only 3 trees, there aren't enough independent "votes" to average away each tree's
+mistakes, so accuracy tends to be lower and more sensitive to `random_state`. Adding more
+trees generally makes the forest's predictions more stable, though returns diminish and
+training gets slower as `n_estimators` grows.
+
+</details>

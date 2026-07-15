@@ -1,0 +1,65 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Eigenvalues"
+level: beginner
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "eigenvalues"
+estReadTime: 6
+resources:
+  - type: video
+    title: "3Blue1Brown — Eigenvectors and eigenvalues"
+    url: "https://www.youtube.com/watch?v=PFDu9oVAE-g"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## A matrix as a transformation
+
+Think of a matrix as an action that stretches, rotates, or squishes space. Most
+vectors, when transformed by a matrix, change direction. But for some special vectors,
+the matrix only **stretches or shrinks** them — it doesn't rotate them at all. That
+stretch factor is the **eigenvalue**, and the special vector is the **eigenvector**.
+
+<Mermaid client:visible code={`flowchart LR
+  V["Vector v"] --> M["Multiply by matrix A"]
+  M --> R1["Usually: direction changes"]
+  M --> R2["Special case: A·v = λ·v — only length changes"]`} />
+
+## The equation
+
+```
+A · v = λ · v
+```
+
+`A` is the matrix, `v` is the eigenvector, `λ` (lambda) is the eigenvalue — a single
+number telling you how much that direction gets stretched (`λ > 1`), shrunk
+(`0 < λ < 1`), or flipped (`λ < 0`).
+
+```python
+import numpy as np
+A = np.array([[2, 0],
+              [0, 3]])
+eigenvalues, eigenvectors = np.linalg.eig(A)
+print(eigenvalues)   # [2. 3.]
+```
+
+For this diagonal matrix, the eigenvalues are just the diagonal entries — it stretches
+the x-direction by 2 and the y-direction by 3, with no rotation at all.
+
+## Why this matters in AI (a preview)
+
+PCA (dimensionality reduction) finds the directions of most "spread" in your data by
+computing eigenvalues of the data's covariance matrix — the largest eigenvalues point
+to the directions that matter most. You'll meet this again properly in the ML phase.
+
+## Try it yourself
+
+For `A = [[4, 0], [0, 1]]`, without running code: which direction does this matrix
+stretch the most?
+
+<details>
+<summary>Solution</summary>
+
+The x-direction (first axis), by a factor of 4 — its eigenvalue (4) is larger than
+the y-direction's eigenvalue (1).
+</details>

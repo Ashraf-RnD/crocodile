@@ -1,0 +1,78 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "CNN"
+level: expert
+phaseSlug: "phase-04-deep-learning"
+phaseName: "Deep Learning"
+topicSlug: "cnn"
+estReadTime: 12
+resources:
+  - type: article
+    title: "MobileNets: Depthwise Separable Convolutions"
+    url: "https://arxiv.org/abs/1704.04861"
+  - type: article
+    title: "A guide to convolution arithmetic for deep learning"
+    url: "https://arxiv.org/abs/1603.07285"
+---
+
+## Receptive field: what a deep neuron actually "sees"
+
+Each convolutional layer only looks at a local neighborhood, but stacking layers
+grows the **receptive field** — the region of the original input that influences a
+given output neuron — geometrically with depth. For stacked 3x3 convolutions, the
+receptive field grows roughly linearly with the number of layers, which is why
+architectures prefer several stacked small kernels (3x3) over one large kernel
+(7x7): two 3x3 convolutions give the same receptive field as one 5x5 with fewer
+parameters (`2 * 9 = 18` vs `25` per channel pair) and an extra non-linearity in
+between — strictly more expressive per parameter spent.
+
+## Parameter sharing: why convolution beats dense layers on images
+
+A dense layer connecting a 224x224x3 image to even a modest hidden layer costs
+hundreds of millions of parameters. A convolutional layer with the same receptive
+field reuses the *same* small filter (say, 3x3x3=27 weights) at every spatial
+position — the assumption being that a useful pattern (an edge) is useful wherever
+it appears in the image, not just in one fixed location. This inductive bias
+(translation equivariance) is precisely what makes CNNs both parameter-efficient and
+generalize well on image data without needing to see every possible object position
+during training.
+
+## Convolution variants and their trade-offs
+
+| Variant | Mechanism | Parameter cost | Typical use |
+|---|---|---|---|
+| Standard conv | Full-channel filter at every position | `k^2 * C_in * C_out` | Default, maximum expressiveness |
+| Depthwise separable | Depthwise conv (spatial) + 1x1 pointwise conv (channel mixing) | ~`8-9x` fewer params | MobileNet-class efficient/edge models |
+| Dilated (atrous) conv | Filter taps spaced apart, expanding receptive field without more params | Same as standard, larger receptive field | Semantic segmentation, audio (WaveNet) |
+| Grouped conv | Channels split into groups, each convolved independently | Fraction of standard conv (`1/groups`) | ResNeXt, efficient architectures |
+| Transposed conv | Learnable upsampling | Same formula as standard conv | Decoders, generative models, segmentation |
+
+## BatchNorm placement and its interaction with convolution
+
+BatchNorm after a convolution and before the activation is standard, but it changes
+the effective function the convolution needs to learn: because BatchNorm rescales
+per-channel outputs, the convolution's bias term becomes redundant (BatchNorm's own
+learned shift subsumes it) — which is why `nn.Conv2d(..., bias=False)` immediately
+followed by `BatchNorm2d` is common in production architectures, saving parameters
+with no loss in expressiveness.
+
+## Quantization and inference-time engineering
+
+CNNs are one of the most quantization-friendly architecture families: convolution's
+regular, dense compute pattern maps cleanly onto int8 inference kernels with
+well-understood accuracy loss (~1% top-1 for common models with post-training
+quantization). This is a major reason CNNs remain the default for edge/mobile vision
+despite transformer-based vision models (ViT) matching or exceeding accuracy at
+scale — CNN inference tooling (TensorRT, CoreML, TFLite) is more mature, and the
+inductive bias toward locality means CNNs often need less data and compute to reach
+usable accuracy on constrained hardware.
+
+## Data augmentation as an implicit regularizer
+
+Because convolutional weight sharing already encodes translation invariance, most of
+the remaining regularization burden in CNN training is handled by data augmentation
+(random crop, flip, color jitter) rather than architectural changes — a distinction
+worth knowing when debugging an overfitting CNN: architecture-level fixes
+(more BatchNorm, more dropout) are often less effective than simply expanding
+augmentation, since the failure mode is frequently insufficient data diversity, not
+excess model capacity.

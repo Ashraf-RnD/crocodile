@@ -1,0 +1,94 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "AWQ"
+level: intermediate
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "awq"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "AutoAWQ — GitHub"
+    url: "https://github.com/casper-hansen/AutoAWQ"
+  - type: article
+    title: "AWQ: Activation-aware Weight Quantization for LLM Compression"
+    url: "https://arxiv.org/abs/2306.00978"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Why AWQ quantizes faster than GPTQ
+
+GPTQ-style quantization reconstructs each layer's weights one at a time,
+iteratively solving a least-squares problem to minimize the quantization error
+layer by layer (and sometimes column by column within a layer) — accurate, but
+slow, since it's effectively running an optimization pass per layer over the
+calibration set. AWQ skips reconstruction entirely. It runs the calibration data
+through the model *once* to collect activation statistics, computes a per-channel
+scaling factor from those statistics directly (a closed-form search over a small
+grid, not an iterative solve), and then does a single round-trip quantization pass.
+No per-layer optimization loop means AWQ can quantize a 7B model in minutes rather
+than the tens of minutes to hours GPTQ can take, which matters a lot if you're
+quantizing dozens of fine-tuned checkpoints instead of one base model.
+
+<Mermaid client:visible code={`flowchart TB
+  subgraph AWQ["AWQ pipeline"]
+    A1["Run calibration data through model once"] --> A2["Collect per-channel activation magnitudes"]
+    A2 --> A3["Search small grid for per-channel scale factor"]
+    A3 --> A4["Scale weights up / activations down, then quantize to 4-bit"]
+  end
+  subgraph GPTQ["GPTQ-style pipeline"]
+    G1["Run calibration data through model"] --> G2["Per-layer: iteratively solve least-squares reconstruction"]
+    G2 --> G3["Quantize column-by-column, correcting error into remaining columns"]
+    G3 --> G4["Repeat per layer (slow)"]
+  end`} />
+
+## Quantizing your own model
+
+AutoAWQ handles calibration and quantization end-to-end:
+
+```python
+from awq import AutoAWQForCausalLM
+from transformers import AutoTokenizer
+
+model_path = "meta-llama/Llama-3.1-8B-Instruct"
+quant_path = "llama-3.1-8b-instruct-awq"
+
+quant_config = {
+    "zero_point": True,
+    "q_group_size": 128,   # weights quantized in groups of 128 for better accuracy
+    "w_bit": 4,
+    "version": "GEMM",     # kernel variant: GEMM (batched) or GEMV (single-stream, low latency)
+}
+
+model = AutoAWQForCausalLM.from_pretrained(model_path)
+tokenizer = AutoTokenizer.from_pretrained(model_path)
+
+model.quantize(tokenizer, quant_config=quant_config)  # uses a small default calibration set
+model.save_quantized(quant_path)
+tokenizer.save_pretrained(quant_path)
+```
+
+`q_group_size=128` means every 128 consecutive weights in a channel share one
+scale/zero-point — smaller groups (e.g. 64) improve accuracy at the cost of a bit
+more storage for scale factors; `GEMM` is the right choice for throughput-oriented
+batched serving, `GEMV` favors single-request latency.
+
+## Serving it
+
+```bash
+vllm serve ./llama-3.1-8b-instruct-awq --quantization awq --max-model-len 8192
+```
+
+vLLM, TGI, and AutoAWQ's own `generate()` all support AWQ checkpoints natively —
+no conversion step needed once `model.save_quantized()` has written the artifact.
+
+## Practical calibration notes
+
+AWQ's calibration set is small (commonly ~128 samples from a general text
+corpus like a slice of C4 or pile-style data) — it doesn't need to look like your
+production traffic the way a fine-tuning dataset would, because it's only being
+used to estimate *which channels* see large activations, not to teach the model
+anything. Using a wildly out-of-domain calibration set (e.g. pure code for a
+model that will only serve chat) can shift which channels get protected, so it's
+worth using calibration text that's at least broadly representative of the
+deployment domain.

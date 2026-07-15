@@ -1,0 +1,102 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Cost Optimization"
+level: expert
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "cost-optimization"
+estReadTime: 12
+resources:
+  - type: docs
+    title: "Anthropic Docs — Prompt caching"
+    url: "https://docs.claude.com/en/docs/build-with-claude/prompt-caching"
+  - type: article
+    title: "NVIDIA — Mastering LLM Techniques: Inference Optimization"
+    url: "https://developer.nvidia.com/blog/mastering-llm-techniques-inference-optimization/"
+---
+
+## Cost optimization is a multi-objective problem, not a single knob
+
+Every cost lever — smaller models, aggressive caching, shorter context,
+batching — trades against quality, latency, or engineering complexity.
+Treating cost reduction as a standalone objective without measuring its
+effect on the metrics that actually matter (task success rate, user
+retention, support escalation rate) routinely produces false savings: a
+cheaper model that increases retry rate, or an aggressive cache that
+occasionally serves stale answers, can cost more in downstream damage than
+it saves in token spend. Mature cost optimization is done against an
+explicit **cost-quality Pareto frontier**, with quality regressions treated
+as a hard constraint, not an acceptable side effect.
+
+## Model cascades need calibrated confidence, not raw model confidence
+
+A cascade that escalates from a cheap to an expensive model based on the
+cheap model's self-reported confidence only works if that confidence is
+actually calibrated — i.e., "70% confidence" outputs are correct roughly
+70% of the time. Raw softmax/logprob-based confidence from LLMs is
+frequently miscalibrated (models can be very confident while wrong,
+especially on out-of-distribution inputs), which means a naive cascade can
+systematically under-escalate exactly the hard cases that most need the
+larger model. Production cascades typically calibrate the escalation
+threshold empirically against held-out labeled data per task, and some use
+a cheap *separate* verifier model rather than trusting the generating
+model's own confidence signal.
+
+## Prompt caching economics depend on traffic shape, not just prompt size
+
+Prompt/prefix caching only saves money if the same prefix is actually
+reused within the cache's retention window — for bursty or highly diverse
+traffic, cache write overhead (which some providers price separately and
+higher than a cache read) can exceed the savings if hit rate is low. This
+means the decision to structure prompts for caching (put stable content
+first, put variable content last) needs to be paired with actually
+measuring cache hit rate in production, not assumed from prompt design
+alone — a system with a well-structured but rarely-reused prefix can end up
+paying a caching premium instead of a discount.
+
+## Batch/async processing shifts cost but adds architectural complexity
+
+Discounted batch APIs are straightforwardly cheaper per token but require
+the product to tolerate latency measured in hours, not seconds — which
+means the application needs an entirely separate async code path (job
+submission, polling/webhook completion, partial-failure handling for
+individual items in a batch) alongside any synchronous path. For workloads
+that are genuinely latency-insensitive (nightly enrichment, bulk
+classification), this is close to free savings; for workloads where product
+requirements later tighten toward real-time, the batch-only architecture
+becomes a rewrite, not a config change — a real technical-debt trade-off
+made at cost-optimization time.
+
+## Self-hosting vs. API: a genuine cost/ops trade-off, not a default win
+
+Self-hosting open-weight models can be cheaper per-token at sufficient and
+consistent volume, but this comparison is frequently done wrong by ignoring
+total cost of ownership: GPU provisioning and utilization efficiency,
+on-call/ops burden for a new stateful production system, the engineering
+cost of building serving infrastructure (batching, autoscaling, model
+updates) that hosted APIs provide for free, and the opportunity cost of
+that engineering time. Self-hosting tends to make sense only past a real
+volume threshold with predictable, high utilization — at low or spiky
+volume, idle GPU capacity (or the latency cost of aggressive scale-to-zero)
+usually erases the per-token savings.
+
+## Output length as a cost and latency lever with UX consequences
+
+Capping `max_tokens` or otherwise constraining output length reduces cost
+predictably, but truncating a response mid-thought is a real UX failure
+mode, not just a cost optimization — a cut-off answer can be worse than no
+answer for build trust. The more robust pattern is prompting/fine-tuning
+the model toward appropriately concise responses for the task rather than
+relying purely on a hard length cap to enforce brevity, reserving hard caps
+as a safety backstop rather than the primary length-control mechanism.
+
+## Trade-off summary
+
+| Lever | Savings mechanism | Real cost |
+|---|---|---|
+| Model cascading | Route most requests to a cheap model | Needs calibrated confidence/verifier; misrouting hurts quality |
+| Prompt/prefix caching | Reuse computed state for repeated prefixes | Only saves money if hit rate is high; low-reuse traffic can cost more |
+| Context trimming | Fewer input tokens billed | Risk of losing information the model needed; needs careful testing |
+| Batch/async APIs | Discounted per-token pricing | Requires a separate async architecture; not viable for real-time UX |
+| Self-hosting | Lower marginal per-token cost at scale | High fixed ops/engineering cost; only wins past a volume threshold |
+| Output length capping | Fewer output tokens billed | Risk of truncated, lower-quality responses hurting the actual goal |

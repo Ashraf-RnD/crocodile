@@ -1,0 +1,111 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Embeddings"
+level: intermediate
+phaseSlug: "phase-08-retrieval-augmented-generation"
+phaseName: "Retrieval-Augmented Generation"
+topicSlug: "embeddings"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "MTEB — Massive Text Embedding Benchmark leaderboard"
+    url: "https://huggingface.co/spaces/mteb/leaderboard"
+  - type: docs
+    title: "OpenAI — text-embedding-3 models"
+    url: "https://platform.openai.com/docs/guides/embeddings/embedding-models"
+---
+
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Choosing an embedding model is a real production decision
+
+Embedding model choice affects retrieval quality, latency, cost, and storage — and,
+unlike swapping an LLM, changing embedding models means **re-embedding your entire
+corpus**, because vectors from different models aren't comparable to each other. This
+makes the choice sticky, so it's worth evaluating deliberately rather than defaulting
+to whatever's convenient.
+
+<Mermaid client:visible code={`flowchart LR
+  Query["User query"] --> QEmbed["Embedding model"]
+  Docs["Document chunks"] --> DEmbed["Same embedding model"]
+  QEmbed --> QVec["Query vector"]
+  DEmbed --> DVecs["Document vectors"]
+  QVec --> Compare["Cosine similarity"]
+  DVecs --> Compare
+  Compare --> TopK["Top-k nearest documents"]`} />
+
+## API-based vs. self-hosted embeddings
+
+```python
+# Option 1: hosted API (OpenAI) — no infra to manage, per-token cost, network latency
+from openai import OpenAI
+client = OpenAI()
+
+response = client.embeddings.create(
+    model="text-embedding-3-small",
+    input=["How do I reset my password?"],
+)
+vector = response.data[0].embedding  # 1536 dims by default
+
+# Option 2: self-hosted (sentence-transformers) — free at inference, own the latency,
+# runs on your own GPU/CPU, full control over the model
+from sentence_transformers import SentenceTransformer
+model = SentenceTransformer("BAAI/bge-base-en-v1.5")
+vector = model.encode("How do I reset my password?", normalize_embeddings=True)
+```
+
+`text-embedding-3-small` supports a `dimensions` parameter that lets you truncate the
+output vector (e.g. from 1536 to 512) with minimal quality loss — a direct storage/cost
+lever most teams underuse.
+
+## MTEB and picking a model that fits your task
+
+The [MTEB leaderboard](https://huggingface.co/spaces/mteb/leaderboard) benchmarks
+embedding models across retrieval, clustering, classification, and reranking tasks.
+For RAG specifically, filter to the **retrieval** subtask score, not the overall
+average — a model that's great at classification isn't necessarily great at matching
+queries to passages. Open models like `BAAI/bge-large-en-v1.5` and
+`intfloat/e5-large-v2` are competitive with hosted APIs on English retrieval
+benchmarks and can be run entirely on your own infrastructure.
+
+## Query vs. passage asymmetry
+
+Some models (E5, BGE) are trained with **instruction prefixes** that distinguish a
+search query from a document being indexed — mixing these up measurably hurts
+retrieval quality:
+
+```python
+# E5-style models expect explicit prefixes
+query_vec = model.encode("query: How do I reset my password?")
+doc_vec = model.encode("passage: To reset your password, go to Settings > Security...")
+```
+
+This matters because queries and passages are asymmetric — a query is short and
+question-shaped, a passage is longer and declarative — and models trained on this
+distinction embed each differently to line them up correctly.
+
+## Normalization and distance metrics
+
+Most vector databases default to cosine similarity, but some (and some models) are
+tuned for dot product. If a model's outputs are already **unit-normalized**
+(`normalize_embeddings=True`), cosine similarity and dot product produce identical
+rankings — but if you skip normalization and use dot product, longer/higher-magnitude
+vectors get an unfair boost regardless of actual semantic relevance. Always check
+what distance metric a model card recommends and match your vector database's index
+configuration to it.
+
+## Batching for ingestion throughput
+
+Embedding a large corpus one document at a time is slow — batch calls amortize model
+overhead and (for GPU-hosted models) fill the batch dimension for real throughput
+gains:
+
+```python
+chunks = [...]  # thousands of text chunks
+vectors = model.encode(chunks, batch_size=64, show_progress_bar=True)
+```
+
+For hosted APIs, batching also matters for cost and rate limits — sending one HTTP
+request per document at ingestion time for a 100k-document corpus is both slow and
+likely to hit rate limits; batching into requests of 100-1000 inputs is standard
+practice.

@@ -1,0 +1,95 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "GPT-3"
+level: expert
+phaseSlug: "phase-14-research-literacy"
+phaseName: "Research Literacy"
+topicSlug: "gpt-3"
+estReadTime: 12
+resources:
+  - type: article
+    title: "Language Models are Few-Shot Learners (original paper)"
+    url: "https://arxiv.org/abs/2005.14165"
+  - type: article
+    title: "Training language models to follow instructions (InstructGPT)"
+    url: "https://arxiv.org/abs/2203.02155"
+---
+
+## What the paper actually contributed vs. prior work
+
+Decoder-only Transformer pretraining and prompting weren't new — GPT-1 and GPT-2
+had already established the recipe. GPT-2's paper even gestured toward zero-shot
+task transfer. GPT-3's real contribution was an existence proof at unprecedented
+scale (175B parameters, roughly 10x larger than any dense LM before it, trained on
+~300B tokens) demonstrating that **few-shot in-context learning quality scales
+smoothly and predictably with model size**, without any architectural innovation
+or task-specific fine-tuning. The paper is, in large part, a rigorous scaling
+study: it evaluates a family of models from 125M to 175B parameters across dozens
+of benchmarks, and shows the gap between zero-shot and few-shot performance grows
+with scale — evidence that larger models aren't just "better at the same things,"
+they qualitatively acquire new capabilities (in-context learning) that smaller
+models lack or have only weakly.
+
+## Limitations
+
+- **No genuine learning at inference time.** In-context learning is pattern
+  completion within a fixed context window, not weight updates — the model
+  "forgets" everything outside its context and cannot accumulate knowledge across
+  sessions.
+- **Inconsistent, prompt-format-sensitive performance.** Results were
+  measurably sensitive to example ordering, phrasing, and delimiter choice —
+  a fragility that later research (calibration, prompt engineering literature)
+  spent years addressing.
+- **No alignment mechanism.** GPT-3 was trained purely to predict the next
+  token on internet text, with no notion of being "helpful" or "harmless" — it
+  would readily complete toxic, false, or unhelpful text if that matched the
+  statistical pattern, and had no way to refuse or express uncertainty by design.
+- **Cost.** Both training (estimated in the millions of dollars) and inference
+  (175B dense parameters activated on every token) were extremely expensive
+  relative to the smaller fine-tuned models it was compared against.
+- **Static, stale knowledge.** Everything the model "knows" is frozen at the
+  pretraining cutoff, with no mechanism to incorporate new information short of
+  retraining — one of the direct motivations for RAG (covered elsewhere in this
+  phase).
+
+## What came after
+
+- **InstructGPT / RLHF (2022)** addressed the alignment gap directly: fine-tuning
+  GPT-3 with human feedback (reward modeling + PPO) to follow instructions and
+  refuse harmful requests, producing a model humans preferred even though it was
+  much smaller than raw GPT-3 — arguably a more consequential result for
+  real-world usability than raw scale. This became ChatGPT's direct technical
+  ancestor.
+- **Chinchilla (2022)** re-examined GPT-3-era scaling assumptions and showed most
+  large models of that era, including GPT-3, were substantially
+  **undertrained relative to their parameter count** — for a fixed compute
+  budget, a smaller model trained on more data outperforms a larger model
+  trained on less, which reshaped how every subsequent frontier model (including
+  LLaMA, covered elsewhere in this phase) was sized.
+- **DPO and simpler alignment methods** (see the DPO lesson) later simplified the
+  RLHF pipeline that made GPT-3 usable as a product.
+- **Open-weight competitors** (LLaMA, Mistral, DeepSeek) emerged specifically to
+  offer GPT-3-class or better capability without the closed-API dependency GPT-3
+  established as the commercial norm.
+
+## How it's actually used in production today
+
+Raw GPT-3 (the 2020 model) is not what powers modern ChatGPT-class products — it
+has been superseded by instruction-tuned, RLHF/DPO-aligned, and (per Chinchilla)
+more compute-optimally trained successors. But GPT-3's core contribution — that a
+single large pretrained model, prompted rather than fine-tuned, can serve as a
+general-purpose task engine — is exactly the interaction model behind every
+commercial LLM API today. Few-shot prompting (and its descendant, in-context
+learning with retrieved examples) remains a standard technique when fine-tuning
+isn't available or practical, especially for closed-weight API-only models.
+
+## Comparison: fine-tuning vs. few-shot in-context learning
+
+| Dimension | Fine-tuning (pre-GPT-3 norm) | Few-shot in-context learning (GPT-3) |
+|---|---|---|
+| Requires labeled training run per task | Yes | No — examples go directly in the prompt |
+| Weight updates | Yes | None |
+| Setup cost for a new task | High (data collection + training) | Low (write a prompt) |
+| Per-request inference cost | Lower (task-specific, often smaller model) | Higher (long prompts, large general model) |
+| Performance ceiling on a well-resourced task | Often higher | Often lower, unless model is very large |
+| Adapts instantly to novel tasks | No | Yes |

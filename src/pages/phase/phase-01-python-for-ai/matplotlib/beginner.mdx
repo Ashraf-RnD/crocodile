@@ -1,0 +1,91 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Matplotlib"
+level: beginner
+phaseSlug: "phase-01-python-for-ai"
+phaseName: "Python for AI"
+topicSlug: "matplotlib"
+estReadTime: 5
+resources:
+  - type: docs
+    title: "Matplotlib — Quick start guide"
+    url: "https://matplotlib.org/stable/users/explain/quick_start.html"
+  - type: video
+    title: "Matplotlib Crash Course — freeCodeCamp"
+    url: "https://www.youtube.com/watch?v=3Xc3CA655Y4"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Why plotting matters before you even train anything
+
+You can't fix what you can't see. Before training a model, you plot your data to
+spot outliers, skewed distributions, and obvious errors. After training, you plot
+the loss curve to see whether the model is actually learning. **Matplotlib** is the
+foundational plotting library nearly every other Python plotting tool (pandas
+`.plot()`, seaborn) is built on top of.
+
+```python
+import matplotlib.pyplot as plt
+
+epochs = [1, 2, 3, 4, 5]
+loss = [0.9, 0.6, 0.4, 0.3, 0.25]
+
+plt.plot(epochs, loss)
+plt.xlabel("Epoch")
+plt.ylabel("Loss")
+plt.title("Training loss over time")
+plt.show()
+```
+
+That's the entire pattern for a line chart: give it x-values, y-values, label the
+axes, show it. This exact plot is what you'll look at after nearly every training
+run to sanity-check that loss is going down.
+
+### Other common chart types
+
+```python
+values = [23, 45, 12, 67, 34]
+labels = ["A", "B", "C", "D", "E"]
+
+plt.bar(labels, values)        # bar chart — comparing categories
+plt.show()
+
+data = [2, 4, 4, 4, 5, 5, 7, 9, 12, 15]
+plt.hist(data, bins=5)         # histogram — seeing a distribution's shape
+plt.show()
+
+x = [1, 2, 3, 4, 5]
+y = [2, 4, 5, 4, 5]
+plt.scatter(x, y)              # scatter plot — relationship between two variables
+plt.show()
+```
+
+<Mermaid client:visible code={`flowchart LR
+  Data["Your data"] --> Q{"What are you checking?"}
+  Q -->|"Trend over time"| Line["plt.plot()"]
+  Q -->|"Compare categories"| Bar["plt.bar()"]
+  Q -->|"Shape of a distribution"| Hist["plt.hist()"]
+  Q -->|"Relationship between 2 vars"| Scatter["plt.scatter()"]`} />
+
+## Try it yourself
+
+You trained a model for 4 epochs and recorded accuracy: `[0.55, 0.70, 0.78, 0.82]`.
+Plot it as a line chart with axis labels "Epoch" and "Accuracy".
+
+<details>
+<summary>Solution</summary>
+
+```python
+import matplotlib.pyplot as plt
+
+epochs = [1, 2, 3, 4]
+accuracy = [0.55, 0.70, 0.78, 0.82]
+
+plt.plot(epochs, accuracy)
+plt.xlabel("Epoch")
+plt.ylabel("Accuracy")
+plt.title("Validation accuracy over time")
+plt.show()
+```
+
+</details>

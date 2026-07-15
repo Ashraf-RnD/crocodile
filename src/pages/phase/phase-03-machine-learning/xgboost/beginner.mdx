@@ -1,0 +1,97 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "XGBoost"
+level: beginner
+phaseSlug: "phase-03-machine-learning"
+phaseName: "Machine Learning"
+topicSlug: "xgboost"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "XGBoost Documentation"
+    url: "https://xgboost.readthedocs.io/en/stable/"
+  - type: video
+    title: "StatQuest: Gradient Boost, Part 1"
+    url: "https://www.youtube.com/watch?v=3CC4N4z3GJc"
+---
+
+## Learning from your own mistakes, one tree at a time
+
+A random forest is like a crowd of independent experts who each vote after
+studying the data separately — their errors happen to cancel out on average.
+**XGBoost** works completely differently: it's a team where every new member
+joins specifically to fix the mistakes the team has made *so far*. The first
+tree makes a rough guess. The second tree doesn't start from scratch — it
+looks at where the first tree was wrong and focuses on correcting those
+errors. The third tree corrects what's still wrong after trees one and two.
+This chain continues, with each new tree built to patch the residual mistakes
+of the whole ensemble before it.
+
+This sequential, mistake-focused strategy is called **gradient boosting**,
+and XGBoost ("Extreme Gradient Boosting") is a fast, regularized, widely used
+implementation of it. It's one of the most successful algorithms for
+tabular/structured data — the kind you'd find in a spreadsheet or a SQL
+table — and has won more Kaggle competitions than almost any other method.
+
+## A tiny example
+
+XGBoost isn't part of scikit-learn — install it separately:
+
+```bash
+pip install xgboost
+```
+
+```python
+from xgboost import XGBClassifier
+from sklearn.datasets import make_classification
+from sklearn.model_selection import train_test_split
+
+X, y = make_classification(n_samples=200, n_features=4, random_state=0)
+X_train, X_test, y_train, y_test = train_test_split(X, y, random_state=0)
+
+model = XGBClassifier(n_estimators=50, max_depth=3, random_state=0)
+model.fit(X_train, y_train)
+
+print(model.score(X_test, y_test))
+```
+
+`XGBClassifier` follows the same `.fit()` / `.predict()` / `.score()` pattern
+as scikit-learn models, so it drops into existing pipelines easily. Under the
+hood, each of the 50 trees (`n_estimators=50`) is trained to reduce the
+errors left behind by all the trees before it, and their outputs are summed
+(not voted on) to make the final prediction.
+
+```python
+from xgboost import XGBRegressor
+
+reg = XGBRegressor(n_estimators=50, max_depth=3, random_state=0)
+reg.fit(X_train, y_train)
+print(reg.predict(X_test[:5]))
+```
+
+`XGBRegressor` works the same way for continuous targets — it sums up each
+tree's small correction to arrive at the final numeric prediction.
+
+## Try it yourself
+
+Train an `XGBClassifier` with just `n_estimators=1` (a single tree) on the
+data above, then compare its test accuracy to the 50-tree model. What does
+this tell you about why boosting adds trees sequentially instead of relying
+on one tree?
+
+<details>
+<summary>Solution</summary>
+
+```python
+one_tree = XGBClassifier(n_estimators=1, max_depth=3, random_state=0)
+one_tree.fit(X_train, y_train)
+print(one_tree.score(X_test, y_test))
+```
+
+With only one tree, there's no correction step — it's just a single decision
+tree's guess, and accuracy is usually noticeably lower than the 50-tree
+ensemble. Each additional tree gets a chance to fix specific errors the
+current ensemble is still making, so accuracy typically improves as more
+trees are added (up to a point, after which it can start overfitting).
+
+</details>

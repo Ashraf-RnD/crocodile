@@ -1,0 +1,57 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Gradient Descent"
+level: expert
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "gradient-descent"
+estReadTime: 11
+resources:
+  - type: article
+    title: "An overview of gradient descent optimization algorithms"
+    url: "https://ruder.io/optimizing-gradient-descent/"
+---
+
+## Convergence rate and condition number
+
+For convex quadratic objectives, gradient descent's convergence rate depends on the
+**condition number** of the Hessian — the ratio of its largest to smallest eigenvalue.
+An ill-conditioned loss surface (a long, narrow valley) forces gradient descent to
+zigzag inefficiently across the narrow direction while making slow progress along the
+shallow one, since a single learning rate can't be simultaneously appropriate for both
+curvatures. This is precisely the geometric problem momentum and adaptive per-
+parameter methods (Adam) are designed to mitigate — not by changing the loss surface,
+but by using update history to effectively adapt the step size per direction.
+
+## The edge of stability phenomenon
+
+Classical optimization theory predicts gradient descent diverges once the learning
+rate exceeds `2/L` (where `L` is the largest Hessian eigenvalue, i.e. the sharpest
+local curvature). Empirical work on neural network training has found that networks
+often train stably at learning rates that *should* cause divergence by this
+classical bound — training self-organizes toward an "edge of stability" regime where
+the local sharpness itself adapts during training to accommodate the learning rate,
+rather than the learning rate being constrained by a fixed, static sharpness. This
+overturned some earlier assumptions about why large learning rates work at all for
+deep networks and is an active empirical research area, not settled theory.
+
+## Implicit regularization from SGD noise
+
+The specific noise structure of mini-batch SGD — not just "any noise," but noise
+correlated with the data distribution and batch size — appears to bias training toward
+flatter minima, which correlate empirically with better generalization compared to
+sharp minima that full-batch gradient descent is more prone to settling into. This
+means batch size isn't a pure throughput knob: smaller batches (noisier gradients) can
+sometimes produce better-generalizing models even holding total compute constant,
+which is why "just increase batch size for more parallelism" isn't a free lunch in
+practice, and large-batch training typically pairs with learning-rate scaling rules
+(e.g. linear scaling with warmup) specifically to compensate for this effect.
+
+## Trade-off summary
+
+| Choice | Convergence speed | Generalization / stability |
+|---|---|---|
+| Full-batch GD | Accurate direction, slow per-epoch throughput | Can settle into sharper minima |
+| Small-batch SGD | Noisy but cheap per step | Implicit regularization toward flatter minima |
+| Large-batch SGD | High throughput (parallelizable) | Needs LR scaling/warmup to match small-batch generalization |
+| Second-order methods (L-BFGS) | Fast convergence near minimum | Impractical memory/compute cost at scale |

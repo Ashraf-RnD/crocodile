@@ -1,0 +1,166 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "XGBoost"
+level: expert
+phaseSlug: "phase-03-machine-learning"
+phaseName: "Machine Learning"
+topicSlug: "xgboost"
+estReadTime: 12
+resources:
+  - type: docs
+    title: "XGBoost — Introduction to Boosted Trees"
+    url: "https://xgboost.readthedocs.io/en/stable/tutorials/model.html"
+  - type: article
+    title: "XGBoost: A Scalable Tree Boosting System (Chen & Guestrin, 2016)"
+    url: "https://arxiv.org/abs/1603.02754"
+---
+
+## Second-order boosting: gradients and Hessians
+
+Classic gradient boosting machines (GBM) fit each new tree to the negative
+gradient of the loss — effectively a first-order (steepest-descent)
+approximation of how to improve the ensemble. XGBoost goes further: it
+expands the loss function to **second order** using a Taylor series, using
+both the gradient (`g`) and the Hessian (`h`, second derivative) of the loss
+with respect to the current predictions. This is a Newton-Raphson-style
+update rather than plain gradient descent, and it gives XGBoost a
+closed-form, provably optimal leaf weight for a given tree structure:
+
+```
+w_j* = -G_j / (H_j + λ)
+```
+
+where `G_j` and `H_j` are the summed gradients and Hessians of the training
+examples that land in leaf `j`, and `λ` is an L2 regularization term. Because
+the Hessian captures curvature (how confident/sensitive the loss is at the
+current prediction), XGBoost's leaf updates are more accurate per tree than
+GBM's — it doesn't just know which direction to move, it knows how far it's
+safe to move given the loss's local shape. This is also what lets XGBoost
+evaluate candidate splits using an exact closed-form "gain" formula instead
+of the greedy variance-reduction heuristics classic GBM implementations
+often approximate.
+
+## Regularization is part of the objective, not an afterthought
+
+XGBoost's objective function is explicitly:
+
+```
+Obj = Σ loss(y_i, ŷ_i) + Σ Ω(tree_k)
+Ω(tree) = γT + ½λ‖w‖² + α‖w‖₁
+```
+
+`T` is the number of leaves in a tree, `w` is the vector of leaf weights,
+`γ` (`gamma`) penalizes adding leaves at all (a minimum loss reduction
+required to justify a split — this is what "pruning" means in XGBoost:
+splits below the `gamma` threshold are never made), and `λ`/`α` are L2/L1
+penalties directly on the leaf weight values. A plain unregularized GBM only
+penalizes structure indirectly through hyperparameters like `max_depth` and
+`min_samples_leaf`; XGBoost penalizes leaf weight magnitude and leaf count
+*inside the loss it optimizes*, which is why it tends to produce shallower,
+more conservative trees per boosting round and generalizes better at
+comparable tree counts without as much manual tuning.
+
+```python
+from xgboost import XGBClassifier
+
+model = XGBClassifier(
+    n_estimators=500,
+    learning_rate=0.03,
+    max_depth=5,
+    reg_lambda=1.5,   # L2 on leaf weights
+    reg_alpha=0.1,    # L1 on leaf weights
+    gamma=0.2,        # min loss reduction to split
+    tree_method="hist",
+    eval_metric="logloss",
+    random_state=0,
+)
+```
+
+## Scaling splits: exact, approximate, and histogram methods
+
+Finding the optimal split at every node naively requires sorting every
+feature's values and scanning all candidate thresholds — `O(n log n)` per
+feature per node, which doesn't scale to large datasets. XGBoost supports
+several split-finding strategies via `tree_method`:
+
+- **`exact`** — the naive full scan; accurate but doesn't scale past
+  moderate dataset sizes, and doesn't support `NaN`-aware splits as
+  efficiently.
+- **`approx`** — buckets continuous features into weighted quantile
+  sketches and evaluates splits only at bucket boundaries, recomputed each
+  boosting round.
+- **`hist`** — the modern default. Bins each feature into a fixed number of
+  histogram buckets once, then reuses that binned representation across the
+  whole training run. This is what makes XGBoost competitive in speed with
+  LightGBM, which pioneered the histogram approach.
+
+`hist` also underlies XGBoost's GPU support (`device="cuda"` with
+`tree_method="hist"`), which builds histograms on-device and can give an
+order-of-magnitude training speedup on large tabular datasets with wide
+feature counts, at the cost of GPU memory constraints on very high-cardinality
+categorical encodings or extremely deep trees.
+
+## Trade-off summary
+
+| Dimension | XGBoost | LightGBM | CatBoost | Random Forest |
+|---|---|---|---|---|
+| Training speed (large data) | Fast with `hist`/GPU | Fastest (leaf-wise growth, native histograms) | Slower (ordered boosting overhead) | Fast (trees parallelize independently) |
+| Native categorical handling | No (needs encoding) | Yes (optimal split on category groups) | Yes, best-in-class (ordered target statistics) | No (needs encoding) |
+| Memory footprint | Moderate | Low (compact histograms) | Higher (stores permutations for ordered boosting) | Higher (many full-depth trees) |
+| Typical tuning burden | Moderate-high | Moderate (leaf-wise needs `num_leaves`/depth care) | Low (strong defaults) | Low |
+| Overfitting risk (small data) | Moderate, controllable via `gamma`/`λ`/`α` | Higher (leaf-wise growth overfits small data faster) | Lower (ordered boosting resists target leakage) | Low |
+| Accuracy ceiling on tabular data | Very high, industry standard | Very high, often ties/beats XGBoost | Very high, especially with categoricals | Good, usually below boosting methods |
+
+None of these dominate outright: LightGBM generally wins on raw training
+speed and memory at scale, CatBoost wins when categorical features are
+numerous and high-cardinality, and XGBoost remains the most battle-tested,
+widest-supported option across serving infrastructure — which is itself a
+production consideration, not just an accuracy one.
+
+## Production concerns
+
+**Why it dominates tabular competitions and production systems.** For
+structured/tabular data — as opposed to images, text, or audio — gradient
+boosted trees consistently outperform deep learning, because tabular
+features are typically heterogeneous, low-dimensional per-feature, and
+lack the spatial/sequential structure that gives neural nets their edge.
+XGBoost's combination of speed, regularization, and mature tooling made it
+the default choice across recommendation systems, fraud detection, credit
+risk, and search ranking for years, and it remains a strong baseline any new
+tabular model should beat before justifying added complexity.
+
+**Training cost at scale.** Boosting is inherently sequential — tree `k+1`
+depends on the residuals produced by trees `1..k` — so unlike random forest,
+you cannot naively parallelize across trees. Distributed XGBoost (via Dask,
+Spark, or `xgboost.dask`) parallelizes *within* each tree's histogram
+construction and split-finding instead, which scales reasonably but has a
+different cost profile than embarrassingly-parallel bagging methods; expect
+training wall-clock time to grow with `n_estimators` in a way RF training
+often doesn't.
+
+**Monotonic constraints for regulated domains.** In credit scoring,
+insurance underwriting, and other regulated use cases, model behavior often
+must satisfy domain logic auditors can verify — e.g., "higher income should
+never decrease approval probability, all else equal." XGBoost supports this
+directly via `monotone_constraints`:
+
+```python
+model = XGBClassifier(
+    monotone_constraints={"income": 1, "debt_ratio": -1},
+    n_estimators=300,
+)
+```
+
+This constrains every tree's split search so the learned function is
+non-decreasing in `income` and non-increasing in `debt_ratio`, which random
+forests and unconstrained boosting cannot guarantee — a material advantage
+when models face regulatory review.
+
+**Model size and serialization.** A tuned XGBoost model with hundreds of
+trees at `max_depth=6-8` can reach tens of megabytes when serialized (JSON
+or the binary `.ubj` format), which is small relative to a deep neural net
+but non-trivial for edge/mobile deployment or high-QPS services with tight
+memory budgets per replica. Common mitigations: reducing `n_estimators` via
+early stopping before export, quantizing/pruning shallow trees, or
+converting to a compiled inference format (e.g., Treelite) for
+low-latency serving paths.

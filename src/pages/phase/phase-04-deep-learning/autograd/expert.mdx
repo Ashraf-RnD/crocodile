@@ -1,0 +1,106 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Autograd"
+level: expert
+phaseSlug: "phase-04-deep-learning"
+phaseName: "Deep Learning"
+topicSlug: "autograd"
+estReadTime: 12
+resources:
+  - type: docs
+    title: "PyTorch — Extending autograd (custom Function)"
+    url: "https://pytorch.org/docs/stable/notes/extending.html"
+  - type: docs
+    title: "PyTorch — torch.utils.checkpoint"
+    url: "https://pytorch.org/docs/stable/checkpoint.html"
+---
+
+## Reverse-mode AD and why it's the default for deep learning
+
+Autograd implements **reverse-mode automatic differentiation**: one forward pass
+computes and caches intermediate values, then one backward pass computes gradients
+for *all* inputs with respect to a single scalar output. Its cost is roughly
+proportional to one forward pass regardless of how many parameters exist — which is
+exactly the shape of the deep learning problem (millions/billions of parameters,
+one scalar loss). **Forward-mode AD** is cheaper when there are few inputs and many
+outputs (the reverse case), which is why it's used for Jacobian-vector products in
+specific settings (`torch.func.jvp`) but not as the default training mechanism.
+
+## The memory cost of storing activations
+
+To compute gradients, autograd must keep every intermediate activation needed by the
+backward pass alive in memory until `.backward()` consumes it. For deep networks
+with large batch sizes, activation memory — not parameter memory — is frequently the
+dominant consumer of GPU memory during training.
+
+**Gradient checkpointing** trades compute for memory: instead of storing all
+activations, it stores only a subset ("checkpoints") and *recomputes* the rest
+during the backward pass by re-running the forward computation for that segment:
+
+```python
+from torch.utils.checkpoint import checkpoint
+
+def forward_segment(x):
+    return heavy_block(x)
+
+# activations for heavy_block are NOT stored; recomputed on backward
+y = checkpoint(forward_segment, x, use_reentrant=False)
+```
+
+This roughly trades a ~30% increase in compute time for a substantial (often
+2-4x) reduction in peak activation memory — a deliberate, tunable trade that lets
+teams fit larger batch sizes or deeper models on fixed hardware.
+
+## In-place operations and the version counter
+
+Every tensor tracks a `._version` counter incremented on any in-place mutation.
+Autograd's backward functions record the version they expect; if the version has
+changed by the time backward runs, it raises rather than silently returning wrong
+gradients. This is a correctness safeguard, not an arbitrary restriction — a
+backward function computed against stale saved activations would produce silently
+incorrect gradients, which is far worse than a loud crash.
+
+## Double backward and higher-order gradients
+
+Autograd's backward pass is itself differentiable — calling `.backward()` with
+`create_graph=True` builds a graph *of the backward computation*, enabling gradients
+of gradients. This underlies techniques like gradient penalties (WGAN-GP), MAML
+(meta-learning), and physics-informed neural networks that need second derivatives:
+
+```python
+x = torch.tensor(2.0, requires_grad=True)
+y = x ** 3
+grad1 = torch.autograd.grad(y, x, create_graph=True)[0]   # dy/dx = 3x^2
+grad2 = torch.autograd.grad(grad1, x)[0]                   # d2y/dx2 = 6x
+```
+
+## Custom autograd Functions
+
+When an operation isn't expressible efficiently through existing differentiable ops
+(a custom CUDA kernel, a non-differentiable-looking op with a known analytic
+gradient), you implement `torch.autograd.Function` directly, defining `forward` and
+`backward` by hand:
+
+```python
+class ClampedSquare(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x):
+        ctx.save_for_backward(x)
+        return x.clamp(min=0) ** 2
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        x, = ctx.saved_tensors
+        grad_input = grad_output * 2 * x.clamp(min=0)
+        return grad_input
+```
+
+## Trade-offs across autograd usage patterns
+
+| Approach | Memory | Compute | When to reach for it |
+|---|---|---|---|
+| Standard `.backward()` | Stores all activations | Baseline | Default for most training |
+| `torch.no_grad()` / `.detach()` | No graph stored | Cheapest | Inference, frozen sub-networks |
+| Gradient checkpointing | Stores few activations, recomputes rest | ~30% more compute | Memory-constrained training of deep models |
+| `create_graph=True` (double backward) | Graph of backward stored too | 2x+ more compute/memory | Gradient penalties, meta-learning, second-order methods |
+| Custom `Function` | Depends on hand-written backward | Can be faster than autotracing | Custom kernels, non-standard/analytic gradients |

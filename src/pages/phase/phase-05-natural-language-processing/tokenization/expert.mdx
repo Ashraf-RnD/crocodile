@@ -1,0 +1,95 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Tokenization"
+level: expert
+phaseSlug: "phase-05-natural-language-processing"
+phaseName: "Natural Language Processing"
+topicSlug: "tokenization"
+estReadTime: 12
+resources:
+  - type: article
+    title: "Sennrich et al. — Neural Machine Translation of Rare Words with Subword Units (BPE)"
+    url: "https://arxiv.org/abs/1508.07909"
+  - type: article
+    title: "Kudo — SentencePiece / Unigram Language Model"
+    url: "https://arxiv.org/abs/1804.10959"
+---
+
+## Tokenization is a silent modeling decision
+
+Choosing a tokenizer isn't preprocessing hygiene — it fixes the model's effective
+vocabulary, its compute cost per character, and even what it can and can't learn
+efficiently. Two models trained on identical data with different tokenizers are, in a
+real sense, solving different problems.
+
+### Why GPT-family models struggle with arithmetic and spelling
+
+BPE-style tokenizers merge frequent character sequences greedily based on training
+corpus statistics, with no awareness of number structure. `"1234"` might tokenize as
+`["123", "4"]` in one context and `["12", "34"]` in another, depending on what
+surrounding digits happened to co-occur during BPE training. Because the model never
+sees numbers decomposed consistently into individual digits, it has to *learn*
+arithmetic through fragile pattern memorization rather than genuine positional
+digit reasoning. This is a direct, well-documented consequence of the tokenizer, not
+the architecture — which is why some later models (e.g. GPT-4's tokenizer, PaLM)
+special-case digit tokenization to split all numbers into individual digits or fixed
+groups.
+
+The same mechanism explains poor character-level tasks like "count the letters in
+this word" or reversing a string — the model's input is sub-word chunks, so it has no
+direct access to individual characters unless spelled out.
+
+### BPE vs. WordPiece vs. Unigram — the real differences
+
+| Aspect | BPE (GPT-2/RoBERTa) | WordPiece (BERT) | Unigram (SentencePiece/T5) |
+|---|---|---|---|
+| Vocabulary construction | Greedily merges the *most frequent* adjacent pair | Greedily merges the pair that most increases training-data likelihood | Starts from a large candidate vocab, prunes to maximize a unigram LM likelihood |
+| Segmentation at inference | Deterministic, same merges always applied | Deterministic, longest-match-first | Probabilistic — can sample multiple valid segmentations |
+| Handles unseen subwords | Falls back to byte/char-level merges | `[UNK]` more likely without byte fallback | Same, but subword regularization mitigates this |
+| Notable side benefit | Byte-level BPE (GPT-2+) guarantees **zero** `[UNK]` tokens — any byte sequence is representable | Simpler, well suited to fixed-vocab classification models | **Subword regularization**: sampling different segmentations at train time acts as data augmentation, improving robustness |
+
+### Byte-level BPE and the `[UNK]` problem
+
+GPT-2 and its successors operate on raw UTF-8 bytes (256 possible base tokens) instead
+of Unicode characters, guaranteeing full coverage of any input — emoji, unusual
+scripts, malformed text — with no `[UNK]` fallback ever needed. The cost: byte-level
+BPE tokens are less linguistically meaningful, and non-Latin scripts (Chinese, Arabic,
+Bengali) end up needing far more tokens per "word" than English, since the merge
+statistics were learned predominantly on English-heavy web corpora.
+
+### Tokenizer inequity: cost and context-window impact per language
+
+Because BPE vocabularies are built from frequency statistics over a training corpus
+skewed toward English, a sentence in Hindi or Amharic can require 3-10x more tokens
+than the semantically equivalent English sentence. This has real production
+consequences: pay-per-token API costs are effectively higher for non-English users,
+and a fixed context window (e.g. 128k tokens) holds proportionally less actual content
+in those languages. Multilingual tokenizers (e.g. XLM-R's SentencePiece vocab, or
+purpose-built multilingual vocabularies) partially address this by training on
+balanced multilingual corpora, but the imbalance is never fully eliminated.
+
+### Vocabulary size as a systems trade-off
+
+Vocabulary size directly sets the size of the embedding and output-projection
+matrices (`vocab_size x hidden_dim`, appearing twice in most architectures). A larger
+vocabulary means:
+- Shorter sequences for the same text (better — less compute in the attention layers,
+  which scale quadratically with sequence length)
+- Larger embedding/LM-head matrices (worse — more parameters and memory, particularly
+  painful for the softmax over the output vocabulary at every generation step)
+
+This is why vocab sizes cluster in a fairly narrow practical band (30k-50k for
+BERT-era models, 100k-256k for modern multilingual LLMs) rather than scaling up
+indefinitely — beyond that point the embedding table's memory and compute cost
+outweighs the benefit of shorter sequences.
+
+### Training-serving skew from tokenizer mismatches
+
+A frequent, hard-to-debug production bug: fine-tuning or serving a model with a
+tokenizer version, vocabulary, or normalization setting that differs from what it was
+pretrained with. Even a subtle mismatch (e.g. a different `do_lower_case` setting, or
+a re-trained BPE merges file) silently shifts every token ID's meaning, degrading
+quality without throwing an error. Always load `AutoTokenizer.from_pretrained(...)`
+from the exact same checkpoint as the model, and pin the tokenizer version alongside
+the model version in any deployment manifest — never treat the tokenizer as
+interchangeable "preprocessing config."

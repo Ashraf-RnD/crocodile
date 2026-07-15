@@ -1,0 +1,100 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "LlamaIndex"
+level: intermediate
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "llamaindex"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "LlamaIndex — Node Parsers / Chunking"
+    url: "https://docs.llamaindex.ai/en/stable/module_guides/loading/node_parsers/"
+  - type: docs
+    title: "LlamaIndex — Query Engines"
+    url: "https://docs.llamaindex.ai/en/stable/module_guides/deploying/query_engine/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The pipeline behind `VectorStoreIndex.from_documents`
+
+The one-liner from the beginner lesson hides several real decisions worth controlling
+explicitly: how documents are split into chunks, which embedding model turns chunks
+into vectors, and how many chunks get retrieved per query.
+
+<Mermaid client:visible code={`flowchart LR
+  Docs[Raw documents] --> Parse[Node parser: split into chunks]
+  Parse --> Embed[Embedding model]
+  Embed --> Store[(Vector store)]
+  Query[User query] --> QEmbed[Embed the query]
+  QEmbed --> Search[Similarity search]
+  Store --> Search
+  Search --> TopK[Top-k relevant chunks]
+  TopK --> Synth[LLM synthesizes final answer]`} />
+
+```python
+from llama_index.core import VectorStoreIndex, Settings
+from llama_index.core.node_parser import SentenceSplitter
+from llama_index.embeddings.openai import OpenAIEmbedding
+from llama_index.llms.openai import OpenAI
+
+Settings.embed_model = OpenAIEmbedding(model="text-embedding-3-small")
+Settings.llm = OpenAI(model="gpt-4o-mini")
+Settings.node_parser = SentenceSplitter(chunk_size=512, chunk_overlap=50)
+
+index = VectorStoreIndex.from_documents(documents)
+query_engine = index.as_query_engine(similarity_top_k=5)
+response = query_engine.query("What is our refund policy for digital products?")
+
+for node in response.source_nodes:
+    print(node.score, node.node.metadata.get("file_name"))
+```
+
+`similarity_top_k` controls how many chunks get retrieved — too few and the answer
+might miss relevant context; too many and you waste tokens on marginally relevant
+chunks (and can dilute the model's focus, per the "lost in the middle" effect covered
+in the Context Management lesson).
+
+## Chunk size is a real trade-off, not a default to ignore
+
+Small chunks (e.g. 256 tokens) retrieve more precisely but can lose surrounding
+context a larger chunk would have preserved; large chunks (e.g. 1024+ tokens) keep
+more context together but retrieve less precisely, since a chunk's embedding
+represents an average of everything in it — a chunk mixing two unrelated topics
+embeds poorly for either. `chunk_overlap` (some tokens shared between adjacent
+chunks) mitigates information getting awkwardly split at a chunk boundary.
+
+## Persisting an index instead of rebuilding it every run
+
+Building an index (embedding every document) costs real time and money — don't
+rebuild it on every app start. Persist it to disk (or a real vector database) and
+load it back:
+
+```python
+# Save once
+index.storage_context.persist(persist_dir="./storage")
+
+# Load on subsequent runs — no re-embedding needed
+from llama_index.core import StorageContext, load_index_from_storage
+storage_context = StorageContext.from_defaults(persist_dir="./storage")
+index = load_index_from_storage(storage_context)
+```
+
+For production scale, swap the default in-memory store for a real vector database
+(`PGVectorStore`, `PineconeVectorStore`, `ChromaVectorStore`, etc.) — LlamaIndex's
+abstraction keeps the rest of your code identical when you switch backends.
+
+## Query engines vs. chat engines vs. agents
+
+LlamaIndex offers three escalating levels of interaction:
+
+- **Query engine** — single-shot question in, answer out. No conversation memory.
+- **Chat engine** — wraps a query engine with conversation history, so follow-up
+  questions ("what about international orders?") resolve correctly using prior turns.
+- **Agent** — adds tool use and multi-step reasoning on top, letting the system call
+  multiple tools (including the query engine itself, exposed as a tool) rather than
+  just retrieving once per turn.
+
+Pick the simplest one that satisfies the actual requirement — a query engine is
+sufficient for a one-shot Q&A widget; reach for a chat engine once follow-up questions
+matter, and an agent only once the task needs more than retrieval-then-answer.

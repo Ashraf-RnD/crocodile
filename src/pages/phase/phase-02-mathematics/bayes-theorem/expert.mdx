@@ -1,0 +1,66 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Bayes Theorem"
+level: expert
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "bayes-theorem"
+estReadTime: 11
+resources:
+  - type: article
+    title: "Variational Inference: A Review for Statisticians"
+    url: "https://arxiv.org/abs/1601.00670"
+---
+
+## MAP estimation as Bayes' theorem in disguise
+
+**Maximum a posteriori (MAP)** estimation — finding the parameters that maximize
+`P(θ | data) ∝ P(data | θ) · P(θ)` — is Bayes' theorem applied to model fitting itself,
+not just classification. Crucially, this reframes common "regularization" techniques
+as implicit priors:
+
+- L2 regularization (weight decay) corresponds exactly to assuming a Gaussian prior
+  on the weights
+- L1 regularization corresponds to a Laplace prior, which is why it induces sparsity
+  (the Laplace prior has a sharp peak at zero)
+
+This means the regularization strength hyperparameter (`lambda`) is, statistically
+speaking, encoding how strongly you believe weights should be small *before* seeing
+any data — a Bayesian reading of a purely "engineering" trick.
+
+## Why exact Bayesian inference is usually intractable
+
+For anything beyond simple conjugate models, computing the true posterior requires
+integrating over the entire parameter space — `P(data) = ∫ P(data | θ) P(θ) dθ` — which
+has no closed form for most useful models, including neural networks. This is the
+motivation for two major approximate-inference families:
+
+- **Variational inference**: approximate the true posterior with a simpler family of
+  distributions and optimize to minimize KL divergence to it (this is exactly the
+  mechanism behind VAEs — the "variational" in the name)
+- **MCMC (Markov Chain Monte Carlo)**: sample from the posterior without ever
+  computing it in closed form, at the cost of being computationally expensive and slow
+  to converge for high-dimensional parameter spaces like deep networks
+
+## Bayesian deep learning and epistemic uncertainty
+
+A standard neural network gives a point estimate — one set of weights, one prediction,
+with no notion of "how sure the model is about its own weights" (as opposed to a
+softmax probability, which only captures uncertainty *given* those weights). Bayesian
+deep learning methods (e.g. Monte Carlo Dropout, deep ensembles as an approximation)
+attempt to recover an implicit posterior over weights, letting you distinguish
+**aleatoric uncertainty** (irreducible noise in the data) from **epistemic
+uncertainty** (the model hasn't seen enough data to be sure) — a distinction that
+matters directly for knowing when a model's confidence should be trusted versus when
+it needs more training data or a fallback to human review.
+
+## RLHF's KL-constrained objective as a Bayesian posterior
+
+RLHF's typical objective — maximize reward while staying close (via a KL penalty) to a
+reference policy — can be read as computing an approximate posterior over policies:
+the reference model acts as a prior, and the reward signal acts as a likelihood term
+pulling the policy toward higher-reward behavior, with the KL term literally
+controlling how much the "posterior" (fine-tuned policy) is allowed to diverge from
+the "prior" (base model). This is one of the deeper reasons a too-large KL penalty
+coefficient leaves a model unchanged, while too small a one causes reward hacking and
+degenerate outputs — it's the prior-vs-likelihood balance playing out directly.

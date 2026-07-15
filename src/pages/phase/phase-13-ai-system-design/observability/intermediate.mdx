@@ -1,0 +1,87 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Observability"
+level: intermediate
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "observability"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "LangSmith Docs — Observability for LLM applications"
+    url: "https://docs.smith.langchain.com/observability"
+  - type: docs
+    title: "OpenTelemetry — Generative AI semantic conventions"
+    url: "https://opentelemetry.io/docs/specs/semconv/gen-ai/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## What to actually track, beyond standard app metrics
+
+Standard web observability (request rate, error rate, latency percentiles)
+still matters, but AI systems need a parallel set of LLM-specific signals:
+token usage, cost per request, prompt/response pairs, and — critically —
+some proxy for output *quality*, not just whether a request succeeded.
+
+<Mermaid client:visible code={`flowchart TB
+  Req["Request enters system"] --> Span1["Trace span: retrieval"]
+  Span1 --> Span2["Trace span: LLM call<br/>logs: prompt, response, tokens in/out, model, latency, cost"]
+  Span2 --> Span3["Trace span: safety check"]
+  Span3 --> Span4["Trace span: tool calls (if any)"]
+  Span4 --> Done["Full trace stored, queryable per-request"]
+  Done --> Agg["Aggregated into dashboards:<br/>p50/p95 latency, cost/day, error rate, token usage trends"]
+  Done --> Eval["Sampled for quality evaluation<br/>(human review or automated scoring)"]`} />
+
+## Structured tracing for multi-step pipelines
+
+Most real AI systems are pipelines (retrieval, generation, moderation, tool
+calls), not a single model call. Observability needs to capture this as a
+**trace** — a tree of spans representing each stage — so a slow or wrong
+response can be attributed to a specific stage rather than treated as one
+opaque black box. Standards like OpenTelemetry now have semantic
+conventions specifically for GenAI spans (model name, token counts, request/
+response content) so this can plug into existing observability
+infrastructure instead of requiring a bespoke system.
+
+```python
+with tracer.start_span("llm_call") as span:
+    span.set_attribute("gen_ai.request.model", model_name)
+    span.set_attribute("gen_ai.usage.input_tokens", prompt_tokens)
+    response = await model.generate(prompt)
+    span.set_attribute("gen_ai.usage.output_tokens", response.token_count)
+    span.set_attribute("gen_ai.response.latency_ms", response.latency_ms)
+```
+
+## Cost and token tracking as first-class metrics
+
+Because every LLM call costs real money, cost needs to be tracked with the
+same rigor as latency — cost per request, cost per user, cost per feature —
+broken down by model, since a silent model upgrade or a prompt change that
+adds tokens can quietly and significantly increase spend without any error
+ever being thrown. A cost spike is often the first (and sometimes only)
+signal something changed upstream.
+
+## Quality signals: the hard, AI-specific part
+
+Traditional metrics tell you the system is "up," not that it's giving good
+answers. Practical approaches to closing this gap:
+
+- **User feedback signals** — thumbs up/down, regeneration requests, or
+  session abandonment, logged and correlated with the specific request that
+  triggered them.
+- **Automated scoring** — a cheaper model or heuristic scores a sample of
+  responses against criteria (relevance, groundedness, tone) so quality can
+  be tracked as a trend, not just spot-checked.
+- **Human review sampling** — a small, regularly reviewed sample of real
+  traffic, especially useful for catching quality regressions automated
+  scoring might miss.
+
+## Alerting on the right things
+
+Alerting purely on error rate misses a huge class of AI failures — a model
+that returns 200 OK with a nonsensical or unsafe response looks perfectly
+healthy to a standard uptime monitor. Effective alerting for AI systems
+layers in: sudden shifts in average response length or token usage (often a
+signal something upstream changed), latency percentile regressions per
+model, and quality-score drift from automated scoring, in addition to
+standard error-rate and availability alerts.

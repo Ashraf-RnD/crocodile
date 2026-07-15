@@ -1,0 +1,91 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "TensorRT-LLM"
+level: expert
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "tensorrt-llm"
+estReadTime: 11
+resources:
+  - type: article
+    title: "NVIDIA — Optimizing Inference on Large Language Models with TensorRT-LLM"
+    url: "https://developer.nvidia.com/blog/optimizing-inference-on-large-language-models-with-nvidia-tensorrt-llm-now-publicly-available/"
+---
+
+## The performance ceiling vs. iteration-speed trade-off
+
+TensorRT-LLM's core value proposition is that ahead-of-time compilation with
+hardware-specific kernel selection produces a *higher raw performance ceiling* than a
+general-purpose PyTorch-based runtime can reach — on well-matched workloads (stable
+batch shapes, known sequence-length distributions, a fixed model), it frequently posts
+the best tokens/sec-per-GPU and lowest per-token latency of any serving stack on NVIDIA
+hardware. The cost is paid entirely in engineering time and operational rigidity: build
+pipelines, engine artifact management per GPU SKU, and slower iteration whenever the
+model, quantization scheme, or even max batch size changes. This is not a "better
+runtime, no downsides" story — it's a classic compile-vs-interpret trade-off pushed to
+the inference-serving layer.
+
+## Comparison: TensorRT-LLM vs. vLLM vs. SGLang
+
+| Axis | TensorRT-LLM | vLLM | SGLang |
+|---|---|---|---|
+| Deployment model | Compile engine ahead of time, then serve | Load HF checkpoint, run immediately | Load HF checkpoint, run immediately |
+| Time to first request | Minutes–hours (build step) | Seconds–minutes | Seconds–minutes |
+| Raw throughput/latency ceiling | Highest on NVIDIA GPUs when well-tuned | Very good, slightly behind on peak numbers | Very good, strong on structured/agentic workloads |
+| Hardware portability | NVIDIA-only, engine locked to GPU arch + library version | Runs on NVIDIA, AMD (ROCm), some others | Primarily NVIDIA, broadening |
+| Quantization support | FP8, INT4/INT8 (AWQ/GPTQ/modelopt), deeply integrated | Growing (AWQ, GPTQ, FP8) but less exhaustive | Growing, competitive with vLLM |
+| Iteration speed (swap model/config) | Slow — requires rebuild | Fast — just point at a new checkpoint | Fast — just point at a new checkpoint |
+| Batching strategy | In-flight (continuous) batching, native | Continuous batching (PagedAttention) | Continuous batching + RadixAttention (prefix caching) |
+| Typical production fit | Large, stable model, latency-critical, NVIDIA-only fleet | Fast-moving research/product teams, broad model support | Agentic/multi-turn workloads with heavy prompt reuse |
+
+None of these is universally "faster" — the honest answer at expert level is that
+TensorRT-LLM wins when the workload is stable enough to amortize the build cost, vLLM
+and SGLang win when velocity (new checkpoints, new LoRA adapters, rapid experimentation)
+matters more than the last 10-20% of raw throughput.
+
+## Where the extra performance actually comes from
+
+Three mechanisms account for most of TensorRT-LLM's edge over interpreted runtimes:
+
+1. **Kernel fusion at graph-compile time** — the compiler can fuse chains of ops
+   (LayerNorm + residual add + quant, or QKV projection + RoPE) into single kernels
+   because it sees the *entire* static computation graph ahead of time, something a
+   Python-driven eager runtime can only do with much more limited, hand-written fusion.
+2. **Custom masked/paged attention kernels tuned per architecture** — Hopper's TMA
+   (Tensor Memory Accelerator) and FP8 Tensor Cores get hand-tuned kernel variants that
+   a framework-agnostic attention implementation can't specialize for as aggressively.
+3. **No per-step Python/dispatch overhead** — at very high request rates and small
+   per-token compute (heavily batched decode steps), even microseconds of Python
+   dispatch overhead per layer accumulate into a measurable throughput tax; a compiled
+   engine removes it entirely.
+
+## Edge cases and operational sharp edges
+
+- **Engine rebuilds on config drift** — changing `max_batch_size`, sequence length
+  bounds, or the quantization scheme after the fact generally requires a full rebuild,
+  not a runtime flag flip. Teams that treat engines as build artifacts (versioned,
+  CI-built, stored in an artifact registry) fare far better than those that hand-build
+  them ad hoc on a GPU box.
+- **GPU architecture lock-in** — an engine built for H100 will not load on A100 or
+  L40S. Fleets with heterogeneous GPU generations need one engine per architecture,
+  multiplying build and storage overhead.
+- **LoRA/adapter swapping is more constrained** — vLLM's dynamic LoRA loading (serving
+  many adapters off one base model at request time) is comparatively lightweight;
+  TensorRT-LLM supports LoRA but the workflow is more rigid and typically needs
+  adapters baked in or configured at build/engine-load time.
+- **Debugging is harder** — a miscompiled or misconfigured engine produces opaque
+  failures (silent accuracy regressions from a bad quantization config, or crashes
+  deep in fused CUDA kernels) that are much harder to trace than a Python stack trace
+  from an eager PyTorch model.
+
+## When the operational complexity is worth it
+
+TensorRT-LLM earns its complexity budget when most of the following hold: the fleet is
+NVIDIA-only, the model (or small model family) is stable for weeks/months at a time,
+request volume is high enough that a 10-20% throughput or latency improvement translates
+into real GPU-hour savings, and there's dedicated platform/infra engineering capacity to
+own the build pipeline. For a team iterating on which model to use, running mixed
+hardware, or serving many different fine-tunes with low individual traffic, the
+compilation tax outweighs the performance gain — vLLM or SGLang deployed behind Triton
+or a simple FastAPI layer is usually the better default until scale and stability
+justify the switch.

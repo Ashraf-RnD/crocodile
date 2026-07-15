@@ -1,0 +1,84 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "RAG"
+level: intermediate
+phaseSlug: "phase-14-research-literacy"
+phaseName: "Research Literacy"
+topicSlug: "rag"
+estReadTime: 10
+resources:
+  - type: article
+    title: "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks (original paper)"
+    url: "https://arxiv.org/abs/2005.11401"
+  - type: article
+    title: "Dense Passage Retrieval for Open-Domain Question Answering"
+    url: "https://arxiv.org/abs/2004.04906"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Two trainable components: retriever and generator
+
+The original RAG architecture pairs two neural networks, both differentiable
+and jointly fine-tunable:
+
+1. **Retriever** — a **Dense Passage Retriever (DPR)**: separate encoders embed
+   the query and every candidate document passage into the same vector space;
+   the top-k passages by embedding similarity (typically inner product or
+   cosine) are retrieved via approximate nearest-neighbor search over a
+   precomputed passage index.
+2. **Generator** — a sequence-to-sequence model (the paper uses BART) that
+   takes the original query concatenated with each retrieved passage and
+   generates an answer conditioned on both.
+
+```python
+def retrieve(query_embedding, passage_index, k=5):
+    scores = passage_index.embeddings @ query_embedding
+    top_k_ids = scores.argsort()[-k:][::-1]
+    return [passage_index.passages[i] for i in top_k_ids]
+
+def rag_answer(query, retriever, generator, k=5):
+    query_emb = retriever.encode_query(query)
+    passages = retrieve(query_emb, retriever.passage_index, k)
+    # Each passage is concatenated with the query and fed to the generator
+    return generator.generate(query, passages)
+```
+
+## RAG-Sequence vs. RAG-Token
+
+The paper defines two ways to marginalize over retrieved passages when
+generating:
+
+- **RAG-Sequence**: use the *same* retrieved passage for generating the entire
+  output sequence, then combine the probability of each full sequence across
+  the top-k passages.
+- **RAG-Token**: allow a *different* retrieved passage to inform each
+  individual output token, letting the model draw on different passages for
+  different parts of a longer answer.
+
+<Mermaid client:visible code={`flowchart TB
+  Query["Query embedding"] --> ANN["Approximate nearest-neighbor search"]
+  Index["Precomputed passage embedding index"] --> ANN
+  ANN --> Top["Top-k retrieved passages"]
+  Top --> Gen["Generator conditions on query + each passage"]
+  Gen --> Marg["Marginalize over passages (RAG-Sequence or RAG-Token)"]
+  Marg --> Out["Final generated answer"]`} />
+
+## End-to-end training
+
+A key design choice: the retriever and generator are trained **jointly**, with
+gradients flowing from the generation loss back through the retrieval scoring
+(though the passage encoder itself is typically kept frozen for efficiency,
+re-indexing being expensive). This lets the retriever learn to fetch passages
+that are actually useful for generation, not just passages that are lexically
+similar to the query — a subtle but important distinction from classic
+keyword-based search.
+
+## The modern, non-parametric RAG pipeline
+
+Most production RAG systems today diverge from the original paper's jointly
+trained architecture in a practical way: they use a frozen, off-the-shelf
+embedding model for retrieval (not jointly trained with the generator) paired
+with a general-purpose LLM for generation, plus a vector database for the
+nearest-neighbor search step — trading the paper's tighter joint optimization
+for modularity: you can swap the embedding model, the vector store, or the
+generator independently without retraining the whole system.

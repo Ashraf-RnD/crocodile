@@ -1,0 +1,100 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "KV Cache"
+level: expert
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "kv-cache"
+estReadTime: 11
+resources:
+  - type: article
+    title: "Efficient Memory Management for Large Language Model Serving with PagedAttention"
+    url: "https://arxiv.org/abs/2309.06180"
+  - type: article
+    title: "SGLang: Efficient Execution of Structured Language Model Programs (RadixAttention)"
+    url: "https://arxiv.org/abs/2312.07104"
+---
+
+## PagedAttention: fixing fragmentation, not size
+
+Naive KV cache allocation reserves one large contiguous memory block per sequence,
+sized for its maximum possible length. Since most sequences end far short of that
+maximum, and requests of wildly different lengths interleave, this wastes enormous
+amounts of memory to fragmentation and over-reservation — vLLM's original measurements
+found 60-80% of allocated KV cache memory going unused in naive systems.
+**PagedAttention** (vLLM's core mechanism) borrows the idea of OS virtual memory
+paging: KV cache is stored in small, fixed-size, non-contiguous blocks, and each
+sequence keeps a lightweight block table mapping its logical token positions to the
+physical blocks holding their K/V. This doesn't shrink the actual bytes needed for
+computed K/V — it eliminates waste from reservation and fragmentation, letting a GPU
+hold dramatically more *concurrent* sequences in the same memory footprint. The
+trade-off, as noted at the serving-engine level, is a small per-step indirection cost
+(block table lookups) in the attention kernel.
+
+## RadixAttention: sharing, not just packing
+
+PagedAttention still recomputes K/V independently for every sequence, even when two
+requests share an identical prefix (a system prompt, a few-shot template, a shared
+document under RAG). **RadixAttention** (SGLang's core design) organizes cached KV
+blocks in a radix tree keyed by token sequence, so overlapping prefixes across
+*different* requests automatically reuse the same cached blocks rather than
+recomputing them. This matters most for workloads with heavy structural reuse — agent
+frameworks issuing many calls against the same system prompt, chat applications with
+long conversation prefixes, or few-shot prompting patterns — where prefix sharing can
+cut both compute and memory dramatically. vLLM added a similar capability
+(`--enable-prefix-caching`) as a feature on top of PagedAttention, whereas SGLang
+treats prefix sharing as the central organizing principle of the whole engine.
+
+## Architecture-level fixes: MQA and GQA
+
+PagedAttention and RadixAttention optimize *how* the KV cache is stored and reused,
+but the cache's raw size is set at the architecture level by `num_kv_heads`. **Multi-
+query attention (MQA)** collapses all query heads down to a single shared KV head —
+maximal memory savings, but historically some quality cost from the reduced
+representational capacity. **Grouped-query attention (GQA)**, used by Llama-3, Mistral,
+and most current production LLMs, is the middle ground: groups of query heads share
+one KV head (e.g. 4 query heads per KV head), recovering most of MQA's memory savings
+while staying much closer to full multi-head attention's quality. This is a
+training-time decision baked into the checkpoint — you can't retrofit GQA onto an
+already-trained MHA model without further training, which is why it matters as much
+during model selection as during serving configuration.
+
+## FP8/INT8 KV cache quantization
+
+Independent of block layout or head count, the *precision* of stored K/V values is
+itself a lever. Serving engines increasingly support quantizing the KV cache to FP8
+(`--kv-cache-dtype fp8` in vLLM) or INT8, roughly halving KV memory versus FP16 with
+typically small accuracy impact — smaller than quantizing the model weights
+themselves, because K/V values tend to have a narrower, more quantization-friendly
+dynamic range than weight matrices. This is a serving-time, checkpoint-independent
+choice, unlike GQA, and can be combined freely with PagedAttention or prefix caching
+since it changes bytes-per-element, not layout or sharing behavior.
+
+## Comparison: where each technique operates
+
+| Technique | Operates at | Reduces | Typical memory impact |
+|---|---|---|---|
+| GQA / MQA | Model architecture (training-time) | Number of KV heads stored per token | 4-8x fewer KV heads vs full MHA, depending on grouping ratio |
+| PagedAttention | Serving engine (memory allocator) | Fragmentation / over-reservation waste | Recovers most of the 60-80% waste seen in naive allocation |
+| Prefix caching / RadixAttention | Serving engine (cache reuse) | Redundant computation + storage for shared prefixes | Highly workload-dependent; large for high prefix-overlap traffic, near-zero for unique prompts |
+| KV cache quantization (FP8/INT8) | Serving engine (precision) | Bytes per cached element | ~2x (FP16→FP8), ~4x (FP16→INT8, more accuracy risk) |
+
+## Stacking them in practice
+
+These are not mutually exclusive — a production vLLM deployment commonly runs a
+GQA-architected model (Llama-3-class), with PagedAttention as the default allocator,
+prefix caching enabled for workloads with repeated system prompts, and FP8 KV cache
+for further headroom, e.g.:
+
+```bash
+vllm serve meta-llama/Meta-Llama-3-8B-Instruct \
+  --enable-prefix-caching \
+  --kv-cache-dtype fp8 \
+  --gpu-memory-utilization 0.90
+```
+
+The compounding effect matters: architecture-level GQA sets the baseline size, the
+allocator strategy determines how efficiently that baseline is packed, prefix sharing
+avoids redundant work entirely for repeated content, and quantization shrinks
+whatever remains — each layer attacking a different part of the same underlying
+problem, which is why production stacks combine them rather than picking just one.

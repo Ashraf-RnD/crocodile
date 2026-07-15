@@ -1,0 +1,95 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "QLoRA"
+level: expert
+phaseSlug: "phase-10-fine-tuning"
+phaseName: "Fine-tuning"
+topicSlug: "qlora"
+estReadTime: 13
+resources:
+  - type: article
+    title: "QLoRA paper — Appendix on NF4 derivation and paged optimizers"
+    url: "https://arxiv.org/abs/2305.14314"
+  - type: article
+    title: "Answer.AI — FSDP + QLoRA for training 70B models on consumer GPUs"
+    url: "https://www.answer.ai/posts/2024-03-06-fsdp-qlora.html"
+---
+
+## Why NF4 is not just "int4 with extra steps"
+
+Standard uniform int4 quantization spaces its 16 representable values evenly across the
+weight range, which is optimal for uniformly distributed data. Pretrained transformer
+weights are empirically close to zero-centered Gaussian, so uniform binning wastes
+representational capacity on rarely-occurring extreme values while under-resolving the
+dense cluster near zero where most weight mass actually lives. **NF4** instead places
+quantization bins at the quantiles of a theoretical `N(0,1)` distribution, so bin
+density matches where the data actually concentrates. The practical consequence:
+NF4 achieves lower quantization error than standard int4 or even fp4 at the same bit
+width, which is why QLoRA's ablations show 4-bit NF4 fine-tuning matching 16-bit
+LoRA fine-tuning quality on most benchmarks — a result that would not hold with naive
+uniform 4-bit quantization.
+
+## Double quantization: a second-order memory optimization
+
+Block-wise quantization needs a scaling constant per block (commonly block size 64).
+Storing those constants in fp32 costs `32/64 = 0.5` bits per parameter — negligible per
+weight, but at 70B parameters this is several hundred MB. **Double quantization**
+quantizes the constants themselves (using 8-bit with a larger block size, e.g. 256),
+reducing the per-parameter overhead from 0.5 to roughly 0.127 bits. This is a small
+absolute number that matters specifically because QLoRA's entire value proposition is
+squeezing a model onto a memory-constrained GPU — every fraction of a bit per
+parameter can be the difference between fitting and OOM-ing at a given model size.
+
+## Paged optimizers are a crash-prevention mechanism, not a speed optimization
+
+`paged_adamw_8bit` uses NVIDIA's unified memory to automatically page optimizer state
+between GPU and CPU memory when GPU memory pressure spikes — typically during
+processing of unusually long sequences in a batch, when activation memory temporarily
+balloons. This does not make training faster; it makes training **not crash** on rare
+high-memory steps that would otherwise OOM a tightly-provisioned setup. Teams
+sometimes disable paging (`optim="adamw_8bit"`) once they've profiled their actual
+max sequence length and batch composition, trading a small crash-safety margin for
+slightly more predictable step-to-step latency (paging events, when they do trigger,
+introduce a real speed cliff on that step).
+
+## The double-dequantization cost during backward passes
+
+A quantized base weight must be dequantized to compute the forward pass through it,
+even though it's frozen and receives no gradient update. This dequantization happens
+**again** during the backward pass to compute gradients flowing through the frozen
+layer into the LoRA adapter (the chain rule still needs `∂L/∂x` through `W`, even
+though `∂L/∂W` is never computed). This is the core reason QLoRA trains slower per-step
+than bf16 LoRA at equivalent batch size — you're paying a real, repeated compute tax
+for the memory savings, not getting memory savings for free.
+
+## Scaling QLoRA beyond a single GPU: the FSDP+QLoRA gap
+
+Historically, QLoRA's PEFT+bitsandbytes+Trainer stack assumed the entire (quantized)
+model fits on one GPU. Fine-tuning a 70B model with QLoRA across multiple consumer GPUs
+required sharding the quantized weights themselves via FSDP — nontrivial because
+FSDP's parameter-sharding assumptions were built around uniform-dtype tensors, not
+4-bit-packed blocks with separate scaling-constant tensors. The Answer.AI collaboration
+with Hugging Face and bitsandbytes closed this gap, enabling 70B QLoRA fine-tuning
+across multiple 24GB GPUs — a good illustration that "the algorithm is memory-efficient
+per GPU" and "the algorithm scales across GPUs" are separate engineering problems, and
+solving the first doesn't automatically solve the second.
+
+## Trade-off summary
+
+| Dimension | Plain LoRA (bf16 base) | QLoRA (NF4 base) |
+|---|---|---|
+| Base model memory | Full 16-bit footprint | ~4x smaller |
+| Training speed per step | Faster | Slower (dequant overhead, both passes) |
+| Numerical stability | Native precision throughout | Slight quantization error on frozen weights, generally negligible in practice |
+| Max model size on a 24GB GPU | ~7B comfortably | 30B+ achievable |
+| Multi-GPU scaling | Mature (standard FSDP/DeepSpeed) | Requires quantization-aware sharding (FSDP+QLoRA) |
+
+## When the memory savings aren't worth it
+
+If you already have enough GPU memory for bf16 LoRA, QLoRA is usually a net loss:
+you pay real wall-clock training time for memory headroom you don't need. QLoRA earns
+its complexity specifically at the boundary where a model would not otherwise fit —
+below that boundary, plain LoRA is simpler, faster, and has fewer numerical edge cases
+to reason about (e.g. no interaction between quantization error and gradient
+checkpointing, no dependency on bitsandbytes CUDA kernel compatibility with a given
+GPU architecture).

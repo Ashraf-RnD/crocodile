@@ -1,0 +1,91 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "vLLM"
+level: intermediate
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "vllm"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "vLLM Documentation — Engine Arguments"
+    url: "https://docs.vllm.ai/en/latest/serving/engine_args.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Continuous batching vs static batching
+
+Static (naive) batching waits for a fixed group of requests, runs them together
+step-by-step, and only returns results — and accepts new requests — once the *entire
+batch* finishes. If one request in the batch needs 500 tokens and the rest need 20,
+everyone waits for the slow one; GPU slots for finished requests sit idle.
+
+vLLM uses **continuous batching** (also called iteration-level scheduling): at every
+decoding step, it checks which sequences in the running batch have finished, evicts
+them, and immediately admits new queued requests into the freed slots — all without
+waiting for the whole batch to drain.
+
+<Mermaid client:visible code={`sequenceDiagram
+  participant Q as Request queue
+  participant S as vLLM scheduler
+  participant G as GPU batch (step N)
+  Q->>S: new request arrives
+  S->>G: insert into next free slot
+  G->>S: sequence A finishes
+  S->>G: evict A, admit next queued request
+  G->>S: sequence B still generating
+  Note over G: batch composition changes every step`} />
+
+This is the single biggest reason vLLM out-throughputs naive serving loops: GPU
+utilization stays high because there's essentially never an idle slot.
+
+## Launching with real production flags
+
+```bash
+vllm serve meta-llama/Llama-3.1-70B-Instruct \
+  --port 8000 \
+  --tensor-parallel-size 4 \
+  --gpu-memory-utilization 0.90 \
+  --max-model-len 8192 \
+  --quantization awq \
+  --swap-space 4
+```
+
+- `--tensor-parallel-size 4` — shards each layer's weights across 4 GPUs, required
+  when a model (like a 70B-parameter one) doesn't fit on a single GPU. Each forward
+  pass runs in parallel across the shards with an all-reduce to combine results.
+- `--gpu-memory-utilization 0.90` — tells vLLM to pre-allocate 90% of free GPU memory
+  for the KV-cache block pool at startup. Higher means more concurrent requests fit;
+  too high and you risk OOM if the OS or other processes need headroom.
+- `--quantization awq` — loads AWQ-quantized (4-bit) weights, cutting weight memory
+  roughly 4x versus fp16 so a larger model (or more KV-cache room) fits per GPU.
+- `--swap-space 4` — GB of CPU RAM vLLM can page KV-cache blocks out to under memory
+  pressure instead of rejecting requests outright.
+
+## Serving multiple LoRA adapters from one base model
+
+A common production pattern: one base model, many fine-tuned personalities/tasks
+served as lightweight LoRA adapters, switched per-request instead of loading N full
+models:
+
+```bash
+vllm serve meta-llama/Llama-3.1-8B-Instruct \
+  --enable-lora \
+  --lora-modules support-bot=/adapters/support-bot billing-bot=/adapters/billing-bot
+```
+
+```python
+response = client.completions.create(
+    model="support-bot",   # routes to the LoRA adapter, same base weights on GPU
+    prompt="Customer says their order is late...",
+)
+```
+
+## Throughput vs latency: the batch-size trade-off
+
+More concurrent requests in a batch generally means higher aggregate **throughput**
+(tokens/sec across all users) but can increase per-request **latency** (time to each
+individual token), since the GPU's compute is shared across a larger batch each step.
+Tuning `--gpu-memory-utilization` and `--max-num-seqs` is really tuning where you sit
+on this throughput/latency curve for your workload — a chat UI cares about low
+per-token latency; a batch summarization job cares about maximizing total throughput.

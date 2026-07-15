@@ -1,0 +1,75 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Scalability"
+level: beginner
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "scalability"
+estReadTime: 6
+resources:
+  - type: article
+    title: "NVIDIA — Scaling LLM inference: throughput vs. latency"
+    url: "https://developer.nvidia.com/blog/mastering-llm-techniques-inference-optimization/"
+  - type: docs
+    title: "Kubernetes Docs — Horizontal Pod Autoscaling"
+    url: "https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## More users, same speed
+
+Scalability is about answering one question: when 10x more people start
+using your AI product at once, does it stay fast and stay up, or does it
+fall over? A system that works great with 10 users but grinds to a halt (or
+starts erroring out) with 10,000 users isn't scalable, no matter how good it
+is at the smaller scale.
+
+## Why AI systems scale differently than typical web apps
+
+A normal web request — fetch a user's profile, save a form — takes
+milliseconds and uses a tiny, predictable amount of compute. An LLM request
+can take **seconds**, and the compute it needs depends on how long the
+prompt and the response are. That means the usual web-scaling playbook
+("add more servers behind a load balancer") only partly works — you also
+need enough expensive GPU capacity, and GPUs can't be spun up in seconds the
+way a small web server container can.
+
+<Mermaid client:visible code={`flowchart LR
+  Users["Many users send requests"] --> LB["Load balancer"]
+  LB --> S1["GPU server 1"]
+  LB --> S2["GPU server 2"]
+  LB --> S3["GPU server 3"]
+  S1 --> Model["Each server runs a copy of the model"]
+  S2 --> Model
+  S3 --> Model`} />
+
+## The two knobs: more machines, or faster machines
+
+There are two basic ways to handle more load:
+
+- **Scale out (horizontal)**: run more copies of your model/service across
+  more machines, and split traffic between them.
+- **Scale up (vertical)**: use a bigger, faster machine (more GPU memory,
+  more compute) so each one handles more work.
+
+Most large-scale AI systems mainly scale out, because there's a hard ceiling
+on how big a single machine can get, and running many replicas also gives
+you resilience — if one server dies, the others keep serving.
+
+## Try it yourself
+
+If your AI app suddenly gets featured somewhere and traffic jumps 20x for a
+few hours, what's the danger of only having "add more GPU servers" as your
+scaling plan, with no other safeguards?
+
+<details>
+<summary>Solution</summary>
+
+GPU servers take real time (often minutes) to spin up — loading a large
+model into memory isn't instant — so during that window your existing
+servers get overwhelmed and users see slow responses or errors. A robust
+system pairs autoscaling with safeguards like rate limiting (so no single
+user can hog capacity) and graceful degradation (like temporarily routing to
+a smaller, cheaper model) to survive the gap before new capacity comes
+online. You'll see both of those ideas as their own topics in this phase.
+</details>

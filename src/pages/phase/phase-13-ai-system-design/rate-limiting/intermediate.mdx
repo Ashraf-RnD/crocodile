@@ -1,0 +1,108 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Rate Limiting"
+level: intermediate
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "rate-limiting"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "OpenAI Platform — Rate limits"
+    url: "https://platform.openai.com/docs/guides/rate-limits"
+  - type: article
+    title: "Cloudflare — What is rate limiting?"
+    url: "https://www.cloudflare.com/learning/bots/what-is-rate-limiting/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Two dimensions AI rate limiting has to cover
+
+Most web APIs rate limit on **requests per time window**. AI systems
+typically need a second dimension too: **tokens per time window** — because
+a single request can vary enormously in cost depending on prompt and
+response length. A user making 5 requests with huge prompts can consume far
+more compute than a user making 50 requests with tiny ones; requests-only
+limiting misses this entirely.
+
+<Mermaid client:visible code={`flowchart TB
+  Req["Incoming request"] --> RPMCheck{"Under requests-per-minute limit?"}
+  RPMCheck -->|no| Reject1["429 Too Many Requests"]
+  RPMCheck -->|yes| TPMCheck{"Under tokens-per-minute limit?"}
+  TPMCheck -->|no| Reject2["429 Too Many Requests"]
+  TPMCheck -->|yes| Process["Process request, deduct from both budgets"]
+  Process --> Response["Return response + rate-limit headers"]`} />
+
+## Algorithm choice: token bucket is the common default
+
+- **Fixed window** (simplest): count requests in the current calendar
+  minute, reset to zero on the minute. Easy to implement, but has a
+  boundary problem — a user can send a full window's worth of requests at
+  11:59:59 and another full window's worth at 12:00:01, effectively
+  doubling their real short-term rate.
+- **Sliding window**: counts requests over a rolling window rather than a
+  fixed calendar boundary, avoiding the burst-at-the-edge problem at the
+  cost of slightly more bookkeeping.
+- **Token bucket**: a bucket holds up to N tokens, refills at a steady rate,
+  and each request consumes some tokens (often weighted by estimated
+  cost/output length for LLM APIs). This naturally allows short bursts (as
+  long as tokens are available) while enforcing a steady average rate — the
+  most common choice for production LLM API rate limiting.
+
+```python
+import time
+
+class TokenBucket:
+    def __init__(self, capacity, refill_rate_per_sec):
+        self.capacity = capacity
+        self.tokens = capacity
+        self.refill_rate = refill_rate_per_sec
+        self.last_refill = time.monotonic()
+
+    def allow(self, cost=1):
+        now = time.monotonic()
+        elapsed = now - self.last_refill
+        self.tokens = min(self.capacity, self.tokens + elapsed * self.refill_rate)
+        self.last_refill = now
+        if self.tokens >= cost:
+            self.tokens -= cost
+            return True
+        return False
+```
+
+## Where limits get applied
+
+Production systems typically layer limits at multiple keys, not just one:
+
+- **Per API key / user** — the primary fairness boundary.
+- **Per IP address** — catches abuse from unauthenticated or scraped
+  traffic, and multiple accounts from the same source.
+- **Global / per-model** — protects total system capacity regardless of any
+  single user's individual limit, since aggregate demand across all users
+  can still exceed what the infrastructure can serve.
+
+## Communicating limits to clients
+
+A well-designed rate-limited API doesn't just reject silently — it returns
+standard signals so clients can behave well:
+
+```
+HTTP/1.1 429 Too Many Requests
+X-RateLimit-Limit: 60
+X-RateLimit-Remaining: 0
+Retry-After: 12
+```
+
+`Retry-After` tells the client how long to wait before retrying, which
+lets well-behaved clients back off automatically instead of hammering the
+API immediately again (which would just get rejected again, wasting a
+round trip on both sides).
+
+## Handling variable-cost requests fairly
+
+Because LLM request cost varies with input/output length, some systems
+estimate cost *before* generation (based on prompt length and a requested
+or typical output length) to decide whether to admit a request, and then
+reconcile against actual token usage afterward — admitting a request whose
+true cost turns out higher than estimated, then adjusting the user's
+remaining budget accordingly, rather than blocking mid-generation.

@@ -1,0 +1,97 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Multi-Agent Platform"
+level: intermediate
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "multi-agent-platform"
+estReadTime: 9
+resources:
+  - type: article
+    title: "Anthropic — How we built our multi-agent research system"
+    url: "https://www.anthropic.com/engineering/multi-agent-research-system"
+  - type: article
+    title: "Anthropic — Building effective agents"
+    url: "https://www.anthropic.com/research/building-effective-agents"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## System design: orchestrator, workers, and shared state
+
+A production multi-agent platform needs three things a single-agent chatbot
+doesn't: a way to **plan and delegate** work, a way for agents to **share
+state** without stepping on each other, and a way to **aggregate** results
+that may arrive out of order or partially fail.
+
+<Mermaid client:visible code={`flowchart TB
+  Task["Incoming task"] --> Orchestrator["Orchestrator agent<br/>plans subtasks, assigns to workers"]
+  Orchestrator --> Q[("Task queue")]
+  Q --> W1["Worker agent<br/>research"]
+  Q --> W2["Worker agent<br/>code execution"]
+  Q --> W3["Worker agent<br/>writing"]
+  W1 --> Shared[("Shared scratchpad / memory store")]
+  W2 --> Shared
+  W3 --> Shared
+  Shared --> Orchestrator
+  Orchestrator --> Judge{"Enough to answer?"}
+  Judge -->|no| Orchestrator
+  Judge -->|yes| Final["Synthesize final result"]`} />
+
+## Planning and delegation
+
+The orchestrator's job is to turn one high-level task into a set of
+concrete, boundable subtasks, and to decide which worker (or worker type)
+handles each one. Two patterns dominate:
+
+- **Static decomposition**: the orchestrator plans all subtasks up front,
+  dispatches them (often in parallel), and waits for results — simpler to
+  reason about, but can't adapt if an early result changes what's actually
+  needed.
+- **Dynamic/iterative decomposition**: the orchestrator dispatches an initial
+  batch, inspects results, and decides what to do next based on them —
+  more flexible and often higher quality, but harder to bound in time and
+  cost since the number of rounds isn't fixed in advance.
+
+```python
+# Simplified orchestrator loop
+async def run_task(task, max_rounds=5):
+    plan = await orchestrator.plan(task)
+    for round_num in range(max_rounds):
+        results = await asyncio.gather(*[
+            dispatch_worker(subtask) for subtask in plan.subtasks
+        ])
+        if await orchestrator.is_sufficient(results):
+            return await orchestrator.synthesize(results)
+        plan = await orchestrator.replan(task, results)
+    return await orchestrator.synthesize(results)  # give up after max_rounds
+```
+
+## Shared state and context isolation
+
+Workers generally should **not** share one giant conversation context — that
+defeats the purpose of splitting work (each worker's context gets diluted
+with everyone else's intermediate output) and blows past context window
+limits fast. Instead, workers typically get a narrow, task-specific context
+plus read/write access to a **shared scratchpad or memory store** (structured
+findings, not raw transcripts) that the orchestrator curates and injects
+selectively into each worker's prompt as needed.
+
+## Aggregation and partial failure
+
+Because workers run concurrently and can fail independently (a tool times
+out, a worker's output doesn't parse, a subtask turns out to be
+unanswerable), the orchestrator needs an explicit policy for **incomplete
+results**: proceed with what succeeded and note the gap, retry the failed
+subtask, or abort the whole task — and this decision usually depends on
+whether the failed subtask is on the critical path for the final answer or
+a nice-to-have.
+
+## Cost and latency accounting
+
+A multi-agent task issues many more LLM calls than a single-agent
+equivalent — the orchestrator's planning/replanning calls, each worker's
+calls, and the final synthesis call all add up. Parallelizing independent
+workers keeps wall-clock latency down, but total token cost scales with the
+number of agents and rounds, not just the complexity of the final answer —
+this is a first-class cost lever that has to be bounded (max rounds, max
+worker fan-out) rather than left open-ended.

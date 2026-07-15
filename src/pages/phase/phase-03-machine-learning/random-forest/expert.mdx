@@ -1,0 +1,103 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Random Forest"
+level: expert
+phaseSlug: "phase-03-machine-learning"
+phaseName: "Machine Learning"
+topicSlug: "random-forest"
+estReadTime: 12
+resources:
+  - type: docs
+    title: "scikit-learn: Random Forests"
+    url: "https://scikit-learn.org/stable/modules/ensemble.html#random-forests"
+  - type: article
+    title: "Breiman (2001): Random Forests"
+    url: "https://link.springer.com/article/10.1023/A:1010933404324"
+---
+
+## Expert: Random Forest
+
+### Bias-variance decomposition
+
+For a regression predictor, expected squared error decomposes as
+`bias^2 + variance + irreducible noise`. A single unpruned decision tree grown to purity has
+low bias (it can fit almost any training set) but high variance (small changes in the training
+data produce very different splits, especially near the root). Bagging averages `B`
+identically-distributed but not independent predictors. If each tree has variance `sigma^2`
+and pairwise correlation `rho`, the variance of the bagged average is:
+
+```
+Var(average) = rho * sigma^2 + (1 - rho) * sigma^2 / B
+```
+
+As `B -> infinity`, the second term vanishes and variance asymptotes to `rho * sigma^2` — bagging
+cannot drive variance below what tree correlation allows, no matter how many trees you add.
+Crucially, bagging leaves **bias essentially unchanged**: averaging many trees that share the
+same systematic blind spot (e.g. a feature interaction none of them can represent well because
+of shallow depth or too few features) just gives you an averaged version of that same blind
+spot. This is why random forests **do not fix underfitting**. If a single deep tree has high
+bias — rare, since default deep trees have low bias and high variance — growing a forest of
+similarly-shallow, similarly-biased trees will not close the gap. Random forests are a
+variance-reduction technique; they are the wrong lever to pull when the model is underfit.
+
+### Tree correlation and `max_features`
+
+The `rho` term above is why `max_features` is the most consequential random forest
+hyperparameter. Restricting the number of candidate features per split forces different trees
+down different structural paths even when trained on similar data, lowering `rho`. Push
+`max_features` too low, however, and individual trees are forced to split on weak or
+irrelevant features, raising per-tree bias (`sigma^2`'s bias component) and eventually hurting
+ensemble accuracy even though variance keeps dropping. The practical tuning trade-off is:
+
+- High `max_features` (up to `n_features`, i.e. bagging without feature subsampling): lower
+  per-tree bias, higher tree correlation, less variance reduction from averaging.
+- Low `max_features` (e.g. `sqrt(n_features)` or `log2(n_features)`): more decorrelation and
+  more variance reduction, but higher per-tree bias if pushed too far.
+
+This is a genuine bias-variance dial, distinct from `n_estimators` (which only reduces the
+`(1 - rho) * sigma^2 / B` term and has strictly diminishing returns) and distinct from
+`max_depth` / `min_samples_leaf` (which trade bias for variance at the single-tree level,
+before bagging is even applied).
+
+## Trade-off summary
+
+| | Random Forest | Gradient Boosting (XGBoost) | Single Decision Tree | Linear Models |
+|---|---|---|---|---|
+| Primary lever | Variance reduction via bagging + decorrelation | Bias reduction via sequential residual fitting | Neither corrected — high variance, low bias if deep | Low variance, high bias unless features engineered |
+| Training parallelism | Embarrassingly parallel (`n_jobs=-1`, trees are independent) | Sequential by construction; limited parallelism within each tree/split | Single model, trivially fast | Fast, often closed-form or few solver iterations |
+| Tuning sensitivity | Low — good defaults, forgiving of `n_estimators`/`max_features` choices | High — learning rate, depth, regularization, early stopping all interact | Low — few knobs, but easy to over/underfit | Moderate — regularization strength, feature scaling/engineering matter |
+| Robustness to noisy labels | High — bootstrap sampling and averaging dilute label noise | Lower — boosting can chase and overfit mislabeled residuals without careful regularization | Low — a single tree fits noise directly | High — global linear fit is hard to distort with a few noisy points |
+| Typical performance ceiling | Strong, slightly below well-tuned boosting on tabular data | Highest on structured/tabular data with enough tuning | Lowest on its own; used mainly as a baseline or ensemble building block | Lowest on nonlinear problems; ceiling raised only by feature engineering |
+
+### Production concerns
+
+**Inference latency and model size.** A forest of 500 trees with `max_depth=None` can easily
+serialize to hundreds of megabytes and requires traversing every tree per prediction. This is
+worse than a single boosted ensemble tuned for a comparable score, since boosting typically
+reaches good accuracy with fewer, shallower trees (`max_depth` 3-8) due to its sequential
+error-correcting objective. If deployment memory or p99 latency is tight, prune with
+`max_depth` and `min_samples_leaf`, reduce `n_estimators` post-hoc via
+out-of-bag-monitored early stopping (score vs. tree count), or export the trained forest to
+a faster runtime (e.g. ONNX or Treelite) instead of predicting through raw Python objects.
+
+**Why choose Random Forest over boosting anyway.** Despite the accuracy ceiling gap, RF is
+often preferred in production when:
+
+- **Label noise is significant** and boosting's sequential residual fitting would overfit to
+  mislabeled examples that bagging naturally dilutes.
+- **Hyperparameter tuning budget is limited** — RF's defaults are usually good enough (`
+  n_estimators`, `max_features="sqrt"`), while boosting needs careful learning-rate/depth/
+  regularization tuning to avoid overfitting or leaving accuracy on the table.
+- **Training must parallelize trivially** across cores or a cluster with no sequential
+  dependency, which matters for very large `n` or frequent retraining.
+- **Predictable, monotonic behavior under retraining** is valued over squeezing out the last
+  percentage point of accuracy — bagged ensembles tend to be more stable release-over-release
+  than boosted ones sensitive to early-stopping timing.
+
+**Memory footprint of persisted forests.** Each `DecisionTreeClassifier`/`Regressor` inside
+the forest stores its own array-based tree structure (`children_left`, `children_right`,
+`threshold`, `value`, etc.). Pickling a large forest is not just slow — it also holds the full
+structure in memory during both save and load, which can dominate a service's cold-start
+memory budget. For very large forests, consider `joblib.dump(..., compress=3)`, reducing
+`n_estimators` after confirming OOB/CV score has plateaued, or a warm model server that keeps
+one shared in-memory copy rather than one per worker process.

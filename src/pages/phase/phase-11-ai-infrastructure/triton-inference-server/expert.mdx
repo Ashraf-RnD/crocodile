@@ -1,0 +1,76 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Triton Inference Server"
+level: expert
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "triton-inference-server"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "Triton — TensorRT-LLM Backend"
+    url: "https://github.com/triton-inference-server/tensorrtllm_backend"
+---
+
+## What Triton is actually for
+
+Triton's core differentiator is **framework-agnostic multi-model hosting** with a
+mature, config-driven operational model: one server process can simultaneously host
+TensorRT-LLM engines, plain PyTorch/ONNX models, and arbitrary Python-backend logic,
+each with independent batching, versioning, and instance-group GPU assignment — all
+exposed through the same HTTP/gRPC surface and the same metrics/monitoring stack. That
+breadth is Triton's reason to exist; it's less specialized for LLM-specific serving
+tricks (continuous batching internals, PagedAttention-style KV-cache management) than
+purpose-built LLM engines are, because it's built to be the front door for *any*
+model type, not just autoregressive transformers.
+
+## Comparison: Triton vs vLLM-as-a-server vs Ray Serve vs SGLang
+
+| Axis | Triton | vLLM (OpenAI-compatible server) | Ray Serve | SGLang |
+|---|---|---|---|---|
+| Multi-framework support | Broad — TensorRT-LLM, PyTorch, ONNX, Python, vLLM backend, all in one server | LLM-only (its own engine) | Any Python-callable, framework-agnostic by nature | LLM-only (its own engine) |
+| Operational maturity | Very high — long NVIDIA enterprise track record | High and growing fast, LLM-serving focused | Moderate, newer to production LLM serving specifically | Moderate, newer, strong LLM-specific optimizations |
+| GPU sharing across models | Fine-grained via `instance_group`, many models per GPU/server | Typically one model per engine instance | Fine-grained via fractional `num_gpus` | Typically one model per engine instance |
+| LLM-specific serving optimizations (continuous batching, prefix caching) | Via vLLM/TensorRT-LLM *backends* it wraps, not native to Triton itself | Native, first-class (PagedAttention, continuous batching) | Delegates to whatever engine you wrap (e.g. vLLM inside a deployment) | Native, first-class (RadixAttention, continuous batching) |
+| Custom pipeline/business logic | Config-driven ensembles; possible but clunkier than free-form code | Minimal — mostly single-model serving | Native strength — arbitrary Python composition | Native `sgl` DSL for multi-step LLM programs |
+| Best fit | Multi-framework model fleets, enterprise NVIDIA stack, mixed CV/NLP/tabular workloads | Single-purpose high-throughput LLM serving | Custom multi-model pipelines with non-LLM orchestration logic | LLM-specific workloads needing prefix reuse across complex prompts |
+
+## When Triton's complexity is justified
+
+Triton earns its operational overhead (learning `config.pbtxt`, the model repository
+convention, ensemble DAG syntax) when you're running a **fleet** of models across
+different frameworks that need to share infrastructure — a computer-vision model in
+ONNX, a recommendation model in PyTorch, and an LLM via the TensorRT-LLM backend, all
+under one server with consistent metrics, versioning, and GPU packing. That's a
+genuinely different problem than serving one LLM as fast as possible, and it's the
+scenario purpose-built LLM servers (vLLM, SGLang) don't try to solve — they're
+optimized for exactly one model type.
+
+## When it's not worth it
+
+If your entire serving surface is a single LLM behind an API, Triton's multi-framework
+generality is dead weight — you'd write `config.pbtxt` and ensemble configuration for
+capabilities you never use, while missing out on the LLM-specific throughput
+optimizations (PagedAttention, RadixAttention-style prefix caching) that vLLM and
+SGLang implement natively and Triton only gets secondhand through their backends. In
+that case, running vLLM or SGLang directly is both simpler to operate and gets you
+closer to the engine's actual performance ceiling, since you're not going through an
+extra abstraction layer between Triton's scheduler and the underlying engine.
+
+## Production concerns in practice
+
+- **Latency**: dynamic batching's `max_queue_delay_microseconds` is a direct
+  latency/throughput dial — tightening it toward 0 approaches request-at-a-time
+  serving (lower tail latency, worse GPU utilization); loosening it improves
+  throughput at the cost of added queueing delay per request.
+- **Throughput**: `instance_group` with multiple GPU instances per model lets Triton
+  extract more throughput from a single model on a single GPU when the model doesn't
+  saturate the GPU on its own — commonly useful for smaller models (embedding,
+  reranking, classification) rather than large LLMs already saturating a GPU alone.
+- **Memory**: because one Triton process can host many models, memory budgeting is a
+  server-wide concern, not a per-model one — a misconfigured `instance_group` count on
+  one model can starve memory for every other model sharing that GPU.
+- **Cost**: the value proposition is consolidation — fewer servers running at higher
+  aggregate utilization than one dedicated server per model — but that only pays off
+  once you actually have enough models to consolidate; a single-model deployment gets
+  none of that benefit and only pays the configuration overhead.

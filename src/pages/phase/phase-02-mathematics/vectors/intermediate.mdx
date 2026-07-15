@@ -1,0 +1,75 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Vectors"
+level: intermediate
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "vectors"
+estReadTime: 8
+resources:
+  - type: article
+    title: "Pinecone — Vector similarity explained"
+    url: "https://www.pinecone.io/learn/vector-similarity/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Norms: measuring vector "size"
+
+The **L2 norm** (Euclidean length) is `sqrt(sum(x_i^2))` — the straight-line distance
+from the origin. It's what `torch.norm()` computes by default, and it's used to
+normalize embeddings so their length doesn't distort similarity comparisons.
+
+```python
+import numpy as np
+v = np.array([3, 4])
+np.linalg.norm(v)  # 5.0  (3-4-5 triangle)
+```
+
+The **L1 norm** (`sum(abs(x_i))`) shows up in L1 regularization (Lasso), which drives
+weights to exactly zero — useful for sparse models.
+
+## Cosine similarity: the workhorse of embeddings
+
+Raw dot product is sensitive to vector length — a "loud" vector with big numbers wins
+even if its direction is less relevant. Cosine similarity fixes this by dividing out
+the magnitudes, leaving only the *angle* between vectors:
+
+```
+cosine_similarity(a, b) = dot(a, b) / (norm(a) * norm(b))
+```
+
+This is exactly what every vector database (Qdrant, Weaviate, pgvector) uses by
+default to rank "nearest" documents in a RAG pipeline.
+
+<Mermaid client:visible code={`flowchart TB
+  Q["Query embedding"] --> S["Cosine similarity vs every doc vector"]
+  S --> R["Rank documents by score"]
+  R --> Top["Return top-k most similar"]`} />
+
+```python
+def cosine_sim(a, b):
+    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
+query = np.array([0.9, 0.1, 0.3])
+doc_a = np.array([0.8, 0.2, 0.25])  # similar direction
+doc_b = np.array([0.1, 0.9, 0.9])   # different direction
+print(cosine_sim(query, doc_a))  # closer to 1
+print(cosine_sim(query, doc_b))  # closer to 0
+```
+
+## Vectorized operations vs Python loops
+
+The reason NumPy/PyTorch vectors exist at all is speed: operating on a whole array at
+once runs in optimized C/CUDA instead of a slow Python `for` loop.
+
+```python
+# Slow: pure Python loop
+result = [a[i] + b[i] for i in range(len(a))]
+
+# Fast: vectorized — same result, ~50-100x faster on large arrays
+result = a + b
+```
+
+Every time you write a Python `for` loop over array elements in a training pipeline,
+ask whether it can become a vector operation instead — this is the single biggest
+performance habit to build early.

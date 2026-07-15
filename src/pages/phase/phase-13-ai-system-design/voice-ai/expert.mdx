@@ -1,0 +1,109 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Voice AI"
+level: expert
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "voice-ai"
+estReadTime: 12
+resources:
+  - type: article
+    title: "OpenAI — Introducing the Realtime API"
+    url: "https://openai.com/index/introducing-the-realtime-api/"
+  - type: article
+    title: "LiveKit — Building voice AI agents: latency, interruption, and turn-taking"
+    url: "https://blog.livekit.io/"
+---
+
+## A note on sourcing
+
+Voice AI vendors publish partial architecture detail (OpenAI's Realtime API,
+various telephony/voice-infra companies' engineering blogs) but not full
+internals of any specific production system. This reasons from those public
+sources and from the physical constraints (speed of sound conversation,
+network latency, model inference time) any real-time voice pipeline must
+satisfy.
+
+## Problem 1: the end-to-end latency budget is unforgiving and additive
+
+Natural conversational turn-taking tolerates roughly 200-800ms of silence
+before it starts to feel unnatural. That budget has to cover network
+round-trip (caller to server and back), VAD/end-of-turn detection, STT,
+LLM time-to-first-token, TTS time-to-first-audio, and the return network
+trip — and every one of these is additive on the critical path unless stages
+are deliberately overlapped. This is fundamentally different from a chat
+product's latency budget, where seconds of total response time are
+acceptable as long as streaming starts reasonably soon. The engineering
+response is aggressive **pipelining**: streaming STT begins emitting partial
+transcripts before the user finishes speaking, the LLM can begin generating
+against a still-updating transcript context in some architectures (accepting
+the risk of generating against a not-yet-final utterance), and TTS begins
+synthesizing the first sentence while the LLM is still producing the rest —
+none of these stages wait for the previous one to fully complete.
+
+## Problem 2: end-of-turn detection is a precision/recall trade-off with no free lunch
+
+Deciding "the user is done talking" from acoustic signal alone is genuinely
+hard: a fixed silence timeout is simple but either interrupts users who
+pause mid-thought (timeout too short) or adds dead air after every utterance
+(timeout too long, and it's added latency on literally every turn). More
+sophisticated systems combine acoustic silence detection with semantic
+cues — does the partial transcript look like a complete sentence,
+grammatically and prosodically — to make an earlier, more confident call.
+This requires a lightweight model running continuously on partial ASR output,
+adding its own compute cost to the critical path in exchange for lower
+average turn latency. There is no setting that eliminates both false
+interruptions and added latency; production systems tune this trade-off
+per use case (a fast-paced customer service bot vs. a more deliberate
+assistant).
+
+## Problem 3: barge-in requires clean cancellation across every stage
+
+Supporting natural interruption means the system must detect new speech
+*while it is still speaking* and immediately cancel in-flight TTS playback,
+the LLM generation feeding it, and ideally free the compute those were
+consuming — a half-cancelled pipeline that keeps generating a reply nobody
+will hear wastes GPU/TTS capacity that should serve other concurrent calls.
+This requires cancellation tokens/signals threaded through every async stage
+of the pipeline, not just stopping audio playback client-side, and it
+interacts with cost: a platform serving many concurrent calls needs
+barge-in cancellation to actually free server-side resources promptly, or
+peak capacity planning has to assume worst-case (no cancellation) load.
+
+## Problem 4: STT/TTS quality degrades under real-world audio conditions
+
+Phone/telephony audio is narrowband, sometimes has network jitter and packet
+loss, and callers use accents, dialects, and background noise the models
+weren't necessarily tuned for. Silent degradation here is dangerous: a
+confidently-wrong transcript ("cancel my subscription" misheard as "cancel
+my subscription confirmation") can drive the LLM to a wrong action with no
+visible error. Mitigations include confidence-aware STT (surfacing
+uncertainty to the downstream LLM/dialogue manager rather than passing
+through a single best-guess transcript), and explicit confirmation steps
+for high-stakes actions (order cancellation, payment) regardless of
+transcript confidence — a deliberate latency-for-safety trade-off scoped to
+specific high-risk intents rather than applied uniformly.
+
+## Problem 5: capacity planning for concurrent real-time streams
+
+Unlike request/response APIs, each active voice call holds open a
+**continuous bidirectional stream** for the call's full duration, with
+dedicated STT/TTS/LLM capacity behind it — there's no batching a voice call
+the way you might batch independent short LLM requests, since audio must be
+processed in near-real-time as it arrives. This makes capacity planning look
+more like telephony/streaming media infrastructure than typical web
+backends: providers need per-concurrent-call resource reservations, and a
+spike in simultaneous calls (a marketing campaign, an outage driving support
+call volume) can hit hard capacity limits in a way that's harder to absorb
+than typical bursty HTTP traffic.
+
+## Trade-off summary
+
+| Concern | Cheap/simple approach | Latency-optimized approach | Cost |
+|---|---|---|---|
+| Turn-taking | Fixed silence timeout | Acoustic + semantic end-of-turn detection | Extra model running on the critical path |
+| STT->LLM handoff | Wait for final transcript | Begin LLM work on partial/streaming transcript | Risk of reasoning over an incomplete utterance |
+| LLM->TTS handoff | Wait for full LLM response | Stream + sentence-chunk into TTS incrementally | Chunking logic, slightly less natural prosody at boundaries |
+| Interruptions | No barge-in support | Full-pipeline cancellation on detected barge-in | Cancellation plumbing across every async stage |
+| Audio quality | Assume clean input | Confidence-aware STT + confirmation for risky intents | Added friction on high-stakes actions |
+| Capacity | Autoscale like stateless HTTP | Reserve per-concurrent-call streaming capacity | Higher idle cost, but bounded worst-case latency |

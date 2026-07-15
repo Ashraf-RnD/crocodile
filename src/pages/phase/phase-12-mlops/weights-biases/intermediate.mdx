@@ -1,0 +1,115 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Weights & Biases"
+level: intermediate
+phaseSlug: "phase-12-mlops"
+phaseName: "MLOps"
+topicSlug: "weights-biases"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "W&B Sweeps — Hyperparameter Optimization"
+    url: "https://docs.wandb.ai/guides/sweeps/"
+  - type: docs
+    title: "W&B Artifacts"
+    url: "https://docs.wandb.ai/guides/artifacts/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Sweeps: automated hyperparameter search
+
+Manually launching dozens of runs with different hyperparameters doesn't scale.
+W&B **Sweeps** run a search (grid, random, or Bayesian) across a defined space,
+launching agents that pull configurations and report back:
+
+```yaml
+# sweep.yaml
+method: bayes
+metric:
+  name: val_accuracy
+  goal: maximize
+parameters:
+  learning_rate:
+    min: 0.0001
+    max: 0.01
+  batch_size:
+    values: [16, 32, 64]
+  dropout:
+    min: 0.1
+    max: 0.5
+```
+
+```python
+import wandb
+
+def train():
+    wandb.init()
+    config = wandb.config
+    # build model using config.learning_rate, config.batch_size, config.dropout
+    # ... train ...
+    wandb.log({"val_accuracy": val_accuracy})
+
+sweep_id = wandb.sweep(sweep=yaml.safe_load(open("sweep.yaml")), project="tuning")
+wandb.agent(sweep_id, function=train, count=50)
+```
+
+Bayesian search means each trial's config is informed by prior results, so it
+converges toward good regions of the hyperparameter space faster than a blind
+grid search — critical when each trial costs GPU-hours.
+
+<Mermaid client:visible code={`flowchart LR
+  A["sweep.yaml — search space"] --> B["W&B Sweep Controller"]
+  B -->|assigns config| C["Agent 1 (GPU worker)"]
+  B -->|assigns config| D["Agent 2 (GPU worker)"]
+  B -->|assigns config| E["Agent N (GPU worker)"]
+  C --> F["Results logged back"]
+  D --> F
+  E --> F
+  F -->|informs next trial| B`} />
+
+## Artifacts: versioning datasets and models
+
+W&B Artifacts track lineage between datasets, code, and models — so you can
+answer "which dataset version produced this model?" months later:
+
+```python
+run = wandb.init(project="fraud-detector")
+
+# Log a versioned dataset
+artifact = wandb.Artifact("training-data", type="dataset")
+artifact.add_file("data/train.csv")
+run.log_artifact(artifact)
+
+# Later: consume it in a training run, creating a lineage link
+artifact = run.use_artifact("training-data:latest")
+data_dir = artifact.download()
+
+# Log the resulting model, linked to the data it was trained on
+model_artifact = wandb.Artifact("fraud-model", type="model")
+model_artifact.add_file("model.pkl")
+run.log_artifact(model_artifact)
+```
+
+The W&B UI renders this as a graph: dataset version → training run → model
+version, which matters when a model in production starts misbehaving and you
+need to trace it back to exactly what data trained it.
+
+## Team workflows: reports and comparison
+
+In production ML teams, W&B **Reports** are how experiment results get
+communicated beyond the person who ran them — a shareable, live-updating
+document embedding specific run comparisons, charts, and commentary, replacing
+"screenshot of a dashboard in Slack" with a linkable, versioned artifact that
+stays current as new runs are added to the underlying project.
+
+For CI-triggered training jobs, teams typically tag runs with the git commit
+and pipeline run ID so a failed production model can be traced back to the
+exact code and CI job that produced it:
+
+```python
+wandb.init(
+    project="fraud-detector",
+    config=hyperparams,
+    tags=[os.environ["GIT_COMMIT_SHA"][:8], os.environ["CI_PIPELINE_ID"]],
+)
+```

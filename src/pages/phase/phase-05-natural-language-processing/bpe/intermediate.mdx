@@ -1,0 +1,100 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "BPE"
+level: intermediate
+phaseSlug: "phase-05-natural-language-processing"
+phaseName: "Natural Language Processing"
+topicSlug: "bpe"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "Hugging Face Tokenizers — Train a BPE tokenizer from scratch"
+    url: "https://huggingface.co/docs/tokenizers/quicktour"
+  - type: article
+    title: "Sennrich et al. — Neural Machine Translation of Rare Words with Subword Units"
+    url: "https://arxiv.org/abs/1508.07909"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The training algorithm, precisely
+
+BPE training is a greedy, iterative merge process over a word-frequency table built
+from a training corpus:
+
+<Mermaid client:visible code={`flowchart TB
+  A["Start: every word split into characters"] --> B["Count all adjacent symbol pairs across the corpus"]
+  B --> C["Find the single most frequent pair"]
+  C --> D["Add that pair as a new merge rule + vocabulary entry"]
+  D --> E["Replace all occurrences of the pair with the merged symbol"]
+  E --> F{"Reached target\nvocab size?"}
+  F -->|No| B
+  F -->|Yes| G["Final vocabulary + ordered merge rules"]`} />
+
+The output isn't just a vocabulary — it's an **ordered list of merge rules**. At
+inference time, tokenizing a new word means applying those merges in the exact order
+they were learned, which is why BPE tokenization is deterministic and fast (no search,
+just rule application).
+
+## Training your own BPE tokenizer
+
+```python
+from tokenizers import Tokenizer, models, trainers, pre_tokenizers
+
+tokenizer = Tokenizer(models.BPE())
+tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
+
+trainer = trainers.BpeTrainer(
+    vocab_size=10000,
+    min_frequency=2,
+    special_tokens=["[UNK]", "[CLS]", "[SEP]", "[PAD]", "[MASK]"],
+)
+
+tokenizer.train(files=["corpus.txt"], trainer=trainer)
+tokenizer.save("my-bpe-tokenizer.json")
+
+output = tokenizer.encode("Byte-pair encoding is efficient")
+print(output.tokens)
+```
+
+`vocab_size` is the single most important hyperparameter here — it directly
+determines how many merges are learned, and therefore how coarse or fine-grained the
+final tokenization is.
+
+## Byte-level BPE: the trick GPT-2 introduced
+
+Character-level BPE still needs a fallback for characters outside its training
+alphabet (emoji, rare Unicode scripts) — usually `[UNK]`. GPT-2 solved this
+permanently by operating on **raw bytes** (256 possible values) instead of Unicode
+characters as the base alphabet:
+
+```python
+from transformers import AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained("gpt2")
+# Any byte sequence is representable -- no [UNK] token exists in GPT-2's vocab
+print(tokenizer.tokenize("héllo 🌍"))
+# ['h', 'é', 'llo', 'ĠðŁ', 'Į', 'į']  -- unusual-looking but fully reversible
+print(tokenizer.decode(tokenizer.encode("héllo 🌍")))
+# "héllo 🌍" -- exact round-trip, even for the emoji
+```
+
+Because every possible input byte sequence is representable, byte-level BPE
+guarantees the tokenizer can encode *any* text and decode it back exactly — a
+property plain character-level BPE cannot offer without a lossy `[UNK]` fallback.
+
+## Vocabulary size as a tuning knob, not a fixed constant
+
+Unlike WordPiece or Unigram, BPE's stopping criterion is purely "stop when the
+vocabulary reaches `vocab_size`" — there's no separate likelihood objective being
+optimized. In practice, teams tune `vocab_size` against real trade-offs:
+
+- **Smaller vocab** (e.g. 8k-16k): shorter merge list, faster to train, but longer
+  token sequences at inference (more sub-word splits) — increases compute per input
+  in transformer attention layers
+- **Larger vocab** (e.g. 50k-100k+): shorter sequences per input, but a bigger
+  embedding table and output projection matrix, and increased risk of overfitting the
+  vocabulary to the training corpus's specific domain
+
+This is why domain-specific tokenizers (e.g. for biomedical or code corpora) are
+often trained from scratch with a vocabulary tuned to that domain's vocabulary
+distribution, rather than reusing a general-purpose BPE tokenizer like GPT-2's.

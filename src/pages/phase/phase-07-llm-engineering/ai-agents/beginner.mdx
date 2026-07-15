@@ -1,0 +1,103 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "AI Agents"
+level: beginner
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "ai-agents"
+estReadTime: 7
+resources:
+  - type: article
+    title: "Anthropic — Building Effective Agents"
+    url: "https://www.anthropic.com/engineering/building-effective-agents"
+  - type: docs
+    title: "OpenAI — Agents Overview"
+    url: "https://platform.openai.com/docs/guides/agents"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Think of it as the difference between a vending machine and an assistant
+
+A single LLM call is a vending machine: you put in a prompt, you get back one
+response, done. An **agent** is more like an assistant you give a goal to — it can
+take multiple steps, use tools, look at the results of what it just did, and decide
+what to do next, *on its own*, until the goal is actually accomplished (or it gets
+stuck).
+
+<Mermaid client:visible code={`flowchart LR
+  A[Goal: "Book me a flight to Paris under $500"] --> B[Agent decides: search flights]
+  B --> C[Sees results, decides: compare prices]
+  C --> D[Decides: book cheapest under $500]
+  D --> E[Reports back: booking confirmed]`} />
+
+### A minimal agent loop
+
+An agent, at its simplest, is just a loop: call the model with tools, run whatever
+tool it asks for, feed the result back, repeat until the model stops asking for tools
+and gives a final answer.
+
+```python
+from openai import OpenAI
+import json
+
+client = OpenAI()
+
+def search_flights(destination, max_price):
+    return [{"airline": "AirEurope", "price": 420, "destination": destination}]
+
+tools = [{
+    "type": "function",
+    "function": {
+        "name": "search_flights",
+        "description": "Search for flights to a destination under a max price",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "destination": {"type": "string"},
+                "max_price": {"type": "number"},
+            },
+            "required": ["destination", "max_price"],
+        },
+    },
+}]
+
+messages = [{"role": "user", "content": "Find me a flight to Paris under $500."}]
+
+while True:
+    response = client.chat.completions.create(model="gpt-4o-mini", messages=messages, tools=tools)
+    msg = response.choices[0].message
+    messages.append(msg)
+
+    if not msg.tool_calls:
+        print(msg.content)
+        break
+
+    for call in msg.tool_calls:
+        args = json.loads(call.function.arguments)
+        result = search_flights(**args)
+        messages.append({"role": "tool", "tool_call_id": call.id, "content": json.dumps(result)})
+```
+
+That loop — call model, check for tool calls, execute them, feed results back,
+repeat — is the core of essentially every agent framework you'll encounter (LangGraph,
+OpenAI's Agents SDK, custom loops). The frameworks add convenience and structure, not
+a fundamentally different idea.
+
+### Try it yourself
+
+In plain English, describe what would happen differently in the loop above if the
+user asked: "Find me a flight to Paris under $500, and if there's none, try Rome
+instead." What would the agent need to do that a single LLM call couldn't?
+
+<details>
+<summary>Solution</summary>
+
+The agent would need to call `search_flights` for Paris, look at the result, and —
+based on what it finds — *decide* whether to call `search_flights` again with "Rome"
+as the destination. A single, one-shot LLM call can't do this because it can't see the
+outcome of a search before deciding its next step; the agent's loop lets it observe
+the first tool's result and *conditionally* choose its next action based on that
+result, which is the defining trait of an agent versus a plain function-calling
+request.
+
+</details>

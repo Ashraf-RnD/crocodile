@@ -1,0 +1,96 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "BERT"
+level: expert
+phaseSlug: "phase-14-research-literacy"
+phaseName: "Research Literacy"
+topicSlug: "bert"
+estReadTime: 11
+resources:
+  - type: article
+    title: "BERT: Pre-training of Deep Bidirectional Transformers (original paper)"
+    url: "https://arxiv.org/abs/1810.04805"
+  - type: article
+    title: "RoBERTa: A Robustly Optimized BERT Pretraining Approach"
+    url: "https://arxiv.org/abs/1907.11692"
+---
+
+## What the paper actually contributed vs. prior work
+
+Bidirectional context wasn't a new goal — ELMo (2018) had already combined forward
+and backward LSTMs to get context from both directions, and GPT (2018) had already
+shown that pretraining a Transformer and fine-tuning it worked well, but only in
+the left-to-right direction. BERT's real contribution was showing that **deep,
+truly bidirectional** pretraining (every layer sees both directions
+simultaneously, not just a shallow concatenation of two unidirectional models like
+ELMo) was achievable at scale via the masked language modeling objective — a
+training signal that sidesteps the "seeing the answer" problem a naive
+bidirectional language model would have (predicting a word using left-to-right
+*and* right-to-left context trivially lets the model cheat by copying the target).
+Combined with the Transformer's parallelism, this let BERT be pretrained on far
+more data than ELMo's LSTMs could practically absorb, and it beat the state of the
+art on 11 NLP benchmarks simultaneously — a breadth of result that made
+"pretrain then fine-tune" the default NLP recipe almost overnight.
+
+## Limitations
+
+- **Encoder-only means no native text generation.** BERT is fundamentally suited to
+  understanding tasks (classification, extraction, similarity) — it cannot generate
+  fluent open-ended text the way a decoder-only model can, since it was never
+  trained autoregressively.
+- **NSP added complexity without clear benefit.** RoBERTa (2019) ran controlled
+  ablations and found removing Next Sentence Prediction, training on more data for
+  longer with larger batches, and dynamically re-masking each epoch (instead of
+  masking once during preprocessing) all improved downstream performance — meaning
+  a meaningful chunk of BERT's original recipe was suboptimal, not fundamental.
+- **Pretrain/fine-tune mismatch from `[MASK]`.** The `[MASK]` token never appears
+  during fine-tuning or inference, creating a distributional gap that the 80/10/10
+  masking heuristic only partially papers over.
+- **Fixed, comparatively short context window** (512 tokens in the original), and
+  quadratic attention cost that made scaling to long documents impractical without
+  further architectural changes.
+
+## What came after
+
+- **RoBERTa** stripped out NSP and re-tuned the training recipe, becoming a
+  stronger baseline than BERT itself for most tasks with the identical
+  architecture.
+- **ALBERT** shared parameters across layers and factorized the embedding matrix to
+  shrink BERT's footprint with minimal quality loss.
+- **DistilBERT** used knowledge distillation to compress BERT into a much smaller,
+  faster model for latency-sensitive production use.
+- **ELECTRA** replaced MLM with a more sample-efficient "replaced token detection"
+  objective — a discriminator predicting which tokens were swapped by a small
+  generator — squeezing more signal out of the same compute budget.
+- **Sentence-transformers / SBERT** adapted BERT's architecture specifically to
+  produce fixed-size sentence embeddings efficiently, which is the direct ancestor
+  of the embedding models used in virtually every RAG pipeline today (see the RAG
+  lesson in this phase).
+- The decoder-only line (GPT-2, GPT-3, and everything after) ultimately won out as
+  the dominant architecture for general-purpose LLMs, because generation
+  subsumes understanding tasks reasonably well when the model is large enough —
+  but BERT-family encoder-only models never disappeared; they specialized.
+
+## How it's actually used in production today
+
+BERT itself, or more commonly its descendants (RoBERTa, DeBERTa, ModernBERT,
+distilled variants), remains the standard choice wherever the task is
+*understanding*, not *generation*: search relevance ranking, text classification,
+named entity recognition, content moderation, and — most consequentially — as the
+backbone for the dense embedding models that power semantic search and RAG
+retrieval. When you use an embedding model to convert a document into a vector for
+a vector database, that model's architecture traces directly back to BERT's
+encoder, not to GPT's decoder. It has essentially disappeared as a "user-facing
+chatbot" architecture but persists everywhere in the retrieval and classification
+layer underneath modern LLM applications.
+
+## Comparison: BERT (encoder-only, bidirectional) vs. GPT (decoder-only, autoregressive)
+
+| Dimension | BERT | GPT (original, 2018) |
+|---|---|---|
+| Attention direction | Bidirectional (full context both ways) | Causal / left-to-right only |
+| Pretraining objective | Masked language modeling + NSP | Next-token prediction |
+| Natural strength | Understanding: classification, extraction, embeddings | Generation: open-ended text |
+| Typical adaptation | Fine-tune with task-specific head | Fine-tune or prompt (few-shot, later) |
+| Can generate fluent long text? | No (not designed for it) | Yes, by construction |
+| Where it lives in production today | Retrieval/embeddings, classification, ranking | Chat assistants, general-purpose generation |

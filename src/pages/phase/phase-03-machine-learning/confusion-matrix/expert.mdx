@@ -1,0 +1,105 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Confusion Matrix"
+level: expert
+phaseSlug: "phase-03-machine-learning"
+phaseName: "Machine Learning"
+topicSlug: "confusion-matrix"
+estReadTime: 12
+resources:
+  - type: docs
+    title: "scikit-learn: Confusion matrix example"
+    url: "https://scikit-learn.org/stable/auto_examples/model_selection/plot_confusion_matrix.html"
+  - type: article
+    title: "The Matthews Correlation Coefficient (MCC) is more informative than Cohen's Kappa and Brier score"
+    url: "https://bmcgenomics.biomedcentral.com/articles/10.1186/s12864-019-6413-7"
+---
+
+## The confusion matrix as the single source of truth
+
+Every scalar classification metric — accuracy, precision, recall, F1, specificity, false
+positive rate — is a different function applied to the same four numbers (TP, FP, FN, TN).
+None of these metrics contain information the confusion matrix doesn't already have; they
+each just collapse it down a different way, discarding different parts of the picture in
+the process.
+
+## Metrics derived from the confusion matrix
+
+| Metric | Formula | Question it answers |
+|---|---|---|
+| Accuracy | `(TP + TN) / (TP + TN + FP + FN)` | Overall, what fraction did I get right? |
+| Precision | `TP / (TP + FP)` | Of what I flagged positive, how much was correct? |
+| Recall (Sensitivity) | `TP / (TP + FN)` | Of all actual positives, how many did I catch? |
+| Specificity | `TN / (TN + FP)` | Of all actual negatives, how many did I correctly reject? |
+| False Positive Rate | `FP / (FP + TN)` | Of all actual negatives, how many did I wrongly flag? |
+| False Negative Rate | `FN / (FN + TP)` | Of all actual positives, how many did I miss? |
+| F1 | `2*TP / (2*TP + FP + FN)` | Harmonic balance of precision and recall |
+
+Every row in this table is derivable directly from a 2x2 (or, generalized, an NxN)
+confusion matrix — which is why debugging a classifier by staring at aggregate metrics
+alone is a weaker strategy than going back to the matrix itself and reasoning about which
+cell is actually driving the number you don't like.
+
+## Cost-matrix framing
+
+Attaching an explicit cost to each of the four cells turns the confusion matrix from a
+diagnostic tool into a decision-making one. Given costs `c_TP, c_FP, c_FN, c_TN` (often
+`c_TP = c_TN = 0`, i.e. correct predictions are free), the expected cost of a classifier at
+a given threshold is:
+
+```python
+import numpy as np
+from sklearn.metrics import confusion_matrix
+
+def expected_cost(y_true, y_pred, cost_fp, cost_fn):
+    tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
+    return fp * cost_fp + fn * cost_fn
+
+probs = clf.predict_proba(X_test)[:, 1]
+costs = []
+for t in np.linspace(0.01, 0.99, 99):
+    preds = (probs >= t).astype(int)
+    costs.append(expected_cost(y_test, preds, cost_fp=5, cost_fn=50))
+
+best_threshold = np.linspace(0.01, 0.99, 99)[np.argmin(costs)]
+print(f"Cost-optimal threshold: {best_threshold:.2f}")
+```
+
+This is the general form of the threshold-selection logic used throughout precision/recall
+tuning: rather than optimizing an unweighted metric, sweep thresholds and minimize the
+confusion-matrix-weighted cost directly. It's the most defensible way to choose a
+production threshold because it makes the actual trade-off being made explicit, rather than
+implicit in the choice of metric.
+
+## Debugging with the confusion matrix
+
+Beyond scoring, the confusion matrix is the primary tool for finding systematic failure
+patterns in a multiclass model — the off-diagonal structure directly names *which* classes
+are being confused for which, pointing an engineer at specific data quality, labeling, or
+feature gaps rather than a single opaque accuracy number:
+
+```python
+import numpy as np
+from sklearn.metrics import confusion_matrix
+
+cm = confusion_matrix(y_test, y_pred)
+np.fill_diagonal(cm, 0)  # zero out correct predictions to isolate errors
+
+worst_i, worst_j = np.unravel_index(np.argmax(cm), cm.shape)
+print(f"Most common confusion: true class {worst_i} predicted as class {worst_j} "
+      f"({cm[worst_i, worst_j]} times)")
+```
+
+## Production concerns
+
+Dashboards that track a single scalar metric (accuracy, F1) over time can miss a real
+regression that a full confusion matrix would catch immediately — e.g. a model that starts
+systematically confusing two specific classes while its aggregate accuracy stays roughly
+flat because errors simply moved from one off-diagonal cell to another. Production
+monitoring for classifiers, especially multiclass or multilabel ones, should log and alert
+on the confusion matrix itself (or at minimum, per-class precision/recall) rather than a
+single number, precisely because a stable aggregate metric is compatible with meaningfully
+different — and meaningfully worse — underlying error patterns. For multilabel systems at
+scale, this often means tracking a per-class confusion matrix (one-vs-rest) per label
+rather than a single combined structure, since label correlations can otherwise hide
+per-label degradation.

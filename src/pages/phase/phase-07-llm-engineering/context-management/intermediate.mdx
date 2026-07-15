@@ -1,0 +1,103 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Context Management"
+level: intermediate
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "context-management"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "Anthropic — Prompt Caching"
+    url: "https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching"
+  - type: article
+    title: "LangGraph — Trim and Filter Messages"
+    url: "https://langchain-ai.github.io/langgraph/how-tos/memory/manage-conversation-history/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The context budget: not just "does it fit"
+
+Production context management means actively deciding, on every request, what
+combination of system instructions, conversation history, retrieved documents, and
+tool schemas gets to occupy the token budget — because more context isn't free even
+when it fits: it costs more (most APIs bill per input token), it's slower to process,
+and past a certain density it measurably *hurts* accuracy (the "lost in the middle"
+effect, where models attend less reliably to information buried in a long context
+than to information near the start or end).
+
+<Mermaid client:visible code={`flowchart TB
+  Budget["Context window (fixed size)"] --> Sys[System prompt]
+  Budget --> Tools[Tool schemas]
+  Budget --> Hist[Conversation history]
+  Budget --> Docs[Retrieved documents]
+  Budget --> Buffer[Reserved for model's response]`} />
+
+## Trimming with a token budget, not a message count
+
+Counting messages is a poor proxy — a single message can be one word or ten
+paragraphs. Real trimming logic counts tokens directly:
+
+```python
+import tiktoken
+
+enc = tiktoken.encoding_for_model("gpt-4o")
+
+def trim_to_budget(messages, max_tokens=6000):
+    kept = []
+    total = 0
+    for msg in reversed(messages):  # keep most recent first
+        msg_tokens = len(enc.encode(str(msg["content"])))
+        if total + msg_tokens > max_tokens:
+            break
+        kept.insert(0, msg)
+        total += msg_tokens
+    return kept
+```
+
+LangGraph's built-in `trim_messages` utility does this same token-aware trimming, with
+options to always keep the system message and to trim from the start while
+preserving the most recent turns — the pattern you'll reach for in any framework.
+
+## Prompt caching changes how you should order context
+
+Providers cache repeated prefixes of a prompt to cut cost and latency on subsequent
+calls (see the Prompt Engineering lesson). This means context management isn't just
+"what to include" — it's "what to put first." Put content that's stable across many
+requests (system prompt, tool definitions, a large reference document) at the front,
+and put content that changes every request (the latest user message) at the end:
+
+```python
+# Anthropic: mark a large, stable reference doc as cacheable
+response = client.messages.create(
+    model="claude-sonnet-4-5",
+    system=[
+        {"type": "text", "text": system_instructions},
+        {"type": "text", "text": company_knowledge_base, "cache_control": {"type": "ephemeral"}},
+    ],
+    messages=conversation_history + [{"role": "user", "content": latest_message}],
+)
+```
+
+Reordering a prompt so the volatile part comes last can cut cost dramatically on
+high-volume, repeated-context workloads (e.g. a support bot that always includes the
+same product docs) — a purely structural change with no accuracy trade-off.
+
+## Selective retrieval instead of "include everything"
+
+For RAG-backed systems, context management *is* the retrieval step: instead of
+stuffing an entire knowledge base into the prompt, retrieve only the top-k most
+relevant chunks for the current query. This is the difference between a system that
+scales to a 10-page knowledge base (naive: include it all) and one that scales to a
+10,000-page one (retrieve, don't include everything) — the context window budget
+forces this design decision regardless of model size, since even a huge context window
+gets expensive and less accurate as it fills with mostly-irrelevant content.
+
+## Isolating context per sub-task in multi-step agents
+
+In a multi-step agent, not every tool result needs to stay in context for every
+subsequent step. A common pattern is to summarize or drop a tool's raw output once its
+relevant conclusion has been extracted and acted on — otherwise, a long agent run
+accumulates every intermediate tool call's full output, and by step 10 the context is
+dominated by stale, already-used data crowding out what's actually relevant to the
+current decision.

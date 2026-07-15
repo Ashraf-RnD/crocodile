@@ -1,0 +1,60 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Vectors"
+level: expert
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "vectors"
+estReadTime: 10
+resources:
+  - type: article
+    title: "Approximate Nearest Neighbor benchmarks (ANN-Benchmarks)"
+    url: "https://ann-benchmarks.com/"
+---
+
+## Curse of dimensionality
+
+As dimensionality grows, high-dimensional space becomes almost entirely "empty" —
+distances between random points converge, and the ratio between the nearest and
+farthest neighbor's distance approaches 1. This is why brute-force nearest-neighbor
+search stops being meaningful past a few hundred dimensions without care: everything
+looks roughly equidistant.
+
+This is precisely why production vector search doesn't do exact brute-force cosine
+similarity over millions of embeddings — it uses **Approximate Nearest Neighbor (ANN)**
+index structures (HNSW, IVF, product quantization) that trade a small amount of recall
+for orders-of-magnitude speedup, which is what Qdrant/Milvus/Weaviate implement
+internally.
+
+## Why embeddings are normalized before indexing
+
+Most embedding models (OpenAI, Sentence-Transformers) output vectors that are already
+close to unit length, and vector databases typically normalize on ingest. This matters
+because:
+
+1. Cosine similarity on unit vectors reduces to a plain dot product (cheaper to compute at scale)
+2. HNSW graphs built for dot product and normalized vectors behave identically to cosine — most engines special-case this for performance
+
+```python
+def normalize(v):
+    return v / np.linalg.norm(v)
+
+# after normalization: dot(a, b) == cosine_similarity(a, b)
+```
+
+## Numerical stability: overflow in norm computation
+
+Computing `sqrt(sum(x_i^2))` naively can overflow for very large values or underflow
+for very small ones in float32. Production code (BLAS/LAPACK, NumPy's `linalg.norm`)
+uses a scaled algorithm that divides by the max absolute value first to keep
+intermediate values in a safe range — worth knowing when you're debugging `NaN`
+similarity scores from a custom implementation instead of the library function.
+
+## Trade-off summary
+
+| Choice | Gains | Costs |
+|---|---|---|
+| Exact search (brute-force) | Perfect recall | O(n·d) per query — unusable past ~100k vectors |
+| HNSW (graph-based ANN) | Sub-linear query time, high recall | Memory-hungry, slow index build/updates |
+| IVF + product quantization | Much lower memory footprint | Lower recall, needs a training/clustering step |
+| float32 vs float16/int8 embeddings | 2-4x less memory & faster search | Small precision loss in similarity scores |

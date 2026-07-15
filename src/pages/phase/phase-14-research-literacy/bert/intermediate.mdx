@@ -1,0 +1,91 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "BERT"
+level: intermediate
+phaseSlug: "phase-14-research-literacy"
+phaseName: "Research Literacy"
+topicSlug: "bert"
+estReadTime: 10
+resources:
+  - type: article
+    title: "BERT: Pre-training of Deep Bidirectional Transformers (original paper)"
+    url: "https://arxiv.org/abs/1810.04805"
+  - type: docs
+    title: "Hugging Face — BERT model docs"
+    url: "https://huggingface.co/docs/transformers/model_doc/bert"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Architecture: encoder-only Transformer
+
+BERT is literally the encoder half of the original Transformer (Vaswani et al.,
+2017) — a stack of self-attention + feed-forward layers, with no masking that
+prevents a token from seeing tokens after it. `BERT-base` uses 12 layers, 12
+attention heads, and a hidden size of 768 (110M parameters); `BERT-large` uses 24
+layers, 16 heads, and a hidden size of 1024 (340M parameters).
+
+## Pretraining task 1: Masked Language Modeling (MLM)
+
+15% of input tokens are selected; of those, 80% are replaced with a `[MASK]` token,
+10% are replaced with a random token, and 10% are left unchanged. The model must
+predict the original token at every selected position, using bidirectional context.
+
+```python
+# Conceptual sketch of the MLM objective
+sentence = ["the", "cat", "sat", "on", "the", "mat"]
+masked   = ["the", "[MASK]", "sat", "on", "the", "mat"]
+# Model must predict "cat" at position 1, using context from both sides
+loss = cross_entropy(model(masked)[1], target="cat")
+```
+
+The 80/10/10 split exists to close a train/inference mismatch: `[MASK]` never
+appears at fine-tuning time, so training the model to sometimes predict a
+*correct-looking but replaced* token forces it to keep a robust representation for
+every token, not just the masked ones.
+
+## Pretraining task 2: Next Sentence Prediction (NSP)
+
+BERT is also fed sentence pairs (A, B) and trained to predict whether B actually
+follows A in the original text, or is a random sentence — intended to teach the
+model relationships between sentences, useful for tasks like question answering.
+(Later work, notably RoBERTa, found NSP contributed little and dropped it — more on
+that in the expert lesson.)
+
+## Input representation
+
+Each input token embedding is the sum of three components: the **token embedding**,
+a **segment embedding** (which sentence, A or B, this token belongs to), and a
+**positional embedding**. A special `[CLS]` token is prepended to every input; its
+final hidden state is used as an aggregate representation for classification tasks.
+
+<Mermaid client:visible code={`flowchart TB
+  CLS["[CLS] token"] --> Enc["12-24 layer bidirectional Transformer encoder"]
+  T1["Token 1 + segment + position"] --> Enc
+  T2["Token 2 + segment + position"] --> Enc
+  Tn["... Token n"] --> Enc
+  Enc --> ClsOut["[CLS] output → classification head"]
+  Enc --> TokOut["Per-token outputs → tagging / span extraction"]`} />
+
+## Fine-tuning: one architecture, many tasks
+
+Because pretraining produces general representations, adapting BERT to a specific
+task is cheap: add a small task-specific head on top (a linear layer for
+classification, a span-prediction head for extractive Q&A) and fine-tune the whole
+model end-to-end on a comparatively small labeled dataset, usually for just a few
+epochs.
+
+```python
+from transformers import BertForSequenceClassification, BertTokenizer
+
+tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
+model = BertForSequenceClassification.from_pretrained(
+    "bert-base-uncased", num_labels=2
+)
+
+inputs = tokenizer("This movie was great!", return_tensors="pt")
+outputs = model(**inputs)  # logits for [negative, positive]
+```
+
+This same pretrain-once, fine-tune-many pattern is exactly what later scaled into
+the "foundation model" paradigm the rest of this phase covers — BERT was the first
+NLP model to prove it decisively at scale.

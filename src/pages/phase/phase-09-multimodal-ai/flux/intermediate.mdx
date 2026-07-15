@@ -1,0 +1,67 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "FLUX"
+level: intermediate
+phaseSlug: "phase-09-multimodal-ai"
+phaseName: "Multimodal AI"
+topicSlug: "flux"
+estReadTime: 9
+resources:
+  - type: article
+    title: "Scaling Rectified Flow Transformers for Text-to-Image (SD3/FLUX lineage paper)"
+    url: "https://arxiv.org/abs/2403.03206"
+  - type: docs
+    title: "FLUX.1-dev model card"
+    url: "https://huggingface.co/black-forest-labs/FLUX.1-dev"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Rectified flow instead of classic diffusion
+
+FLUX is built on **rectified flow matching** rather than the DDPM-style noise
+prediction used by earlier Stable Diffusion models — instead of learning to predict
+and remove noise at each step, it learns to predict a more direct, straight-line path
+from noise to image in latent space. In practice this means fewer steps are needed to
+reach a good result, and it's part of why FLUX's distilled variants can generate
+convincing images in as few as 1-4 steps.
+
+<Mermaid client:visible code={`flowchart LR
+  A[Text prompt] --> B["T5 + CLIP text encoders"]
+  B --> C["MMDiT transformer\n(rectified flow, straight path\nnoise -> latent image)"]
+  D[Random noise] --> C
+  C --> E["VAE decoder"]
+  E --> F[Final image]`} />
+
+The backbone is a **multimodal diffusion transformer (MMDiT)** — the same family of
+architecture used in SD3 — processing text and image tokens together through shared
+attention, rather than only injecting text conditioning at intermediate points the way
+older UNet architectures did.
+
+## Three tiers, one trade-off: speed vs quality vs openness
+
+```python
+# schnell: fastest, Apache 2.0 licensed, 1-4 steps
+pipe = FluxPipeline.from_pretrained("black-forest-labs/FLUX.1-schnell")
+
+# dev: higher quality, non-commercial license, ~20-50 steps
+pipe = FluxPipeline.from_pretrained("black-forest-labs/FLUX.1-dev")
+
+# pro: highest quality, API-only (not open weights)
+# accessed via Black Forest Labs' hosted API, not diffusers
+```
+
+`schnell` is guidance-distilled specifically for low step counts and is fully
+open for commercial use. `dev` keeps more of the original model's quality headroom but
+carries a non-commercial license, making it common in research/prototyping but not in
+shipped commercial products. `pro` isn't open-weight at all — it's accessed only via
+API, reserved for the highest quality tier.
+
+## Where FLUX has a real practical edge: text rendering
+
+Rendering legible, correctly-spelled text *inside* a generated image (signage, labels,
+book covers) was a longstanding weak spot for diffusion models — earlier Stable
+Diffusion versions routinely produced garbled pseudo-text. FLUX's stronger text
+encoder stack and transformer architecture noticeably improved this, making it a
+common choice specifically for generation tasks that need readable in-image text,
+where older SD versions would need a separate text-overlay compositing step to get
+reliable results.

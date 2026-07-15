@@ -1,0 +1,103 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "MCP"
+level: intermediate
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "mcp"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "Model Context Protocol — Architecture"
+    url: "https://modelcontextprotocol.io/docs/concepts/architecture"
+  - type: docs
+    title: "MCP — Building Clients"
+    url: "https://modelcontextprotocol.io/quickstart/client"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Client-host-server architecture
+
+MCP defines three roles: a **host** application (Claude Desktop, an IDE, your custom
+agent) manages one or more **clients**, and each client maintains a 1:1 connection to
+one **server**. The host is what the user interacts with; each server exposes a
+focused set of tools/resources/prompts and knows nothing about the others — this
+isolation is deliberate, so a GitHub server and a Postgres server can't accidentally
+interfere with each other's state.
+
+<Mermaid client:visible code={`flowchart TB
+  Host["Host app (e.g. Claude Desktop)"] --> ClientA["MCP Client 1"]
+  Host --> ClientB["MCP Client 2"]
+  ClientA <-->|JSON-RPC over stdio/HTTP| ServerA["GitHub MCP Server"]
+  ClientB <-->|JSON-RPC over stdio/HTTP| ServerB["Postgres MCP Server"]`} />
+
+## Transports: stdio vs. HTTP
+
+MCP servers communicate over JSON-RPC 2.0, but the transport varies by deployment:
+
+- **stdio** — the host launches the server as a local subprocess and talks over
+  stdin/stdout. Simple, zero network config, used heavily for local dev tools
+  (filesystem access, local databases) and Claude Desktop's local server integrations.
+- **Streamable HTTP** — the server runs as a standalone network service the client
+  connects to over HTTP (with optional SSE streaming for server-initiated messages).
+  Required for remote/hosted MCP servers, multi-user deployments, and anything that
+  needs to run independently of the host's machine.
+
+```python
+# Same server, run over HTTP instead of stdio
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP("weather-server")
+
+@mcp.tool()
+def get_weather(city: str) -> str:
+    """Get the current weather for a city."""
+    return f"It's sunny and 22°C in {city}."
+
+if __name__ == "__main__":
+    mcp.run(transport="streamable-http", port=8000)
+```
+
+## Connecting a client and using tools programmatically
+
+Beyond chat apps, you can drive an MCP server directly from your own agent code:
+
+```python
+from mcp import ClientSession
+from mcp.client.stdio import stdio_client, StdioServerParameters
+
+server_params = StdioServerParameters(command="python", args=["weather_server.py"])
+
+async def main():
+    async with stdio_client(server_params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            tools = await session.list_tools()
+            result = await session.call_tool("get_weather", {"city": "Lisbon"})
+            print(result.content)
+```
+
+This is exactly the pattern agent frameworks (LangChain's MCP adapters, LangGraph)
+use under the hood: connect, discover available tools at runtime via `list_tools()`,
+convert them into whatever tool-schema format the framework needs, and pass them to
+the model like any other function-calling tool.
+
+## Resources vs. tools — a distinction that matters
+
+A common mistake is exposing everything as a tool. **Resources** are for read-only
+data the host can pull into context proactively (a file's contents, a database
+schema) without the model needing to decide to "call" anything — the host can attach
+them directly. **Tools** are for actions the model actively decides to invoke
+mid-conversation. Modeling read-only data as a resource rather than a
+`get_x()` tool reduces unnecessary model decisions and keeps the tool list focused on
+genuine actions.
+
+## Why MCP matters for agent portability
+
+Before MCP, an agent's tool integrations were tightly coupled to the specific
+framework it was built in — a LangChain tool couldn't easily be reused in a raw OpenAI
+SDK agent. Because MCP standardizes discovery (`list_tools`) and invocation
+(`call_tool`) at the protocol level, an MCP server built once is consumable by any
+compliant client regardless of the agent framework on the other end — the same
+underlying value USB-C and HTTP provide in their respective domains: decoupling
+implementations from the interface between them.

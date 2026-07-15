@@ -1,0 +1,81 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Decision Trees"
+level: beginner
+phaseSlug: "phase-03-machine-learning"
+phaseName: "Machine Learning"
+topicSlug: "decision-trees"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "scikit-learn: Decision Trees"
+    url: "https://scikit-learn.org/stable/modules/tree.html"
+  - type: video
+    title: "StatQuest: Decision Trees, Clearly Explained"
+    url: "https://www.youtube.com/watch?v=_L39rN6gz7Y"
+---
+
+## Beginner: Decision Trees
+
+Think of a decision tree as a game of "20 questions." You start with a pile of examples
+and repeatedly ask yes/no questions about their features — "Is age > 30?", "Is income >
+$50k?" — splitting the pile into smaller, purer groups each time. You stop asking questions
+once a group is (mostly) one class, and that becomes your answer. A decision tree learns
+which questions to ask, and in what order, directly from data.
+
+Each question is a **node**, each yes/no branch is an edge, and each final answer is a
+**leaf**. The tree picks the feature and threshold at every step that best separates the
+classes — no manual rule-writing required.
+
+## A tiny example
+
+```python
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.datasets import load_iris
+
+X, y = load_iris(return_X_y=True)
+
+clf = DecisionTreeClassifier(max_depth=2, random_state=0)
+clf.fit(X, y)
+
+print(clf.predict(X[:5]))
+print(clf.score(X, y))
+```
+
+`max_depth=2` limits the tree to two rounds of questions, keeping it small and readable.
+`clf.score` reports accuracy on the data it was trained on.
+
+## Reading the questions it learned
+
+You can print the actual rules the tree discovered:
+
+```python
+from sklearn.tree import export_text
+
+print(export_text(clf, feature_names=list(load_iris().feature_names)))
+```
+
+This prints something like `petal width (cm) <= 0.80 -> class: setosa`, which is exactly
+the "20 questions" logic — just learned automatically instead of hand-written.
+
+## Try it yourself
+
+Using the `load_wine()` dataset from `sklearn.datasets`, train a `DecisionTreeClassifier`
+with `max_depth=3`, fit it, and print its accuracy with `.score()`.
+
+<details>
+<summary>Solution</summary>
+
+```python
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.datasets import load_wine
+
+X, y = load_wine(return_X_y=True)
+
+clf = DecisionTreeClassifier(max_depth=3, random_state=0)
+clf.fit(X, y)
+
+print(clf.score(X, y))
+```
+
+</details>

@@ -1,0 +1,110 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "LangGraph"
+level: beginner
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "langgraph"
+estReadTime: 7
+resources:
+  - type: docs
+    title: "LangGraph — Quickstart"
+    url: "https://langchain-ai.github.io/langgraph/tutorials/introduction/"
+  - type: docs
+    title: "LangGraph — Core Concepts"
+    url: "https://langchain-ai.github.io/langgraph/concepts/low_level/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Think of it as a flowchart your code actually runs
+
+If you've ever drawn a flowchart on a whiteboard — boxes for steps, arrows for what
+happens next, a diamond for a decision point — **LangGraph** lets you write almost
+exactly that as code, and have it actually execute. Instead of a tangle of `if`
+statements controlling an agent's flow, you define **nodes** (steps) and **edges**
+(what runs next), and LangGraph runs the graph.
+
+<Mermaid client:visible code={`flowchart LR
+  Start([START]) --> Greet[greet node]
+  Greet --> Check{Check mood}
+  Check -->|happy| Cheer[cheer node]
+  Check -->|sad| Comfort[comfort node]
+  Cheer --> End([END])
+  Comfort --> End`} />
+
+### A minimal graph
+
+```python
+from langgraph.graph import StateGraph, END
+from typing import TypedDict
+
+class State(TypedDict):
+    message: str
+    mood: str
+
+def greet(state: State) -> State:
+    return {"message": f"Hi! {state['message']}", "mood": state["mood"]}
+
+def cheer(state: State) -> State:
+    return {"message": state["message"] + " That's wonderful!", "mood": state["mood"]}
+
+def comfort(state: State) -> State:
+    return {"message": state["message"] + " I'm sorry to hear that.", "mood": state["mood"]}
+
+def route(state: State) -> str:
+    return "cheer" if state["mood"] == "happy" else "comfort"
+
+graph = StateGraph(State)
+graph.add_node("greet", greet)
+graph.add_node("cheer", cheer)
+graph.add_node("comfort", comfort)
+graph.set_entry_point("greet")
+graph.add_conditional_edges("greet", route, {"cheer": "cheer", "comfort": "comfort"})
+graph.add_edge("cheer", END)
+graph.add_edge("comfort", END)
+
+app = graph.compile()
+result = app.invoke({"message": "I got the job!", "mood": "happy"})
+print(result["message"])  # "Hi! I got the job! That's wonderful!"
+```
+
+Every node is just a plain Python function that takes the current **state** and
+returns updates to it. LangGraph handles running nodes in the right order and passing
+state between them — you just describe the shape of the flow.
+
+### Why not just write plain Python if/else?
+
+For something this small, plain Python would work fine. LangGraph earns its keep once
+the flow needs things a bare script struggles with: looping back to an earlier step
+(an agent retrying), pausing to wait for human input, or resuming exactly where it
+left off after a crash — all built into the graph, not something you re-implement
+yourself.
+
+### Try it yourself
+
+Sketch (in words) a 3-node graph for a simple order-processing flow: `check_stock` →
+if in stock, `ship_order`; if out of stock, `notify_backorder`.
+
+<details>
+<summary>Solution</summary>
+
+```python
+graph = StateGraph(State)
+graph.add_node("check_stock", check_stock)
+graph.add_node("ship_order", ship_order)
+graph.add_node("notify_backorder", notify_backorder)
+graph.set_entry_point("check_stock")
+graph.add_conditional_edges(
+    "check_stock",
+    lambda state: "ship_order" if state["in_stock"] else "notify_backorder",
+    {"ship_order": "ship_order", "notify_backorder": "notify_backorder"},
+)
+graph.add_edge("ship_order", END)
+graph.add_edge("notify_backorder", END)
+```
+
+The `check_stock` node's output (`in_stock: bool`) is exactly what the conditional
+edge function reads to decide which node runs next — the same pattern as the
+mood-based routing above.
+
+</details>

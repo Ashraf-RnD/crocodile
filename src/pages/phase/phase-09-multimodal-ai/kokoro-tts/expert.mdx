@@ -1,0 +1,53 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Kokoro TTS"
+level: expert
+phaseSlug: "phase-09-multimodal-ai"
+phaseName: "Multimodal AI"
+topicSlug: "kokoro-tts"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "Kokoro-82M model card (license, architecture notes)"
+    url: "https://huggingface.co/hexgrad/Kokoro-82M"
+  - type: docs
+    title: "Coqui XTTS v2 model card"
+    url: "https://huggingface.co/coqui/XTTS-v2"
+---
+
+## Where Kokoro sits in the TTS landscape
+
+| Model | Size | Quality | Voice cloning | License | Best for |
+|---|---|---|---|---|---|
+| Kokoro | 82M | Good, very natural for its size | No (fixed voice packs) | Apache 2.0 | Cost-sensitive self-hosted TTS, edge/offline |
+| XTTS v2 | ~450M | High, supports cloning | Yes, few-second sample | Coqui (non-commercial restrictions) | Self-hosted with cloning needs |
+| Bark | ~900M | High but less controllable, can add non-speech sounds | Limited | MIT | Expressive/experimental audio, not production-stable |
+| ElevenLabs | Hosted, size N/A | Highest, best prosody | Yes, high fidelity | Commercial API | Production quality bar, no infra ownership |
+
+Kokoro's core trade-off is explicit: it deliberately gives up voice cloning and some
+expressiveness in exchange for being small enough to run cheaply and fast, with a
+genuinely permissive Apache 2.0 license that removes the commercial-use ambiguity that
+affects some other open TTS models (Coqui's XTTS license restricts certain commercial
+uses, for example) — for teams that need volume TTS with a fixed set of voices, that's
+usually the right trade; for teams that specifically need custom voice cloning, it's
+the wrong model entirely.
+
+## Multi-tenant serving considerations
+
+A single Kokoro instance serving many concurrent requests needs the same batching
+discipline as any small model server: requests should be queued and batched rather
+than spawning one model call per request, since batched inference amortizes the fixed
+per-call overhead across multiple simultaneous generations. Teams running Kokoro at
+scale typically put it behind a request queue (Celery/RQ or a dedicated inference
+server like Triton) exactly as they would for a small vision or NLP model, treating
+TTS as just another batched inference workload rather than a special case.
+
+## Why "good enough" open TTS is a recent development
+
+Until relatively recently, self-hosted open TTS lagged commercial APIs badly enough
+in naturalness that the cost savings weren't worth the quality hit for
+customer-facing products. Small, high-quality models like Kokoro (and comparable
+recent open releases) mark a real shift — the quality gap to ElevenLabs-tier output
+has narrowed enough that "self-host for cost, use a commercial API only where the
+prosody gap actually matters" is now a defensible default for many products, rather
+than commercial APIs being the only viable choice for anything customer-facing.

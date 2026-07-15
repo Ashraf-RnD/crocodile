@@ -1,0 +1,113 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Multi-Head Attention"
+level: expert
+phaseSlug: "phase-06-transformers"
+phaseName: "Transformers"
+topicSlug: "multi-head-attention"
+estReadTime: 11
+resources:
+  - type: article
+    title: "GQA: Training Generalized Multi-Query Transformer Models"
+    url: "https://arxiv.org/abs/2305.13245"
+  - type: article
+    title: "Are Sixteen Heads Really Better than One?"
+    url: "https://arxiv.org/abs/1905.10650"
+---
+
+## MHA, MQA, and GQA: the KV-cache-driven evolution
+
+Standard **Multi-Head Attention (MHA)** gives every one of `H` query heads its own
+key and value head — `H` separate `K`/`V` projections. This is expressive but means
+the KV cache at inference time scales linearly with `H`, which becomes the dominant
+memory cost for long-context serving at scale.
+
+**Multi-Query Attention (MQA)** takes the opposite extreme: all `H` query heads
+share a *single* key/value head. This shrinks the KV cache by a factor of `H`,
+dramatically improving inference throughput and memory headroom, at a measurable
+(though often small) quality cost from the reduced representational diversity in
+keys/values.
+
+**Grouped-Query Attention (GQA)** is the pragmatic middle ground adopted by LLaMA 2,
+LLaMA 3, and Mistral: query heads are split into `G` groups, and each group shares
+one key/value head (`G` is typically much smaller than `H`, e.g. 8 groups for 32
+query heads). GQA recovers most of MHA's quality while keeping most of MQA's memory
+savings — it's a direct, empirically-tuned trade-off point rather than a
+theoretically "correct" design.
+
+<br/>
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class GroupedQueryAttention(nn.Module):
+    def __init__(self, d_model, num_q_heads, num_kv_heads):
+        super().__init__()
+        assert num_q_heads % num_kv_heads == 0
+        self.num_q_heads = num_q_heads
+        self.num_kv_heads = num_kv_heads
+        self.d_head = d_model // num_q_heads
+        self.group_size = num_q_heads // num_kv_heads
+
+        self.q_proj = nn.Linear(d_model, num_q_heads * self.d_head)
+        self.k_proj = nn.Linear(d_model, num_kv_heads * self.d_head)
+        self.v_proj = nn.Linear(d_model, num_kv_heads * self.d_head)
+        self.out_proj = nn.Linear(num_q_heads * self.d_head, d_model)
+
+    def forward(self, x):
+        b, s, _ = x.shape
+        q = self.q_proj(x).view(b, s, self.num_q_heads, self.d_head).transpose(1, 2)
+        k = self.k_proj(x).view(b, s, self.num_kv_heads, self.d_head).transpose(1, 2)
+        v = self.v_proj(x).view(b, s, self.num_kv_heads, self.d_head).transpose(1, 2)
+
+        # repeat each kv head across its group of query heads
+        k = k.repeat_interleave(self.group_size, dim=1)
+        v = v.repeat_interleave(self.group_size, dim=1)
+
+        out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        out = out.transpose(1, 2).contiguous().view(b, s, -1)
+        return self.out_proj(out)
+```
+
+## Head redundancy and pruning
+
+Michel et al. (2019) showed that, post-training, a large fraction of attention heads
+in BERT and Transformer NMT models can be pruned with negligible accuracy loss —
+often 20-40% of heads contribute little to final performance individually. This
+matters practically for two reasons: (1) it's evidence that multi-head attention's
+benefit comes primarily from *training-time* optimization dynamics (more heads give
+gradient descent more paths to find useful attention patterns) rather than every head
+being strictly necessary at inference time, and (2) it motivates structured pruning
+and distillation approaches that explicitly try to identify and remove redundant
+heads for deployment efficiency.
+
+## Interaction with FlashAttention and hardware utilization
+
+Multi-head attention's `(batch, heads, seq, d_head)` tensor layout is specifically
+what FlashAttention-style kernels are optimized around — the "heads" dimension is
+typically batched alongside the batch dimension in the kernel's tiling scheme, so
+increasing head count (at fixed `d_model`) has a much smaller wall-clock cost than
+naive `O(n²)` accounting would suggest, as long as `d_head` stays in the range these
+kernels are tuned for (commonly 64-128). Choosing `d_head` too small (many tiny
+heads) can leave GPU tensor cores underutilized despite being "more parallel" on
+paper — a case where the theoretically appealing design isn't automatically the
+fastest in practice.
+
+## Trade-off summary
+
+| Variant | KV heads | KV cache size | Quality vs. MHA | Adopted in |
+|---|---|---|---|---|
+| Multi-Head Attention (MHA) | H (one per query head) | Largest | Baseline | Original Transformer, BERT, GPT-2/3 |
+| Grouped-Query Attention (GQA) | G (shared across groups) | ~G/H of MHA | Near-parity | LLaMA 2/3, Mistral, most modern OSS LLMs |
+| Multi-Query Attention (MQA) | 1 (fully shared) | ~1/H of MHA | Small but measurable drop | PaLM, some inference-optimized models |
+
+## The core lesson
+
+Multi-head attention's design space today is mostly a **memory-bandwidth
+optimization problem at inference time**, not an attention-quality problem at
+training time — the quality difference between MHA and GQA is usually small, but the
+KV cache memory difference directly determines how large a batch (and therefore how
+much throughput) a given GPU can serve. This is a clear example of a modeling choice
+driven primarily by production serving economics rather than pure benchmark accuracy.

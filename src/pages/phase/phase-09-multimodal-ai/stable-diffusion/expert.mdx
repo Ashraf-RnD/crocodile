@@ -1,0 +1,82 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Stable Diffusion"
+level: expert
+phaseSlug: "phase-09-multimodal-ai"
+phaseName: "Multimodal AI"
+topicSlug: "stable-diffusion"
+estReadTime: 11
+resources:
+  - type: article
+    title: "Adding Conditional Control to Text-to-Image Diffusion Models (ControlNet paper)"
+    url: "https://arxiv.org/abs/2302.05543"
+  - type: docs
+    title: "SDXL Turbo — real-time distilled diffusion"
+    url: "https://huggingface.co/stabilityai/sdxl-turbo"
+---
+
+## Model generation comparison
+
+| Model | Params (UNet/transformer) | Native resolution | Text encoder | Notes |
+|---|---|---|---|---|
+| SD 1.5 | ~860M | 512x512 | CLIP ViT-L | Smallest, fastest, huge LoRA/ControlNet ecosystem |
+| SDXL | ~2.6B | 1024x1024 | Dual CLIP encoders | Much better detail/coherence, higher VRAM needs |
+| SD3 | ~2-8B (MMDiT) | 1024x1024+ | T5 + CLIP | Transformer-based (not UNet), better text rendering in images |
+
+SD3's architectural shift from a UNet to a **transformer-based diffusion backbone**
+(MMDiT — multimodal diffusion transformer) is the same broader trend seen across the
+field (and matches FLUX's architecture) — transformers scale more predictably with
+compute and data than convolutional UNets, at the cost of needing more careful
+engineering to run efficiently.
+
+## Samplers: the same model, different denoising trajectories
+
+The choice of sampler (the algorithm that decides how to step from noisy to clean
+latents) is an independent axis from the model itself, trading speed against quality
+and against how "creative"/varied results across different seeds look:
+
+| Sampler | Steps needed | Character | Typical use |
+|---|---|---|---|
+| DDIM | 20-50 | Deterministic, smooth | Reproducible results, good default |
+| Euler / Euler A | 20-30 | Fast, Euler A adds noise (more variety) | General purpose |
+| DPM++ 2M Karras | 15-25 | High quality per step, efficient | Common "best default" recommendation |
+
+Fewer required steps for equivalent quality directly translates to lower generation
+cost in production — this is why sampler choice is a real infrastructure decision for
+a high-volume image generation service, not just an artistic preference.
+
+## ControlNet: structural conditioning beyond text
+
+Text prompts alone give weak control over exact composition — pose, edges, depth.
+**ControlNet** adds a second conditioning input (a pose skeleton, a Canny edge map, a
+depth map) that constrains the denoising process to match a specific structure while
+the text prompt still controls style/content:
+
+```python
+from diffusers import ControlNetModel, StableDiffusionControlNetPipeline
+
+controlnet = ControlNetModel.from_pretrained("lllyasviel/sd-controlnet-canny")
+pipe = StableDiffusionControlNetPipeline.from_pretrained(
+    "runwayml/stable-diffusion-v1-5", controlnet=controlnet
+).to("cuda")
+
+image = pipe("a lighthouse at sunset", image=canny_edge_map).images[0]
+```
+
+This is the mechanism behind most production creative tools that need to preserve a
+specific layout (product photography with a fixed pose, architectural visualization
+matching a real floor plan) while still using diffusion for the actual rendering.
+
+## Serving at scale: distillation and safety filtering
+
+Two production concerns matter beyond raw model choice:
+
+- **Distillation for speed**: models like SDXL Turbo and SD Turbo are distilled to
+  generate usable images in 1-4 steps instead of 20-50, trading some quality/diversity
+  for order-of-magnitude latency reduction — the standard choice for interactive,
+  real-time generation products.
+- **Safety filtering**: production deployments run a separate NSFW/safety classifier on
+  generated output before serving it to users, since diffusion models trained on
+  large, loosely-filtered web-scale datasets can occasionally produce inappropriate
+  content even from innocuous prompts — this is a required layer, not optional
+  hardening, for any public-facing generation product.

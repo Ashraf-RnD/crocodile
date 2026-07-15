@@ -1,0 +1,86 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "uv"
+level: beginner
+phaseSlug: "phase-01-python-for-ai"
+phaseName: "Python for AI"
+topicSlug: "uv"
+estReadTime: 5
+resources:
+  - type: docs
+    title: "uv — Official documentation"
+    url: "https://docs.astral.sh/uv/"
+  - type: article
+    title: "Astral — uv: Python packaging in Rust"
+    url: "https://astral.sh/blog/uv"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Same job as pip, dramatically faster
+
+**uv** is a Python package and project manager built by Astral (the makers of the
+`ruff` linter) in Rust. It does what pip and Poetry do — install packages, manage
+virtual environments, lock dependencies — but re-implemented for speed, and it's
+quickly becoming the recommended default for new Python projects because of it.
+
+```bash
+# Install uv itself (one-time, no Python needed to bootstrap it)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+uv init my-project      # scaffolds a new project (like poetry new)
+cd my-project
+uv add numpy pandas     # adds a dependency, resolves, locks, installs
+uv run python train.py  # runs a command inside the project's environment
+```
+
+You'll notice `uv add` finishes almost instantly compared to the equivalent `pip
+install` or `poetry add` — this speed difference is uv's whole reason for existing,
+and it compounds a lot over a day of adding/removing packages while prototyping.
+
+<Mermaid client:visible code={`flowchart LR
+  A["uv add torch"] --> B["Rust-based resolver — parallel, cached"]
+  B --> C["Writes uv.lock"]
+  C --> D["Installs into managed .venv"]
+  D --> E["Ready in a fraction of pip/Poetry's time"]`} />
+
+### uv also manages Python itself
+
+Unlike pip and Poetry, which assume you already have a Python interpreter, uv can
+install and manage Python *versions* for you.
+
+```bash
+uv python install 3.12     # downloads and installs Python 3.12
+uv venv --python 3.12       # creates a venv using that specific version
+uv run --python 3.11 script.py   # run a one-off script under a different Python version
+```
+
+This means a fresh machine can go from "nothing installed" to "running your ML
+project on the correct Python version with all dependencies" using only uv — no
+separate `pyenv` or system Python setup required.
+
+### As a drop-in pip replacement
+
+If you're not ready to adopt uv's full project workflow, it also works as a much
+faster substitute for plain pip commands.
+
+```bash
+uv pip install numpy pandas    # same interface as pip, much faster resolution/download
+uv pip install -r requirements.txt
+```
+
+## Try it yourself
+
+You want to start a brand-new project called `nlp-experiment` with `numpy` as a
+dependency, using uv end to end. What commands do you run?
+
+<details>
+<summary>Solution</summary>
+
+```bash
+uv init nlp-experiment
+cd nlp-experiment
+uv add numpy
+uv run python -c "import numpy; print(numpy.__version__)"
+```
+
+</details>

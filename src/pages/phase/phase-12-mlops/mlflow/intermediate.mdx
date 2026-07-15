@@ -1,0 +1,118 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "MLflow"
+level: intermediate
+phaseSlug: "phase-12-mlops"
+phaseName: "MLOps"
+topicSlug: "mlflow"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "MLflow Model Registry"
+    url: "https://mlflow.org/docs/latest/model-registry.html"
+  - type: docs
+    title: "MLflow Tracking Server Setup"
+    url: "https://mlflow.org/docs/latest/tracking/server.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Beyond a local UI: a shared tracking server
+
+In production MLOps, `mlflow ui` running on your laptop isn't enough — the whole
+team needs to see the same runs, and artifacts (model files, plots) need durable
+storage. A real setup separates three concerns:
+
+- **Backend store** — a database (Postgres, MySQL) holding params/metrics/metadata
+- **Artifact store** — object storage (S3, GCS, Azure Blob) holding model files
+- **Tracking server** — the process that mediates between clients and the two stores
+
+```bash
+mlflow server \
+  --backend-store-uri postgresql://mlflow:password@db-host:5432/mlflow \
+  --default-artifact-root s3://my-team-bucket/mlflow-artifacts \
+  --host 0.0.0.0 --port 5000
+```
+
+Every training job — whether run by a data scientist locally or a Kubernetes job
+in CI — points at this server via an environment variable:
+
+```bash
+export MLFLOW_TRACKING_URI=https://mlflow.mycompany.internal
+```
+
+<Mermaid client:visible code={`flowchart LR
+  A["Data scientist laptop"] -->|logs runs| S["MLflow Tracking Server"]
+  B["CI training job"] -->|logs runs| S
+  C["Scheduled retraining (Airflow)"] -->|logs runs| S
+  S --> D[("Postgres — params/metrics")]
+  S --> E[("S3 — model artifacts")]
+  S --> F["MLflow UI — shared by whole team"]`} />
+
+## Autologging: fewer manual `log_param` calls
+
+For common frameworks, MLflow can capture parameters, metrics, and the model
+itself without manual instrumentation:
+
+```python
+import mlflow
+
+mlflow.sklearn.autolog()   # also: mlflow.pytorch, mlflow.xgboost, mlflow.lightgbm
+
+with mlflow.start_run():
+    model = RandomForestClassifier(n_estimators=200, max_depth=8)
+    model.fit(X_train, y_train)
+    # autolog already captured n_estimators, max_depth, training score, the model file
+```
+
+Autolog is a good default for standard training loops; you still add
+`mlflow.log_metric()` calls manually for custom evaluation metrics autolog
+doesn't know about (e.g. business KPIs computed after inference).
+
+## Model Registry: the bridge from tracking to deployment
+
+Tracking answers "what happened during training." The **Model Registry** answers
+"which model is currently serving traffic." You register a specific run's model,
+then move it through stages:
+
+```python
+result = mlflow.register_model(
+    model_uri="runs:/abc123def456/model",
+    name="fraud-detector"
+)
+
+from mlflow import MlflowClient
+client = MlflowClient()
+
+client.transition_model_version_stage(
+    name="fraud-detector",
+    version=result.version,
+    stage="Staging"
+)
+```
+
+A deployment service then loads the model by stage alias, not a hardcoded path:
+
+```python
+model = mlflow.pyfunc.load_model("models:/fraud-detector/Production")
+```
+
+This indirection means promoting a new model to production is a metadata change
+(re-point the alias), not a code redeploy — the serving code never changes.
+
+## Comparing runs programmatically
+
+For automated retraining pipelines, you often need to pick the best run without
+opening the UI:
+
+```python
+runs = mlflow.search_runs(
+    experiment_names=["fraud-detector-retrain"],
+    order_by=["metrics.f1_score DESC"],
+    max_results=1
+)
+best_run_id = runs.iloc[0]["run_id"]
+```
+
+This is the pattern behind "champion/challenger" retraining jobs: train a new
+candidate, compare its `f1_score` against the current production model's logged
+metric, and only register + promote it if it's actually better.

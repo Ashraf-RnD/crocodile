@@ -1,0 +1,100 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "GPT"
+level: intermediate
+phaseSlug: "phase-06-transformers"
+phaseName: "Transformers"
+topicSlug: "gpt"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "Hugging Face — GPT2LMHeadModel"
+    url: "https://huggingface.co/docs/transformers/en/model_doc/gpt2#transformers.GPT2LMHeadModel"
+  - type: article
+    title: "Language Models are Unsupervised Multitask Learners (GPT-2 paper)"
+    url: "https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## GPT's architecture, precisely
+
+A GPT model is a stack of decoder-only Transformer blocks — causally-masked
+self-attention followed by a feed-forward network, repeated N times — plus a final
+linear layer ("language modeling head") that projects the last layer's output back
+to vocabulary-sized logits.
+
+<Mermaid client:visible code={`flowchart TB
+  In["Token + positional embeddings"] --> L1["Decoder block 1 (masked self-attn + FFN)"]
+  L1 --> L2["Decoder block 2"]
+  L2 --> Ldots["... N blocks"]
+  Ldots --> LN["Final LayerNorm"]
+  LN --> Head["LM head: linear projection to vocab size"]
+  Head --> Probs["Softmax → probability over next token"]`} />
+
+## Training loop: next-token prediction as cross-entropy
+
+```python
+import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM
+
+tokenizer = AutoTokenizer.from_pretrained("gpt2")
+model = AutoModelForCausalLM.from_pretrained("gpt2")
+
+text = "The transformer architecture changed natural language processing."
+inputs = tokenizer(text, return_tensors="pt")
+
+# labels = input_ids shifted internally by the model; loss is computed
+# by comparing each position's prediction against the *next* actual token
+outputs = model(**inputs, labels=inputs["input_ids"])
+print(outputs.loss.item())   # cross-entropy loss over next-token predictions
+```
+
+Internally, `labels=input_ids` tells the model to shift the labels by one position:
+the logits at position `i` are compared against the token at position `i+1`. This is
+the entire GPT training objective — no separate labels are needed, which is what
+makes this "self-supervised" — the text itself supplies the labels.
+
+## Fine-tuning GPT for a downstream task
+
+```python
+from transformers import TrainingArguments, Trainer
+
+training_args = TrainingArguments(
+    output_dir="./gpt2-finetuned",
+    per_device_train_batch_size=4,
+    num_train_epochs=3,
+    learning_rate=5e-5,
+)
+
+# trainer = Trainer(model=model, args=training_args, train_dataset=tokenized_dataset)
+# trainer.train()
+```
+
+Modern production fine-tuning of GPT-family/LLaMA-family models more often uses
+**parameter-efficient fine-tuning** (LoRA, QLoRA) rather than updating every
+parameter — freezing the base model and training small low-rank adapter matrices
+instead, which drastically cuts memory requirements while retaining most of the
+quality of full fine-tuning. This becomes essential once model sizes move past a few
+hundred million parameters.
+
+## GPT-1 → GPT-2 → GPT-3: what actually changed
+
+| | GPT-1 (2018) | GPT-2 (2019) | GPT-3 (2020) |
+|---|---|---|---|
+| Parameters | 117M | up to 1.5B | up to 175B |
+| Training data | BookCorpus | WebText (~40GB curated web text) | ~570GB filtered Common Crawl + more |
+| Key claim | Pretrain + fine-tune beats task-specific architectures | Zero-shot task transfer via prompting alone | Few-shot in-context learning at scale |
+| Architecture change | Introduces decoder-only Transformer for LM | Pre-LN (moved LayerNorm before sublayers), larger scale | Same core architecture, much larger scale, sparse attention in some layers |
+
+The headline lesson across this progression: architectural changes between GPT
+versions were relatively modest — the dominant driver of capability growth was
+scaling model size, data, and compute together, a relationship later formalized as
+neural scaling laws.
+
+## Where GPT-style models show up in production
+
+Decoder-only, GPT-style pretraining is now the dominant paradigm for general-purpose
+chat assistants, code generation tools, and agentic systems — typically followed by
+instruction tuning and RLHF/DPO alignment on top of the base next-token-prediction
+pretraining to make the model follow instructions and behave helpfully rather than
+just completing text in a stylistically plausible way.

@@ -1,0 +1,83 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Mixture of Experts"
+level: beginner
+phaseSlug: "phase-14-research-literacy"
+phaseName: "Research Literacy"
+topicSlug: "mixture-of-experts"
+estReadTime: 7
+resources:
+  - type: article
+    title: "Outrageously Large Neural Networks: The Sparsely-Gated Mixture-of-Experts Layer"
+    url: "https://arxiv.org/abs/1701.06538"
+  - type: article
+    title: "Switch Transformers: Scaling to Trillion Parameter Models"
+    url: "https://arxiv.org/abs/2101.03961"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The problem before this paper
+
+In a standard ("dense") neural network, every single parameter is used to
+process every single input. Want a more capable model? You add more
+parameters — but every input now costs more compute, because it still has to
+pass through all of them. This links model capacity and computational cost
+together in lockstep: you cannot make a model "know more" without also making
+every prediction more expensive, which puts a hard ceiling on how large you
+can practically scale a dense model.
+
+## The core idea, in plain language
+
+The Mixture of Experts (MoE) idea breaks that link. Instead of one dense
+network that processes everything, you build many smaller specialized
+sub-networks — "experts" — and add a small **router** (or "gate") that looks
+at each input and decides which handful of experts should process it. Only
+those selected experts do any work for that particular input; the rest sit
+idle. Total model capacity (the sum of all experts) can grow enormously,
+while the compute cost per input stays tied to just the few experts that
+were actually activated.
+
+A useful analogy: think of a large hospital with dozens of specialists —
+cardiologists, dermatologists, orthopedists. A patient doesn't see every
+specialist in the building; a receptionist (the router) looks at their
+symptoms and sends them to the two or three most relevant specialists. The
+hospital's total expertise (capacity) is enormous, but any individual visit
+only costs the time of the few specialists actually consulted, not the whole
+staff.
+
+<Mermaid client:visible code={`flowchart TB
+  In["Input token"] --> Router["Router: which experts are relevant?"]
+  Router --> E1["Expert 1 (activated)"]
+  Router --> E3["Expert 3 (activated)"]
+  Router -.skipped.-> E2["Expert 2"]
+  Router -.skipped.-> E4["Expert 4"]
+  E1 --> Out["Combined output"]
+  E3 --> Out`} />
+
+## Why it mattered
+
+The original 2017 paper demonstrated MoE layers scaling a model to over 130
+billion parameters while keeping the compute cost per input close to that of
+a much smaller dense model — a decoupling of "how much the model knows" from
+"how much compute answering costs" that dense architectures simply couldn't
+offer. That decoupling is precisely why, years later, MoE became the
+architecture of choice for building today's largest and most
+capability-per-dollar-efficient language models, including several covered
+elsewhere in this phase.
+
+## Try it yourself
+
+Can you explain the core idea of this paper in one sentence to a non-technical
+friend?
+
+<details>
+<summary>Solution</summary>
+
+Something like: "Instead of building one giant network that processes every
+input with all of its knowledge every time, this method builds many smaller
+specialist networks and a receptionist that routes each input to just the few
+specialists it actually needs — so the model can hold a huge amount of total
+knowledge while only paying the compute cost of a much smaller model on any
+given input."
+
+</details>

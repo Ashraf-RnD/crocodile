@@ -1,0 +1,109 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Function Calling"
+level: expert
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "function-calling"
+estReadTime: 12
+resources:
+  - type: article
+    title: "OpenAI — Structured Outputs for Function Calling"
+    url: "https://platform.openai.com/docs/guides/structured-outputs"
+  - type: article
+    title: "Berkeley Function-Calling Leaderboard"
+    url: "https://gorilla.cs.berkeley.edu/leaderboard.html"
+---
+
+## Function calling is a constrained decoding problem, not a "feature"
+
+Under the hood, the model isn't magically deciding to call a function — it's been
+fine-tuned to produce a special output format (a structured call token sequence)
+when the prompt includes tool definitions, and the provider's serving stack parses
+that output into the `tool_calls` field you see in the API response. This matters
+because it means function-calling reliability is fundamentally bounded by two things:
+how well the specific model was trained on tool-use data, and how much the schema you
+provide reduces ambiguity for that decoding process.
+
+## Schema design is the highest-leverage lever you control
+
+The single biggest driver of function-calling accuracy in practice is schema quality,
+not prompt wording:
+
+- **Tight enums over free-text strings.** `"unit": {"enum": ["celsius", "fahrenheit"]}`
+  eliminates an entire class of malformed arguments that `"unit": {"type": "string"}`
+  invites.
+- **Descriptions matter as much as types.** `"city": {"type": "string"}` alone is far
+  weaker than adding `"description": "City and country, e.g. 'Paris, France' — never abbreviate"`.
+  The description is part of what the model conditions on when generating arguments.
+- **Fewer, more distinct tools beat many overlapping ones.** Tool selection accuracy
+  degrades as the number of semantically similar tools grows — `search_users` and
+  `find_users` sitting side by side actively hurts accuracy versus having just one.
+  Benchmarks like the Berkeley Function-Calling Leaderboard show accuracy dropping
+  measurably as tool-set size and overlap increase, even for frontier models.
+
+## Strict / constrained mode changes the reliability contract
+
+Earlier function-calling implementations produced JSON that was schema-*compatible on
+average* but not guaranteed — arguments could have wrong types, missing required
+fields, or hallucinated extra fields. OpenAI's `strict: true` mode and Anthropic's
+tool-use validation constrain decoding at the token level so the output is
+grammatically guaranteed to match the schema:
+
+```python
+tools = [{
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "strict": True,
+        "parameters": {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"],
+            "additionalProperties": False,
+        },
+    },
+}]
+```
+
+The trade-off: strict mode has schema restrictions (no unconstrained `additionalProperties`,
+limited use of `oneOf`/recursive schemas depending on provider) and, on some providers,
+a first-call latency cost the first time a new schema is used, since the constrained
+grammar has to be compiled. It removes a whole category of "valid-looking but wrong"
+outputs, but it doesn't fix *semantic* errors — the model can still call the right
+function with the wrong (but schema-valid) city name.
+
+## Security: function calling is an attack surface
+
+Any function you expose can be invoked with model-chosen arguments, and those
+arguments are influenced by whatever text the model has seen — including untrusted
+content from retrieved documents, tool outputs, or user input. Treat every
+function-calling deployment as though it will eventually receive adversarial or
+malformed input:
+
+- Validate and sanitize arguments in your own code before executing, never trust the
+  model's arguments as pre-validated just because they matched the schema.
+- Apply least privilege: a `run_sql` tool that accepts arbitrary queries is far riskier
+  than a set of narrow, purpose-built tools (`get_order_status(order_id)`).
+- Rate-limit and sandbox side-effecting tools (sending emails, making payments,
+  deleting data) — require human confirmation for irreversible actions in
+  higher-stakes domains.
+
+## Trade-offs across approaches
+
+| Approach | Reliability | Flexibility | Notes |
+|---|---|---|---|
+| Free-text parsing (regex/heuristics on plain output) | Low | High | Legacy approach, largely obsolete for new systems |
+| Function calling, `tool_choice="auto"` | Medium-high | High — model decides when to call | Model can skip calling when it shouldn't, or vice versa |
+| Function calling, forced (`tool_choice` = specific tool) | High for that step | Low — no model discretion | Use when a step must always happen |
+| Strict/constrained schema mode | Highest for structural validity | Slightly reduced schema expressiveness | Doesn't guarantee semantic correctness |
+
+## Evaluating function-calling systems
+
+Standard text-generation evals (BLEU, exact match on prose) don't apply. Evaluate
+along three separate axes: **tool selection** (did it call the right function at all),
+**argument accuracy** (were the arguments correct, not just schema-valid), and
+**task completion** (did the end-to-end multi-turn interaction actually solve the
+user's problem). A model can score well on the first two and still fail the third if
+it stops calling tools too early or loops unnecessarily — which is why production
+systems track full-trajectory success rate, not just single-call accuracy.

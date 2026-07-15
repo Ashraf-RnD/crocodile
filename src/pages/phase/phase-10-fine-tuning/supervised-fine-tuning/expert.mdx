@@ -1,0 +1,94 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Supervised Fine-Tuning"
+level: expert
+phaseSlug: "phase-10-fine-tuning"
+phaseName: "Fine-tuning"
+topicSlug: "supervised-fine-tuning"
+estReadTime: 13
+resources:
+  - type: article
+    title: "LIMA: Less Is More for Alignment"
+    url: "https://arxiv.org/abs/2305.11206"
+  - type: docs
+    title: "TRL — packing, sequence length, and performance guide"
+    url: "https://huggingface.co/docs/trl/main/en/sft_trainer#packing-dataset"
+---
+
+## SFT as distribution-shifting, not knowledge injection
+
+The most common misconception about SFT is treating it as a mechanism for teaching the
+model new facts. In practice, SFT primarily reshapes the *output distribution* — which
+of the many behaviors already latent in the pretrained model get surfaced by default —
+rather than injecting substantial new knowledge. This is the core insight behind LIMA
+(Zhou et al.): 1,000 carefully curated examples were sufficient to produce
+competitive instruction-following behavior, because the underlying capability (factual
+knowledge, reasoning patterns, language fluency) was already present from pretraining;
+SFT's job was surfacing "answer helpfully and directly" as the default completion
+style. The practical corollary: if your task genuinely requires new factual knowledge
+the base model lacks, SFT alone is the wrong tool — you need continued pretraining or
+retrieval augmentation, and SFT will mostly teach the model to *confidently state
+things it doesn't actually know*, a direct contributor to hallucination.
+
+## The loss-masking decision has second-order effects on calibration
+
+Masking loss on prompt tokens (training only on assistant completions) is standard
+practice, but it has an underappreciated consequence: the model never receives gradient
+signal that would calibrate *how confidently* to answer based on prompt clarity or
+ambiguity, because the loss landscape only ever "sees" clean completions attached to
+whatever prompt preceded them. Some production pipelines counteract this by explicitly
+including refusal/uncertainty examples ("I don't have enough information to answer
+that") as first-class training targets — otherwise the SFT-trained model's default
+posture skews toward always producing a confident, well-formatted answer, since that's
+the only completion pattern loss ever rewarded during training.
+
+## Packing efficiency vs. cross-contamination risk
+
+Sequence packing (concatenating short examples to fill `max_length`) is a real
+throughput win — often 2-4x fewer padding tokens processed — but naive packing without
+proper attention masking lets tokens from example N attend to tokens from example N-1
+within the same packed sequence, silently leaking context across unrelated examples.
+Modern implementations (TRL's packing with `position_ids` reset, or explicit
+block-diagonal attention masks) fix this, but it's a detail worth verifying rather than
+assuming — a poorly implemented packing pipeline can quietly degrade quality in ways
+that are hard to detect from loss curves alone, since the loss still goes down, just
+against a subtly wrong objective.
+
+## Epoch count as the primary catastrophic-forgetting lever
+
+Unlike pretraining, where more epochs over more data is close to strictly better, SFT
+exhibits a sharp quality/forgetting trade-off around epoch count. Empirically:
+
+- **1 epoch**: often undertrained on smaller or more idiosyncratic datasets, especially
+  for narrow domain adaptation.
+- **2-3 epochs**: the common sweet spot for most instruction-tuning datasets of
+  moderate size (thousands to low tens-of-thousands of examples).
+- **5+ epochs**: measurable degradation on held-out general capability benchmarks
+  becomes common, particularly with full fine-tuning and small/narrow datasets, as the
+  model increasingly overfits to dataset-specific patterns at the expense of
+  pretrained generality.
+
+This is one of the more concrete arguments for PEFT (LoRA/QLoRA) over full fine-tuning
+for SFT specifically: the rank constraint acts as an implicit regularizer that
+meaningfully widens the safe epoch-count range before forgetting becomes visible.
+
+## Trade-off summary
+
+| Decision | Favors quality | Favors efficiency/safety |
+|---|---|---|
+| Full fine-tuning vs. LoRA/QLoRA | Full FT can reach slightly higher peak quality on large, diverse datasets | LoRA/QLoRA far cheaper, less prone to catastrophic forgetting |
+| High epoch count | Better fit on the target dataset | Risk of forgetting general capability, overfitting to format |
+| Packing enabled | Much higher training throughput | Requires correct cross-example attention masking |
+| Large, broad dataset | Broader behavioral coverage | Harder to keep quality-controlled; noise dilutes signal |
+| Small, curated dataset (LIMA-style) | Cleaner signal, easier to audit | May undercover edge cases and rare formats |
+
+## Where SFT's limits show up downstream
+
+SFT alone tends to plateau on tasks requiring the model to *rank* between several
+plausible-but-imperfect responses — it only ever sees single "correct" targets, never
+comparative signal about which of two decent answers is better. This gap is precisely
+what preference-based methods ([RLHF](/phase/phase-10-fine-tuning/rlhf-concepts/expert)
+and [DPO](/phase/phase-10-fine-tuning/dpo/expert)) are designed to close, which is why
+production alignment pipelines almost universally run SFT first, then a preference
+optimization stage — SFT establishes the response distribution, preference tuning
+sharpens it.

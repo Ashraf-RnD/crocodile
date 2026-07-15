@@ -1,0 +1,80 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "BERT"
+level: beginner
+phaseSlug: "phase-14-research-literacy"
+phaseName: "Research Literacy"
+topicSlug: "bert"
+estReadTime: 7
+resources:
+  - type: article
+    title: "BERT: Pre-training of Deep Bidirectional Transformers (original paper)"
+    url: "https://arxiv.org/abs/1810.04805"
+  - type: article
+    title: "The Illustrated BERT — Jay Alammar"
+    url: "https://jalammar.github.io/illustrated-bert/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The problem before this paper
+
+By 2018, the Transformer had shown that self-attention was a powerful building
+block, but most language models built with it — including the original GPT — could
+only read text in one direction, usually left to right. That's a real limitation:
+to fully understand the word "bank" in "I sat on the bank of the river," you often
+need context from *both* sides of the word, not just what came before it.
+
+At the same time, most NLP systems were still trained largely from scratch for
+each task (sentiment analysis, question answering, named entity recognition),
+which meant every task needed its own large labeled dataset — expensive and slow.
+
+## The core idea, in plain language
+
+BERT's insight was to pretrain a single model on huge amounts of unlabeled text
+using a task designed specifically to force **bidirectional** understanding: take a
+sentence, hide ("mask") about 15% of the words, and ask the model to guess the
+hidden words using context from *both* the left and the right.
+
+A useful analogy: imagine a fill-in-the-blank exercise where you can see the whole
+sentence except a few blanked-out words — "The ___ sat on the mat and purred." You
+naturally use every word around the blank, before and after, to guess "cat." That's
+exactly the training signal BERT uses, at a scale of billions of words, and it's
+what earns the model a deep, general-purpose understanding of language before it
+ever sees a specific task.
+
+Once pretrained this way, BERT can be **fine-tuned** — lightly adjusted with a
+small amount of labeled data — to do well on a wide range of specific tasks:
+sentiment classification, question answering, sentence similarity. One pretraining
+run, many downstream uses.
+
+<Mermaid client:visible code={`flowchart LR
+  A["Huge unlabeled text corpus"] --> B["Pretrain: guess masked words using both directions"]
+  B --> C["General-purpose language understanding"]
+  C --> D["Fine-tune on small labeled dataset"]
+  D --> E["Task-specific model (e.g. sentiment, Q&A)"]`} />
+
+## Why it mattered
+
+BERT showed that a single bidirectionally-pretrained model, fine-tuned cheaply,
+could beat task-specific architectures across nearly a dozen NLP benchmarks
+simultaneously — something no prior approach had done. It kicked off the
+"pretrain then fine-tune" paradigm that dominated NLP for years, and its
+encoder-only design became the standard architecture for tasks needing rich
+understanding rather than text generation (search ranking, embeddings,
+classification).
+
+## Try it yourself
+
+Can you explain the core idea of this paper in one sentence to a non-technical
+friend?
+
+<details>
+<summary>Solution</summary>
+
+Something like: "Instead of teaching a model to read text only left to right, this
+method trains it by hiding random words in a sentence and making it guess them
+using context from both sides — like an extreme fill-in-the-blank game played on
+huge amounts of text — which gives it a much deeper understanding of language that
+can then be reused for many different tasks."
+
+</details>

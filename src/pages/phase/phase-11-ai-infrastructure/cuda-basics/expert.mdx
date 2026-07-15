@@ -1,0 +1,115 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "CUDA Basics"
+level: expert
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "cuda-basics"
+estReadTime: 11
+resources:
+  - type: article
+    title: "NVIDIA — Mastering LLM Techniques: Inference Optimization"
+    url: "https://developer.nvidia.com/blog/mastering-llm-techniques-inference-optimization/"
+  - type: docs
+    title: "NVIDIA — CUDA Graphs"
+    url: "https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#cuda-graphs"
+---
+
+## The roofline model: why "GPU-poor" isn't always about compute
+
+The roofline model plots achievable performance (FLOPs/sec) against **arithmetic
+intensity** — how many floating-point operations a kernel does per byte moved from
+memory. A kernel with low arithmetic intensity hits the memory-bandwidth "roof"
+before it can ever reach the GPU's peak compute rate, no matter how many idle Tensor
+Cores are sitting there. Autoregressive LLM decoding at batch size 1 is the textbook
+low-arithmetic-intensity case: generating each token requires streaming the *entire*
+model's weights (potentially tens of GB) from HBM into the SMs to perform a single
+token's worth of matrix-vector multiplication — one pass over gigabytes of weights
+for a comparatively tiny amount of compute. The GPU's compute cores sit mostly idle
+while memory-bandwidth is saturated. This is why an H100 (~1000 TFLOPs FP16, ~3.35
+TB/s HBM bandwidth) can spend a decode step compute-idle: the *ratio* of bytes-to-move
+vs. flops-to-do at batch=1 is exactly what pins you against the memory roof, not the
+compute roof — adding more compute cores wouldn't help until arithmetic intensity
+rises, e.g. via larger batches.
+
+## Kernel fusion: fewer, bigger kernels win
+
+Every kernel launch has fixed overhead (microseconds of CPU-side dispatch, plus a
+round trip to global memory for the kernel's inputs and outputs) that's paid
+regardless of how little work the kernel does. A transformer layer naively expressed
+as separate kernels — LayerNorm, then QKV projection, then RoPE, then attention, then
+output projection, then residual add — pays that overhead and a global-memory
+round-trip *between every step*, even though most of these ops are individually
+memory-bound and could keep their intermediate results in registers or shared
+memory instead. Fused kernels (FlashAttention fusing softmax with the QK^T and
+attention-value matmuls; fused LayerNorm+residual; fused QKV projection) collapse
+several such steps into one kernel invocation, eliminating both the redundant launch
+overhead and the redundant HBM traffic. At small batch sizes and short sequence
+lengths — where each individual op is cheap — launch overhead and memory round-trips
+dominate wall-clock time far more than the actual arithmetic does, which is precisely
+why fusion has an outsized effect on LLM inference latency specifically.
+
+## CUDA graphs: amortizing launch overhead across steps
+
+For a fixed, repeated sequence of kernel launches — exactly what a decode loop is,
+same shapes and same op sequence every token — **CUDA graphs** let you capture the
+entire sequence once and replay it as a single graph launch, instead of the CPU
+issuing dozens of individual kernel-launch calls per step:
+
+```python
+import torch
+
+g = torch.cuda.CUDAGraph()
+static_input.copy_(real_input)
+with torch.cuda.graph(g):
+    static_output = model(static_input)   # captured once
+
+# each subsequent decode step:
+static_input.copy_(next_token_input)
+g.replay()                                 # replays the whole captured graph
+```
+
+At batch=1 decode, per-step CPU dispatch overhead (Python interpreter, framework
+dispatch, individual `cudaLaunchKernel` calls) can rival or exceed the actual GPU
+compute time for a single token. A captured graph removes nearly all of that
+CPU-side overhead per step, which is why production inference engines (TensorRT-LLM,
+vLLM's later versions) adopt CUDA graphs specifically to shave the small, constant
+per-token tax that would otherwise dominate at low batch sizes.
+
+## Occupancy as a tuning lever
+
+**Occupancy** is the ratio of active warps (groups of 32 threads) on an SM to the
+maximum it could support, and it's a coarse but useful proxy for how well a kernel
+hides memory latency — while one warp stalls waiting on a global-memory load, the SM
+can switch to executing another resident warp instead of idling. Occupancy is capped
+by whichever resource runs out first: registers per thread, shared memory per block,
+or the fixed limit on resident blocks/warps per SM. A kernel that greedily uses too
+many registers per thread (common in complex fused kernels) can *reduce* occupancy
+and paradoxically hurt throughput on a latency-bound kernel — hence CUDA compilers
+exposing register-count tuning flags (`--maxrregcount`, `__launch_bounds__`) as a
+real, if blunt, performance lever distinct from the algorithmic fusion decisions
+above.
+
+## What actually determines LLM inference speed, by regime
+
+| Regime | Bottleneck | What helps | What doesn't help much |
+|---|---|---|---|
+| Batch=1 decode | Memory bandwidth (streaming weights per token) | Quantization (fewer bytes to move), fusion, CUDA graphs | Adding more compute cores / higher FLOPs |
+| Small-batch decode (2-16) | Still mostly memory-bandwidth, improving intensity | Continuous batching to raise effective batch size | Larger matmul tiling alone |
+| Large-batch decode / prefill | Compute (arithmetic intensity now high) | Tensor Core utilization, larger matmul tiles, higher clocks | Quantization's latency benefit shrinks (compute-bound, not bandwidth-bound) |
+| Prefill (long prompt, any batch) | Compute-bound (full sequence matmuls, high arithmetic intensity) | Kernel fusion, FlashAttention, higher FLOPs hardware | Reducing weight-loading traffic (already amortized over many tokens) |
+
+## Why batching helps throughput but not latency proportionally
+
+Increasing batch size raises arithmetic intensity — the same weight bytes fetched
+from HBM are now reused across more tokens' worth of compute per pass — so
+tokens/sec across the whole batch climbs substantially as you move from
+memory-bound toward compute-bound. But **per-request latency** doesn't improve the
+same way: each request still waits for its share of a step that now does more total
+work, and once you're compute-bound, adding yet more batch just trades compute time
+linearly rather than continuing to "unlock" idle capacity for free. This is the
+core tension production serving stacks manage explicitly — continuous batching
+(vLLM, TensorRT-LLM's in-flight batching) tries to keep the GPU near the
+compute-bound regime for aggregate throughput, while techniques like speculative
+decoding target the *other* axis, batch=1-style latency, precisely because batching
+alone can't fix it.

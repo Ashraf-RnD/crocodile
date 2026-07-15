@@ -1,0 +1,85 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "TensorRT-LLM"
+level: intermediate
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "tensorrt-llm"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "TensorRT-LLM — Build and Quantization Guide"
+    url: "https://nvidia.github.io/TensorRT-LLM/reference/precision.html"
+  - type: docs
+    title: "TensorRT-LLM — trtllm-serve CLI"
+    url: "https://nvidia.github.io/TensorRT-LLM/commands/trtllm-serve.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## From build to serve
+
+Once you have a compiled engine, you don't run raw inference scripts against it in
+production — you serve it. TensorRT-LLM ships `trtllm-serve`, which exposes an
+OpenAI-compatible HTTP endpoint directly from a built engine:
+
+```bash
+trtllm-serve ./llama-3-8b-engine \
+  --host 0.0.0.0 \
+  --port 8000 \
+  --max_batch_size 8 \
+  --kv_cache_free_gpu_mem_fraction 0.9
+```
+
+In larger production stacks, the same engine is more commonly deployed behind
+**Triton Inference Server**'s TensorRT-LLM backend, which adds request queuing, metrics,
+and multi-model orchestration on top.
+
+<Mermaid client:visible code={`flowchart LR
+  HF["HF checkpoint (.safetensors)"] --> Convert["convert_checkpoint.py"]
+  Convert --> Ckpt["TensorRT-LLM checkpoint"]
+  Ckpt --> Build["trtllm-build --gemm_plugin float16"]
+  Build --> Engine["Compiled engine (GPU-specific)"]
+  Engine --> Serve["trtllm-serve / Triton backend"]
+  Serve --> Client["Inference requests"]`} />
+
+## In-flight batching
+
+Static batching waits for a full batch of requests before running a forward pass —
+wasteful when requests arrive at different times or generate different numbers of
+tokens. TensorRT-LLM instead uses **in-flight batching** (also called continuous
+batching): as soon as one sequence in a batch finishes generating, a new incoming
+request is spliced into that batch slot on the very next decoding step, instead of
+waiting for the whole batch to complete. This is enabled by default when serving
+through `trtllm-serve` or the Triton backend and is one of the biggest single
+contributors to real-world throughput on shared inference servers.
+
+## Quantization: trading precision for speed and memory
+
+TensorRT-LLM has first-class support for reduced-precision inference, configured at
+build time:
+
+```bash
+trtllm-build \
+  --checkpoint_dir ./llama-3-8b-fp8-converted \
+  --output_dir ./llama-3-8b-fp8-engine \
+  --gemm_plugin fp8 \
+  --use_fp8_context_fmha enable
+```
+
+- **FP8** — native on Hopper (H100) and Blackwell GPUs; roughly halves memory versus
+  FP16 with minimal accuracy loss, and Tensor Cores execute FP8 matmuls faster.
+- **INT4/INT8 via AWQ or GPTQ** — quantize weights ahead of time with NVIDIA's
+  `modelopt` toolkit before conversion, useful when you need to fit a larger model into
+  a fixed GPU memory budget or maximize batch size.
+
+The quantization scheme is baked into the engine at build time — switching from FP16 to
+FP8 means reconverting the checkpoint and rebuilding, not flipping a runtime flag.
+
+## Why the engine is hardware- and version-locked
+
+An engine built for an H100 on TensorRT-LLM v0.12 will not load on an A100, and often
+won't load on a different TensorRT-LLM version either. This is the operational cost
+teams pay for the performance gain: engine artifacts need to be tracked per GPU SKU and
+per library version, and a fleet running mixed GPU generations needs a separate engine
+build for each one — a build/release pipeline concern that simply doesn't exist with
+runtimes that load weights directly at start time.

@@ -1,0 +1,97 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Hybrid Search"
+level: intermediate
+phaseSlug: "phase-08-retrieval-augmented-generation"
+phaseName: "Retrieval-Augmented Generation"
+topicSlug: "hybrid-search"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "Weaviate — Hybrid Search"
+    url: "https://weaviate.io/developers/weaviate/search/hybrid"
+  - type: docs
+    title: "Qdrant — Query API (fusion)"
+    url: "https://qdrant.tech/documentation/concepts/hybrid-queries/#fusion"
+---
+
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Two ranked lists, one final ranking
+
+Production hybrid search runs a dense vector search and a sparse (keyword) search in
+parallel, then merges the two ranked lists into one. The interesting engineering
+problem isn't running both searches — it's **fusion**: the two lists use incomparable
+scoring scales (cosine similarity is bounded 0-1, BM25 scores are unbounded and
+corpus-dependent), so you can't just add them together naively.
+
+<Mermaid client:visible code={`flowchart LR
+  Q["Query"] --> Dense["Dense vector search"]
+  Q --> Sparse["Sparse keyword search (BM25)"]
+  Dense --> RD["Ranked list A"]
+  Sparse --> RS["Ranked list B"]
+  RD --> Fusion["Fusion (e.g. RRF)"]
+  RS --> Fusion
+  Fusion --> Final["Final ranked results"]`} />
+
+## Reciprocal Rank Fusion (RRF): the standard fix
+
+Instead of combining raw scores, **RRF** combines *ranks* — which are already on the
+same scale (1st, 2nd, 3rd...) regardless of how each system produced them:
+
+```python
+def reciprocal_rank_fusion(rank_lists, k=60):
+    """rank_lists: list of ranked doc-id lists, one per search method."""
+    scores = {}
+    for ranked_docs in rank_lists:
+        for rank, doc_id in enumerate(ranked_docs, start=1):
+            scores[doc_id] = scores.get(doc_id, 0) + 1 / (k + rank)
+    return sorted(scores.items(), key=lambda x: x[1], reverse=True)
+
+dense_results = ["doc3", "doc1", "doc7"]     # from vector search
+sparse_results = ["doc1", "doc9", "doc3"]    # from BM25
+fused = reciprocal_rank_fusion([dense_results, sparse_results])
+```
+
+`doc1` and `doc3` appear in both lists near the top and get boosted by RRF even though
+neither ranked #1 in a single list — this is exactly what makes RRF robust: it rewards
+documents both methods agree are relevant, without needing to calibrate score scales
+against each other. The constant `k=60` (from the original paper) dampens the impact
+of any single very-high rank, so one system's outlier doesn't dominate the fusion.
+
+## Doing it natively in a vector database
+
+Most modern vector databases implement hybrid search and fusion natively, so you don't
+have to hand-roll RRF:
+
+```python
+import weaviate
+from weaviate.classes.query import HybridFusion
+
+client = weaviate.connect_to_local()
+collection = client.collections.get("SupportTickets")
+
+results = collection.query.hybrid(
+    query="payment not going through",
+    alpha=0.5,               # 0 = pure keyword, 1 = pure vector
+    fusion_type=HybridFusion.RELATIVE_SCORE,
+    limit=10,
+)
+```
+
+The `alpha` parameter is the practical knob teams actually tune in production — it
+lets you bias toward keyword precision (lower alpha, good for technical/code-heavy
+corpora) or semantic recall (higher alpha, good for conversational support content)
+without discarding either signal.
+
+## When hybrid search earns its extra infrastructure cost
+
+Hybrid search means maintaining two indexes (a sparse/inverted index alongside your
+vector index) and running two queries per search — real added infrastructure and
+latency versus vector-only search. It's clearly worth it for corpora with meaningful
+exact-match content: product SKUs, error codes, people's names, legal citations,
+internal jargon and acronyms. For corpora that are pure natural-language prose with
+few exact-match terms (general narrative content, casual conversation logs), the
+lexical signal contributes less, and the added complexity may not pay for itself —
+worth validating with an eval set rather than assuming hybrid is always strictly
+better.

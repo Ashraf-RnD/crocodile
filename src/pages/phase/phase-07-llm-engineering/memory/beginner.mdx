@@ -1,0 +1,86 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Memory"
+level: beginner
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "memory"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "OpenAI — Managing Conversation State"
+    url: "https://platform.openai.com/docs/guides/conversation-state"
+  - type: article
+    title: "LangChain — Memory Concepts"
+    url: "https://python.langchain.com/docs/concepts/chat_history/"
+---
+
+## Think of it like talking to someone with no short-term memory
+
+Every call to an LLM API is stateless — the model has zero memory of anything you
+said before, unless you send it again. "Memory" in an AI application just means: your
+code keeps track of the conversation and re-sends the relevant parts on every request.
+
+### Without memory (each call starts from zero)
+
+```python
+from openai import OpenAI
+client = OpenAI()
+
+r1 = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "My name is Alex."}],
+)
+print(r1.choices[0].message.content)  # "Nice to meet you, Alex!"
+
+r2 = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "What's my name?"}],
+)
+print(r2.choices[0].message.content)  # "I don't have that information." — no memory!
+```
+
+### With memory (you resend the history yourself)
+
+```python
+messages = [{"role": "user", "content": "My name is Alex."}]
+r1 = client.chat.completions.create(model="gpt-4o-mini", messages=messages)
+messages.append({"role": "assistant", "content": r1.choices[0].message.content})
+
+messages.append({"role": "user", "content": "What's my name?"})
+r2 = client.chat.completions.create(model="gpt-4o-mini", messages=messages)
+print(r2.choices[0].message.content)  # "Your name is Alex."
+```
+
+The model didn't "remember" anything — your code kept a `messages` list and sent the
+whole conversation back each time. That growing list *is* the memory.
+
+### Try it yourself
+
+Write the code to have a 3-turn conversation where you tell the model your favorite
+color in turn 1, ask an unrelated question in turn 2, and then ask "what's my favorite
+color?" in turn 3 — making sure the model can actually answer correctly.
+
+<details>
+<summary>Solution</summary>
+
+```python
+messages = []
+
+messages.append({"role": "user", "content": "My favorite color is teal."})
+r = client.chat.completions.create(model="gpt-4o-mini", messages=messages)
+messages.append({"role": "assistant", "content": r.choices[0].message.content})
+
+messages.append({"role": "user", "content": "What's the capital of Japan?"})
+r = client.chat.completions.create(model="gpt-4o-mini", messages=messages)
+messages.append({"role": "assistant", "content": r.choices[0].message.content})
+
+messages.append({"role": "user", "content": "What's my favorite color?"})
+r = client.chat.completions.create(model="gpt-4o-mini", messages=messages)
+print(r.choices[0].message.content)  # "Your favorite color is teal."
+```
+
+The key idea: as long as every prior turn stays in the `messages` list you send, the
+model can "recall" it — because it's literally reading it again every time.
+
+</details>

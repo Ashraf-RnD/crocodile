@@ -1,0 +1,70 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "PaddleOCR"
+level: expert
+phaseSlug: "phase-09-multimodal-ai"
+phaseName: "Multimodal AI"
+topicSlug: "paddleocr"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "PaddleOCR model list & benchmarks"
+    url: "https://paddlepaddle.github.io/PaddleOCR/main/en/ppocr/model_list.html"
+  - type: article
+    title: "Paddle2ONNX — export PaddlePaddle models to ONNX"
+    url: "https://github.com/PaddlePaddle/Paddle2ONNX"
+---
+
+## Why PaddleOCR outperforms Tesseract on real-world images
+
+The core architectural difference is detection. Tesseract assumes text lives on roughly
+horizontal baselines and finds it via connected-component analysis on binarized pixels.
+PaddleOCR's DB detector instead predicts a *pixel-level probability map* of "is this
+pixel part of text," post-processed into arbitrary polygons — which is why it handles
+curved, rotated, and tightly-packed multilingual text (CJK scripts especially) that
+break Tesseract's segmentation assumptions.
+
+## Deployment trade-offs: server vs mobile models
+
+PaddleOCR ships two model tiers, and picking the wrong one is a common production
+mistake:
+
+| Variant | Size | Latency (CPU) | Accuracy | Use case |
+|---|---|---|---|---|
+| PP-OCR server models | ~150MB total | Slower | Highest | Backend batch processing, GPU workers |
+| PP-OCRv4 mobile models | ~10MB total | Fast | Slightly lower | On-device (Paddle Lite), edge deployment |
+| Tesseract | ~30MB (per lang) | Fast on clean scans | Lower on real-world photos | Clean scanned documents only |
+| Cloud APIs (Textract/Vision) | N/A (hosted) | Network-bound | Highest overall | No infra, per-page billing |
+
+The mobile models are quantized and pruned specifically for edge inference (via Paddle
+Lite or exported to ONNX for cross-framework deployment) — a real accuracy trade is
+made for a 10-15x size reduction, which matters when the alternative is bundling a
+150MB model into a mobile app.
+
+## Edge cases that still break PP-OCR
+
+- **Vertical CJK text** — supported via a dedicated `--use_angle_cls` + vertical text
+  detection mode, but accuracy drops relative to horizontal Latin text.
+- **Extremely dense small text** (fine print, legal disclaimers) — the detector's
+  minimum box size means text below a certain pixel height gets merged or dropped
+  entirely; upscaling the image before detection is a common workaround.
+- **Low-contrast text on textured backgrounds** (embossed text, watermarked paper) —
+  the DB detector's probability map degrades gracefully but not gracefully enough;
+  this remains a case where cloud vision APIs with more training data still win.
+
+## ONNX export for production serving
+
+Running the PaddlePaddle framework itself in a lean inference container is often more
+overhead than teams want. Exporting to ONNX lets PaddleOCR models run inside a standard
+ONNX Runtime serving stack alongside other models, avoiding a second ML framework
+dependency in production:
+
+```bash
+paddle2onnx --model_dir det_model/ \
+  --model_filename inference.pdmodel \
+  --params_filename inference.pdiparams \
+  --save_file det_model.onnx
+```
+
+This is a common pattern for teams standardizing inference infrastructure — train/export
+in whatever framework fits, but serve everything through one runtime.

@@ -1,0 +1,100 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Experiment Tracking"
+level: expert
+phaseSlug: "phase-12-mlops"
+phaseName: "MLOps"
+topicSlug: "experiment-tracking"
+estReadTime: 11
+resources:
+  - type: article
+    title: "Reproducibility in ML: A Review (survey paper)"
+    url: "https://arxiv.org/abs/2003.12206"
+  - type: docs
+    title: "MLflow Recipes / Pipelines — standardizing training runs"
+    url: "https://mlflow.org/docs/latest/recipes.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The reproducibility gap tracking alone doesn't close
+
+Logging params, metrics, code version, and data version gets you most of the
+way to reproducibility, but real production incidents reveal the remaining
+gaps:
+
+- **Non-determinism in distributed training**: multi-GPU training with
+  data-parallel sharding can produce different results run-to-run even with
+  identical seeds, due to non-deterministic reduction order in collective
+  operations (`all_reduce`) and cuDNN's non-deterministic kernels chosen for
+  speed. Full determinism (`torch.use_deterministic_algorithms(True)`) is
+  available but costs throughput — most production training accepts a
+  bounded non-determinism rather than paying that cost, which means
+  "reproduce this exact model" is often actually "reproduce a statistically
+  equivalent model," a distinction tracking metadata alone doesn't capture.
+- **Silent dependency drift**: an unpinned base Docker image or a
+  `pip install` without exact version pins means the "same" training script
+  run six months later pulls different transitive dependency versions.
+  Tracking the git commit doesn't protect against this — only a fully pinned
+  lockfile or immutable container digest does, and few teams log the
+  container digest as tracking metadata even though it's the more precise
+  reproducibility anchor than the git SHA alone.
+
+## Tracking overhead becomes a training bottleneck at scale
+
+At small scale, `log_metric` calls are free. In distributed training with
+hundreds of GPU workers each logging per-step metrics, naive tracking
+becomes a real bottleneck: synchronous logging calls block the training loop
+waiting on network I/O to the tracking server, and only rank-0 should
+typically log to avoid redundant writes and lock contention on the backend
+store. Production training harnesses gate logging behind rank checks and
+batch/async flush the metric stream rather than logging synchronously every
+step:
+
+```python
+if torch.distributed.get_rank() == 0:
+    mlflow.log_metrics({"loss": loss.item()}, step=global_step)
+```
+
+This is an easy detail to miss in a demo (single-GPU) that becomes a
+measurable training-throughput regression at real scale (32+ GPU workers).
+
+## Tracking as an audit trail vs. tracking as a debugging tool
+
+These are different use cases the same system is often asked to serve, with
+different design implications:
+
+- **Debugging use case**: a researcher wants fast, ad hoc comparison of a
+  handful of runs — low-friction logging, permissive schema, quick iteration
+- **Audit use case**: compliance needs to prove which exact data/code/config
+  produced a specific production model years later — requires enforced
+  schema, immutable retention, and tamper-evident storage
+
+Optimizing purely for the debugging use case (permissive, ad hoc logging)
+often fails the audit use case when it matters — e.g. discovering during a
+regulatory audit that a critical run's data-version tag was left blank
+because logging discipline wasn't enforced. Regulated ML teams increasingly
+wrap tracking calls in a required base trainer class that fails loudly if
+mandatory audit fields aren't populated, treating tracking schema as a
+contract, not a convention.
+
+<Mermaid client:visible code={`flowchart LR
+  A["Ad hoc logging — fast iteration"] -->|good for| B["Researcher debugging"]
+  C["Enforced schema — required fields"] -->|good for| D["Compliance audit trail"]
+  E["Base Trainer class"] -->|enforces| C
+  E -->|still allows| A`} />
+
+## Trade-off summary: what to optimize for
+
+| Priority | Design choice |
+|---|---|
+| Fast experimentation velocity | Permissive schema, autologging, minimal required fields |
+| Long-term reproducibility | Pin code+data+container digest, not just git SHA |
+| Regulatory audit readiness | Enforced required fields, immutable retention, access logs |
+| Distributed training scale | Rank-gated, batched/async metric logging |
+| Cross-team comparability | Shared trainer harness enforcing consistent param/metric names |
+
+No single configuration optimizes all five simultaneously — the real
+engineering decision in experiment tracking is which of these your
+organization's risk profile and team size actually demands, then building
+enforcement (via shared code, not documentation) for exactly those
+guarantees rather than everything at once.

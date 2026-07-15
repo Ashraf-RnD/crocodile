@@ -1,0 +1,86 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Kimi K2"
+level: beginner
+phaseSlug: "phase-14-research-literacy"
+phaseName: "Research Literacy"
+topicSlug: "kimi-k2"
+estReadTime: 7
+resources:
+  - type: article
+    title: "Kimi K2: Open Agentic Intelligence — Technical Report"
+    url: "https://arxiv.org/abs/2507.20534"
+  - type: article
+    title: "MuonClip: The Optimizer That Made Trillion-Parameter Kimi K2 Possible"
+    url: "https://medium.com/@ranjanunicode22/muonclip-the-optimizer-that-made-trillion-parameter-kimi-k2-possible-47a2e6458462"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The problem before this paper
+
+By the time DeepSeek-V3 (covered elsewhere in this phase) showed that a
+carefully engineered Mixture-of-Experts model could reach frontier
+performance at dramatically lower cost, open-weight models had closed much of
+the gap with closed frontier models on general knowledge and reasoning
+benchmarks. But there was still a gap in **agentic** capability — the ability
+to reliably use tools, take multi-step actions, and complete long, complex
+tasks autonomously, rather than just answering a single question well.
+Moonshot AI's team, building Kimi K2, also faced a more technical obstacle:
+pushing an already-large Mixture-of-Experts model even further in scale runs
+into training instability, particularly with the increasingly popular
+**Muon** optimizer, which becomes prone to exploding attention values at very
+large scale.
+
+## The core idea, in plain language
+
+Kimi K2 pushed two things further than prior open efforts: sheer Mixture of
+Experts scale — a model with roughly **1 trillion total parameters**, only
+**32 billion active** per token, built on the same efficient attention idea
+DeepSeek-V3 popularized — and a much stronger focus on **agentic** training
+data: large amounts of synthetic examples of using tools, taking multi-step
+actions, and completing complex tasks, not just answering questions. To train
+reliably at this unprecedented MoE scale, the team introduced **MuonClip**, a
+modification to the Muon optimizer that keeps a specific internal quantity
+(attention logits) from blowing up as training proceeds — a fix that let them
+train the full 15.5-trillion-token run with no reported instability at all.
+
+A useful analogy: imagine training not just a knowledgeable assistant, but one
+specifically drilled on *using tools competently* — looking things up,
+running calculations, taking multi-step actions to get a task done, not just
+answering trivia. And imagine that, to build a "brain" this large reliably,
+the team had to invent a new safety mechanism to stop the training process
+itself from spiraling out of control partway through — much like reinforcing
+the frame of a building before you can safely build it taller than anyone
+has before.
+
+<Mermaid client:visible code={`flowchart LR
+  A["DeepSeek-V3-style efficient MoE architecture"] --> B["Scaled further: ~1T total / 32B active params"]
+  C["Muon optimizer at this scale: unstable"] --> D["MuonClip: stabilizes training"]
+  E["Heavy agentic tool-use training data"] --> F["Kimi K2: open-weight model tuned for agentic tasks"]`} />
+
+## Why it mattered
+
+Kimi K2 demonstrated that open-weight models could be pushed to trillion-
+parameter MoE scale reliably, and that deliberately emphasizing agentic
+training data (not just general knowledge) meaningfully improved real-world
+tool-use and multi-step task performance — an area where open models had
+particularly lagged behind the best closed models. Released with full
+weights and a detailed technical report, it gave the broader research
+community both a capable agentic base model and a documented solution
+(MuonClip) to a genuine training-stability problem at frontier scale.
+
+## Try it yourself
+
+Can you explain the core idea of this paper in one sentence to a non-technical
+friend?
+
+<details>
+<summary>Solution</summary>
+
+Something like: "This team built one of the largest open AI models ever
+released, specifically trained to be good at using tools and completing
+multi-step tasks rather than just answering questions — and along the way,
+they had to invent a fix for a technical problem that would have made
+training a model this large unstable."
+
+</details>

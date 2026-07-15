@@ -1,0 +1,101 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Jupyter Notebook"
+level: expert
+phaseSlug: "phase-01-python-for-ai"
+phaseName: "Python for AI"
+topicSlug: "jupyter-notebook"
+estReadTime: 11
+resources:
+  - type: docs
+    title: "Papermill — Parameterize and execute notebooks"
+    url: "https://papermill.readthedocs.io/en/latest/"
+  - type: article
+    title: "Jupyter kernel architecture (ZeroMQ protocol)"
+    url: "https://jupyter-client.readthedocs.io/en/latest/messaging.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The kernel/frontend split — and why remote GPU notebooks work at all
+
+The notebook UI (browser) and the code execution engine (the **kernel**, a separate
+Python process) are decoupled and communicate over ZeroMQ sockets, typically via
+Jupyter's messaging protocol. This is what makes remote notebooks on a GPU cluster
+work at all: the kernel runs on the remote machine with the GPU, while the browser
+UI runs locally and just exchanges messages — code in, output/plots/errors back.
+
+<Mermaid client:visible code={`flowchart LR
+  Browser["Browser (local, renders UI)"] <-->|"ZeroMQ / websocket"| Server["Jupyter Server"]
+  Server <-->|"messaging protocol"| Kernel["Kernel process (remote, has the GPU)"]
+  Kernel --> Data["Loaded model/data lives here"]`} />
+
+This also explains a common failure mode: the browser tab disconnecting doesn't kill
+a long training run — the kernel keeps executing independently on the server — but a
+*kernel* crash (e.g. CUDA OOM) does lose all in-memory state, since the kernel *is*
+the process holding it.
+
+## Reproducibility: the hidden-state problem
+
+Because cells can run out of order, a notebook that "works" in your current session
+can be completely broken top-to-bottom — variables from deleted cells, or cells run
+in a since-changed order, silently linger in kernel memory. This is the single
+biggest reproducibility risk notebooks introduce into a workflow.
+
+```python
+# The notebook "works" right now because you ran this cell once, days ago,
+# then deleted it. Nothing in the current cells recreates `label_map`.
+predictions = [label_map[p] for p in raw_preds]   # NameError on a fresh kernel
+```
+
+Mitigations used in serious ML workflows:
+- **Restart & Run All** before trusting or sharing a notebook — the only real test
+  of top-to-bottom correctness.
+- CI checks that execute notebooks headlessly (`jupyter nbconvert --execute`) and
+  fail the build if any cell errors.
+- Treating notebooks as disposable exploration, then graduating stable logic into
+  `.py` modules that notebooks import — the notebook becomes a thin driver, not the
+  source of truth.
+
+## Executing notebooks as pipelines: Papermill
+
+Once a notebook is a stable, parameterized experiment, `papermill` lets you execute
+it programmatically with different parameters and capture a fully-rendered output
+notebook per run — a lightweight alternative to a full workflow orchestrator for
+notebook-shaped experiment sweeps.
+
+```python
+# notebook has a cell tagged "parameters" containing: lr = 0.001
+
+import papermill as pm
+
+for lr in [0.001, 0.003, 0.01]:
+    pm.execute_notebook(
+        "train.ipynb",
+        f"output_lr_{lr}.ipynb",
+        parameters={"lr": lr},
+    )
+```
+
+Each output notebook is a complete, inspectable record of that run — code, outputs,
+and plots together — which is why papermill shows up as a step in some
+experiment-tracking pipelines built around notebooks rather than plain scripts.
+
+## Notebooks in production pipelines: what to avoid
+
+Notebooks are excellent for exploration and poor for production execution
+surfaces: they're hard to unit test, hard to diff meaningfully in review, and their
+execution-order flexibility undermines the guarantee that "the code that ran is the
+code you're reading." The common line drawn in mature ML teams:
+
+| Use case | Notebook | Plain `.py` module/script |
+|---|---|---|
+| Exploratory data analysis | Yes — fast iteration, inline plots | Slower feedback loop |
+| Prototyping a model architecture | Yes | Fine too, matter of preference |
+| Scheduled/production training job | No — fragile, hard to test | Yes — testable, versionable, CI-friendly |
+| Code reviewed by teammates | Avoid — diffs are unreadable | Yes — clean diffs |
+| Shared reusable logic (metrics, data loading) | No — import it instead | Yes — a real importable module |
+
+The healthiest pattern: notebooks call into a `src/` package of tested functions,
+rather than containing the actual business logic inline — so migrating from
+prototype to production pipeline is a matter of removing the notebook, not
+rewriting the logic.

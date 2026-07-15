@@ -1,0 +1,93 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Text Cleaning"
+level: expert
+phaseSlug: "phase-05-natural-language-processing"
+phaseName: "Natural Language Processing"
+topicSlug: "text-cleaning"
+estReadTime: 11
+resources:
+  - type: article
+    title: "Gehman et al. — RealToxicityPrompts (on corpus filtering side effects)"
+    url: "https://arxiv.org/abs/2009.11462"
+  - type: docs
+    title: "ftfy — fixes text for you (mojibake repair)"
+    url: "https://ftfy.readthedocs.io/"
+---
+
+## Cleaning as an information-loss decision, not hygiene
+
+Every cleaning rule discards information. The expert-level question is never "how do I
+strip X" — it's "what does the downstream model lose by stripping X, and is that loss
+worth the noise reduction." Treat every cleaning step as a trade-off with a measurable
+cost, not a default best practice.
+
+### Over-cleaning versus modern pretraining distributions
+
+Models like GPT-4-class LLMs and RoBERTa were pretrained on minimally-cleaned web
+text — full of emoji, code, markdown, inconsistent casing, typos. If you aggressively
+normalize (lowercase, strip punctuation, remove emoji) before fine-tuning or prompting
+such a model, you create a **distribution mismatch**: the input no longer resembles
+anything the model saw during pretraining, and performance can degrade in ways that
+look like a model or data problem but are actually a preprocessing problem. This is
+the opposite failure mode from classical NLP, where aggressive normalization before
+a bag-of-words or TF-IDF model was almost always beneficial. The right amount of
+cleaning is a function of the model's pretraining distribution, not a universal
+constant.
+
+### Mojibake and encoding corruption
+
+Text scraped from the web frequently passes through multiple encoding conversions
+(e.g. UTF-8 decoded as Latin-1, then re-encoded), producing **mojibake** —
+`"café"` becoming `"cafÃ©"`. This is a distinct failure mode from missing Unicode
+normalization and requires dedicated repair, not just NFC/NFKC:
+
+```python
+import ftfy
+
+fixed = ftfy.fix_text("cafÃ© â€” a broken encoding")
+print(fixed)
+# "café — a broken encoding"
+```
+
+Silently ignoring mojibake in a large corpus produces a long tail of near-duplicate
+garbage tokens in the vocabulary (`café`, `cafÃ©`, `cafÂ©` as three unrelated BPE
+entries), diluting the effective vocabulary budget and wasting embedding capacity on
+noise instead of signal.
+
+### Deduplication is a cleaning problem at corpus scale
+
+At the scale of pretraining corpora, near-duplicate documents (boilerplate,
+scraped mirrors, template pages) measurably hurt downstream model quality — models
+trained on deduplicated data show better generalization for the same compute budget,
+because gradient updates aren't wasted repeatedly memorizing the same n-grams. This is
+typically handled with MinHash/LSH-based fuzzy deduplication (as used in the
+CCNet/RefinedWeb/Dolma pipelines) rather than exact-match hashing, since near-duplicate
+detection needs to survive minor formatting differences that exact hashing would miss.
+
+### Cleaning-induced bias and filtering side effects
+
+Aggressive filtering (e.g. profanity/toxicity word-list filters applied to a
+pretraining corpus) has a well-documented side effect: it disproportionately removes
+text written by and about marginalized groups, because reclaimed slurs, dialectal
+features (e.g. African American English), and discussion *of* toxic topics
+(news coverage, academic text) get caught by naive keyword filters alongside actual
+toxic content. This isn't a hypothetical — it's been measured directly in corpora like
+C4 and is a canonical example of how a "safety" cleaning step can introduce a
+different, harder-to-detect bias. The fix is never "clean harder," it's using
+classifier-based filtering with held-out evaluation on affected dialects rather than
+keyword blocklists.
+
+### Trade-off summary
+
+| Cleaning decision | Benefit | Cost |
+|---|---|---|
+| Lowercase everything | Fewer distinct tokens, better generalization for small models/BoW | Loses case-based signal (NER, sentiment intensity); mismatches modern LLM pretraining |
+| Aggressive punctuation stripping | Cleaner tokens for classical models | Destroys sentence structure cues transformers rely on |
+| Stopword removal | Smaller vocabulary, faster classical ML (TF-IDF, LDA) | Actively harmful for transformers — attention needs function words for structure |
+| Corpus-level deduplication | Better sample efficiency, less memorization | Compute-expensive at scale (MinHash/LSH over billions of docs) |
+| Toxicity/profanity keyword filtering | Removes some harmful content | Systematically under-represents dialects and reclaimed language |
+
+The expert habit is to A/B the cleaning pipeline itself against a validation metric,
+the same way you'd tune a hyperparameter — not to assume a "standard" pipeline
+transfers correctly across tasks, languages, and model families.

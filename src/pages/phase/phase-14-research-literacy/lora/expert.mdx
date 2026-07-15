@@ -1,0 +1,98 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "LoRA"
+level: expert
+phaseSlug: "phase-14-research-literacy"
+phaseName: "Research Literacy"
+topicSlug: "lora"
+estReadTime: 12
+resources:
+  - type: article
+    title: "LoRA: Low-Rank Adaptation of Large Language Models (original paper)"
+    url: "https://arxiv.org/abs/2106.09685"
+  - type: article
+    title: "S-LoRA: Serving Thousands of Concurrent LoRA Adapters"
+    url: "https://arxiv.org/abs/2311.03285"
+---
+
+_This lesson is a critical analysis of the LoRA paper as research — its
+contribution, limitations, and legacy. The practical "how do I fine-tune a
+model with LoRA" guide lives in Phase 10: Fine-tuning; the two are
+complementary, not duplicates._
+
+## What the paper actually contributed vs. prior work
+
+Parameter-efficient fine-tuning (PEFT) wasn't a new goal in 2021 — **adapter
+layers** (Houlsby et al., 2019) inserted small trainable bottleneck layers
+between frozen Transformer sub-layers, and **prefix-tuning** / **prompt
+tuning** prepended trainable "soft" tokens to the input. Both reduced trainable
+parameter count substantially versus full fine-tuning. LoRA's distinguishing
+contribution was structural: because its update is expressed as an *additive*
+low-rank term to an *existing* weight matrix (`W0 + BA`) rather than a new
+layer inserted into the forward pass, it can be **merged into the frozen
+weights after training**, producing a model with the exact same architecture
+and inference latency as the base model. Adapter layers, by contrast,
+permanently add sequential computation to every forward pass; prefix-tuning
+permanently consumes part of the usable context window. LoRA's zero-overhead
+merge property, combined with matching or exceeding adapter/prefix-tuning
+quality on the benchmarks tested, is what the paper's ablations were built to
+demonstrate.
+
+## Limitations
+
+- **Doesn't reduce training memory as much as it seems.** Because the frozen
+  base model's activations still must be stored for backpropagation to reach
+  the trainable `A`/`B` matrices, LoRA saves significantly on **optimizer
+  state** and **gradient** memory, but the full model still needs to be loaded
+  in a trainable-precision format (originally fp16/bf16) — this is exactly the
+  gap QLoRA (covered in its own lesson) was built to close by quantizing the
+  frozen base to 4-bit.
+- **Rank selection is an empirical hyperparameter, not a derived quantity.**
+  The paper shows small ranks work well on its specific benchmarks, but the
+  "right" rank is task- and model-dependent, and choosing too small a rank can
+  measurably cap achievable quality on harder adaptation tasks.
+- **Uniform rank/placement is a simplification.** Applying the same rank to
+  every targeted layer treats all layers as equally important for adaptation,
+  which later work argued is suboptimal.
+- **A gap to full fine-tuning still exists on some tasks**, particularly ones
+  requiring substantial new knowledge injection rather than behavioral
+  steering of existing knowledge — low-rank updates are fundamentally limited
+  in how much new information they can encode.
+
+## What came after
+
+- **QLoRA (2023)** combined LoRA with 4-bit quantization of the frozen base
+  model, addressing LoRA's remaining memory bottleneck and enabling fine-tuning
+  of 65B-parameter models on a single consumer GPU.
+- **AdaLoRA** made rank allocation adaptive per layer/matrix based on
+  importance scores during training, rather than a fixed uniform rank.
+- **DoRA (Weight-Decomposed LoRA)** decomposes the pretrained weight into a
+  magnitude component and a directional component, applying low-rank updates
+  only to direction — narrowing the quality gap to full fine-tuning further.
+- **Multi-LoRA serving systems** (S-LoRA, LoRAX, Punica) exploit the fact that
+  many small LoRA adapters can share one frozen base model in GPU memory,
+  enabling a single deployment to serve thousands of different fine-tuned
+  "personalities" or task adapters concurrently by swapping only the small
+  `A`/`B` matrices per request — a capability full fine-tuning could never
+  offer economically.
+
+## How it's actually used in production today
+
+LoRA (or a close descendant like QLoRA or DoRA) is the default fine-tuning
+method for open-weight models in essentially every production or research
+setting outside of full frontier-lab pretraining. Its zero-inference-overhead
+merge property makes it attractive even when memory isn't the binding
+constraint — you get most of full fine-tuning's quality with dramatically
+smaller checkpoints (megabytes instead of gigabytes), which is what makes
+serving many customized model variants from a single base model economically
+viable, a pattern now common in multi-tenant LLM platforms.
+
+## Comparison: full fine-tuning vs. adapter layers vs. LoRA
+
+| Dimension | Full fine-tuning | Adapter layers (2019) | LoRA (2021) |
+|---|---|---|---|
+| Trainable parameters | 100% of model | Small (added layers) | Small (~0.01-1%) |
+| Extra inference latency | None (same architecture) | Yes — permanent extra layers | None after merging into base weights |
+| Storage per fine-tuned task | Full model copy | Small adapter weights | Small adapter weights (mergeable) |
+| Can serve many tasks from one base model in memory | Impractical at scale | Yes, with latency cost | Yes, near-zero cost |
+| Quality vs. full fine-tuning | Reference point | Slightly below, in general | Competitive, task-dependent |

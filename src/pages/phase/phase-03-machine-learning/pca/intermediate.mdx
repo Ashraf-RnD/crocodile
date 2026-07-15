@@ -1,0 +1,85 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "PCA"
+level: intermediate
+phaseSlug: "phase-03-machine-learning"
+phaseName: "Machine Learning"
+topicSlug: "pca"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "scikit-learn: PCA (decomposition module)"
+    url: "https://scikit-learn.org/stable/modules/decomposition.html#pca"
+  - type: docs
+    title: "scikit-learn: PCA API reference"
+    url: "https://scikit-learn.org/stable/modules/generated/sklearn.decomposition.PCA.html"
+---
+
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Intermediate: PCA
+
+At this level, the important skills are: choosing how many components to keep, preparing data correctly before fitting, and knowing where PCA earns its place in a pipeline.
+
+### Standardize before you fit
+
+PCA picks directions of maximum **variance**. If one feature is measured in dollars (range: thousands) and another in years (range: 0-100), the dollar feature will dominate the first component purely because of its scale, not because it is more informative. Always standardize (mean 0, unit variance) before fitting PCA on data with differently-scaled features:
+
+```python
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.datasets import load_breast_cancer
+from sklearn.model_selection import train_test_split
+
+X, y = load_breast_cancer(return_X_y=True)
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42
+)
+
+pipe = Pipeline([
+    ("scaler", StandardScaler()),
+    ("pca", PCA(n_components=0.95)),  # keep enough components for 95% variance
+])
+
+X_train_reduced = pipe.fit_transform(X_train)
+X_test_reduced = pipe.transform(X_test)  # transform only, never fit again
+
+print("Components kept:", pipe.named_steps["pca"].n_components_)
+```
+
+Note the pipeline: `fit_transform` on the training split, `transform` (no fit) on the test split. Fitting PCA on the full dataset before splitting leaks information about the test set's variance structure into training — a subtle form of data leakage.
+
+<Mermaid client:visible code={`flowchart LR
+  A[Raw features] --> B[StandardScaler]
+  B --> C[PCA fit on train only]
+  C --> D[Reduced features]
+  D --> E[Downstream model]`} />
+
+### Choosing n_components
+
+Passing a float like `0.95` to `n_components` tells scikit-learn to keep the smallest number of components whose cumulative explained variance reaches that threshold. To decide manually, inspect `explained_variance_ratio_` and plot a **scree plot** — component index on the x-axis, variance explained on the y-axis — and look for the "elbow" where additional components stop adding much:
+
+```python
+import numpy as np
+from sklearn.decomposition import PCA
+
+pca_full = PCA().fit(X_train_scaled)  # X_train_scaled from StandardScaler
+cumulative = np.cumsum(pca_full.explained_variance_ratio_)
+
+n_needed = np.argmax(cumulative >= 0.95) + 1
+print(f"Components needed for 95% variance: {n_needed}")
+```
+
+### Common uses
+
+- **Visualization**: reduce high-dimensional data to 2 or 3 components to plot and inspect cluster structure.
+- **Noise reduction**: low-variance components often carry mostly noise; dropping them and reconstructing (`inverse_transform`) can denoise data like images.
+- **Speeding up downstream models**: fewer input dimensions means faster training for algorithms with cost that scales with feature count (e.g. SVMs, k-NN).
+- **De-correlating features**: principal components are, by construction, uncorrelated with each other, which helps algorithms that assume independent inputs.
+
+### Pitfalls
+
+1. **Interpretability loss.** Each component is a linear combination of *all* original features (`pca.components_` gives the weights). "Component 1" is not "feature X" — you lose the ability to explain predictions in terms of the original, human-meaningful variables unless you carefully inspect the loadings.
+2. **Fit/transform split discipline.** Always fit PCA (and any scaler) only on the training data, then apply `transform` to validation/test/production data. Fitting on the whole dataset before splitting silently leaks test-set variance into your feature space and produces optimistic evaluation metrics.
+3. **Unscaled inputs.** Skipping `StandardScaler` (or another appropriate scaler) when features have different units is one of the most common PCA mistakes — the first few components will just encode "which feature has the largest raw scale."

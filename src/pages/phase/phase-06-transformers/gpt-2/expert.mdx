@@ -1,0 +1,105 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "GPT-2"
+level: expert
+phaseSlug: "phase-06-transformers"
+phaseName: "Transformers"
+topicSlug: "gpt-2"
+estReadTime: 12
+resources:
+  - type: article
+    title: "Language Models are Unsupervised Multitask Learners (GPT-2 paper)"
+    url: "https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf"
+  - type: article
+    title: "Scaling Laws for Neural Language Models"
+    url: "https://arxiv.org/abs/2001.08361"
+---
+
+## The paper's real thesis: language modeling as implicit multi-task learning
+
+The paper's title is precise and worth taking literally: it frames a language model
+trained on diverse enough text as an "unsupervised multitask learner" — the
+hypothesis being that naturally occurring text on the internet already contains
+countless implicit demonstrations of tasks (translation pairs, Q&A threads,
+summaries next to articles), and a sufficiently capable model trained to predict
+text will, as a side effect, absorb the ability to perform those tasks when prompted
+appropriately. This reframes "task learning" not as something requiring an explicit
+supervised objective, but as an emergent property of sufficiently broad
+distribution modeling — a thesis that GPT-3's few-shot in-context learning results
+(a year later) provided much stronger evidence for, but which this paper first
+articulated and gave preliminary zero-shot evidence for.
+
+## What the paper foreshadowed vs. what it actually established
+
+It's worth being precise about the evidentiary strength of GPT-2's claims versus how
+it's often remembered. The zero-shot results in the paper are real but modest —
+GPT-2 generally underperforms task-specific fine-tuned baselines, and the paper is
+transparent about this. What the paper does convincingly establish is a **scaling
+trend**: as model size increased across the four released checkpoints, zero-shot
+performance improved smoothly and consistently across nearly every evaluated task,
+with no sign of saturation at the largest size tested. This trend line — not the
+absolute zero-shot numbers — is what motivated OpenAI's subsequent bet on GPT-3,
+and it's a clean early example of using observed scaling trends within a paper to
+justify a much larger follow-up investment, a pattern that became standard practice
+industry-wide.
+
+## The staged release as a genuine inflection point in AI publication norms
+
+Prior to this paper, "release the full model and weights alongside the paper" was
+the near-universal default in NLP research. OpenAI's decision to withhold the full
+1.5B model for about nine months, citing misuse risk (automated disinformation,
+spam generation, impersonation), was a deliberate break from that norm, made without
+an established playbook — there was no consensus framework at the time for
+evaluating whether a language model's misuse risk justified withholding it. In
+retrospect, this decision looks more consequential for its precedent-setting effect
+on the field than for any concrete harm it prevented: it normalized treating model
+release as a distinct decision from model training, with its own risk assessment,
+independent of the paper's technical contribution — a practice now standard for
+frontier labs (staged rollouts, red-teaming before release, capability evaluations
+gating deployment).
+
+## Architectural continuity and what it implies about the source of capability gains
+
+GPT-2's near-identical core architecture to GPT-1 (same causal decoder-only
+Transformer, same self-attention formulation, only pre-LN placement and minor
+initialization changes differ) is itself informative: it's early direct evidence
+that a large fraction of the capability gap between the two models is attributable
+to **data scale and diversity plus model scale**, not architectural innovation. This
+observation directly presaged the "scale is what matters most" thesis that dominated
+LLM development strategy for the following several years, formalized shortly after
+by Kaplan et al.'s scaling laws paper — GPT-2 is one of the clearest pre-scaling-laws
+empirical data points supporting that eventual formalization.
+
+## Byte-level BPE: a tokenization choice with lasting influence
+
+GPT-2 introduced byte-level byte-pair encoding (BPE) as its tokenization scheme —
+operating on raw UTF-8 bytes rather than Unicode characters or pre-tokenized words,
+guaranteeing that *any* input string can be tokenized without out-of-vocabulary
+issues, since every possible byte sequence is representable. This solved a real
+practical problem with earlier word-level or character-level tokenizers (rare
+words, code, non-English text, emoji could all produce degenerate tokenization or
+unknown-token fallbacks) and became the tokenization approach adopted, with
+refinements, by GPT-3 and many subsequent LLMs.
+
+## Trade-off summary
+
+| Aspect | GPT-1 (2018) | GPT-2 (2019) |
+|---|---|---|
+| Parameters (largest) | 117M | 1.5B |
+| Training data | BookCorpus (~7,000 books) | WebText (~40GB, Reddit-curated) |
+| LayerNorm placement | Post-LN | Pre-LN (+ extra final LayerNorm) |
+| Primary evaluated capability | Fine-tuned task performance | Zero-shot task performance |
+| Release approach | Full release with paper | Staged release over ~9 months, citing misuse risk |
+| Tokenization | Word-level BPE-ish | Byte-level BPE (no OOV tokens possible) |
+
+## The practical engineering takeaway
+
+GPT-2's lasting significance is best understood as an early, honest data point for
+two theses that later became foundational to the entire LLM field: that scale
+(model size × data size × compute) is a primary driver of capability even without
+architectural novelty, and that "predict the next token, at sufficient scale and
+data diversity" implicitly teaches a surprisingly broad range of tasks without
+explicit supervision. Both theses were confirmed far more dramatically by GPT-3, but
+GPT-2's paper is where the field first saw clear evidence for them at a scale large
+enough to take seriously — and where the industry's now-standard practice of
+staged, risk-assessed model release began.

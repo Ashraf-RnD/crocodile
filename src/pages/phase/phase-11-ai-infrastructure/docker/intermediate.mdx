@@ -1,0 +1,117 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Docker"
+level: intermediate
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "docker"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "NVIDIA Container Toolkit — Installation Guide"
+    url: "https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html"
+  - type: docs
+    title: "Docker Docs — Multi-stage builds"
+    url: "https://docs.docker.com/build/building/multi-stage/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## GPU access inside a container
+
+By default a container can't see your GPU — it's isolated from the host's hardware
+like everything else. The **NVIDIA Container Toolkit** patches Docker so a container
+can access the host's GPU driver, and you request it with `--gpus`:
+
+```dockerfile
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
+
+RUN apt-get update && apt-get install -y python3.11 python3-pip && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+CMD ["python3", "serve.py"]
+```
+
+```bash
+docker run --gpus all -p 8000:8000 my-inference-image
+```
+
+Note what's *not* in the image: an NVIDIA driver. The driver lives on the host; the
+`nvidia/cuda` base image only ships the CUDA runtime libraries your `torch` build links
+against. Driver/CUDA version mismatches between host and container are the single most
+common "it worked yesterday" bug in GPU containers — check `nvidia-smi` on the host
+against the CUDA version your base image expects.
+
+## .dockerignore and layer caching
+
+Docker builds images in layers, one per instruction, and caches each layer. If a layer
+hasn't changed (same instruction, same input files), Docker reuses the cache instead
+of re-running it. This is why **instruction order matters**: put things that change
+rarely (dependency installs) before things that change often (your application code).
+
+```dockerfile
+# .dockerignore
+__pycache__/
+*.pyc
+.git
+.venv
+*.ipynb_checkpoints
+data/
+```
+
+```dockerfile
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt   # cached unless requirements.txt changes
+COPY . .                                              # invalidated on every code change, but that's cheap
+```
+
+If you instead did `COPY . .` before `pip install`, every code edit would bust the
+cache and force a full `torch`/CUDA reinstall — often several minutes versus seconds.
+`.dockerignore` keeps large, irrelevant files (datasets, `.git` history, notebook
+checkpoints) out of the build context entirely, which also speeds up every build.
+
+## Multi-stage builds to shrink the final image
+
+ML images balloon quickly — `torch` alone is over a gigabyte, and build tools
+(`gcc`, headers) needed to compile some dependencies aren't needed at runtime.
+**Multi-stage builds** let you compile in one stage and copy only the finished
+artifacts into a slim final stage:
+
+```dockerfile
+# Stage 1: build dependencies (has compilers, headers)
+FROM python:3.11 AS builder
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir --target=/deps -r requirements.txt
+
+# Stage 2: slim runtime image
+FROM python:3.11-slim
+WORKDIR /app
+COPY --from=builder /deps /usr/local/lib/python3.11/site-packages
+COPY . .
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+<Mermaid client:visible code={`flowchart LR
+  A["Stage 1: builder\n(gcc, headers, pip install)"] -->|"COPY --from=builder"| B["Stage 2: runtime\n(python:3.11-slim only)"]
+  B --> C["Final image\n(no build tools, smaller)"]`} />
+
+The final image never contains `gcc` or intermediate build artifacts — only the
+compiled dependencies and your code, which can shave hundreds of megabytes off images
+that install packages needing native compilation.
+
+## Practical build/run flags you'll actually use
+
+```bash
+docker build --no-cache -t my-image .        # force a clean rebuild, ignoring cache
+docker run --gpus all --shm-size=8g \        # more shared memory, needed by torch DataLoader workers
+  -e MODEL_PATH=/models/llama-7b \
+  -v $(pwd)/models:/models \                 # mount model weights from host instead of baking into image
+  -p 8000:8000 my-inference-image
+```
+
+Mounting model weights with `-v` instead of `COPY`-ing them into the image keeps the
+image itself small and lets you swap model versions without rebuilding.

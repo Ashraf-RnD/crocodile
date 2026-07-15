@@ -1,0 +1,146 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Decision Trees"
+level: intermediate
+phaseSlug: "phase-03-machine-learning"
+phaseName: "Machine Learning"
+topicSlug: "decision-trees"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "scikit-learn: Decision Trees"
+    url: "https://scikit-learn.org/stable/modules/tree.html"
+  - type: docs
+    title: "scikit-learn: Minimal Cost-Complexity Pruning"
+    url: "https://scikit-learn.org/stable/modules/tree.html#minimal-cost-complexity-pruning"
+---
+
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Intermediate: Decision Trees
+
+A decision tree is built greedily and recursively: at each node, the algorithm scans every
+feature and every candidate threshold, and picks the split that produces the largest drop
+in **impurity** across the resulting child nodes. This repeats on each child until a
+stopping condition is hit.
+
+<Mermaid client:visible code={`flowchart TB
+  A[All training data at root] --> B{Evaluate every feature / threshold split}
+  B --> C[Pick split minimizing weighted impurity]
+  C --> D[Left child]
+  C --> E[Right child]
+  D --> F{Stopping criteria met?}
+  E --> G{Stopping criteria met?}
+  F -->|No| B
+  F -->|Yes| H[Leaf: majority class / mean value]
+  G -->|No| B
+  G -->|Yes| I[Leaf: majority class / mean value]`} />
+
+## Splitting criteria: gini vs entropy
+
+For classification, `DecisionTreeClassifier` supports two impurity measures via
+`criterion`:
+
+- `"gini"` (default) — Gini impurity, `1 - sum(p_i^2)`, cheaper to compute.
+- `"entropy"` — information gain, `-sum(p_i * log2(p_i))`.
+
+In practice they rarely produce meaningfully different trees; `gini` is the standard
+default because it avoids the log computation.
+
+```python
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.datasets import load_breast_cancer
+from sklearn.model_selection import train_test_split
+
+X, y = load_breast_cancer(return_X_y=True)
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.25, random_state=42, stratify=y
+)
+
+clf = DecisionTreeClassifier(criterion="entropy", max_depth=4, random_state=42)
+clf.fit(X_train, y_train)
+print(clf.score(X_test, y_test))
+```
+
+For regression, `DecisionTreeRegressor` minimizes variance (`"squared_error"` by default)
+instead of a class-impurity measure — each split reduces the spread of target values
+within a node.
+
+## Controlling overfitting
+
+An unconstrained tree will grow until every leaf is pure, which usually means memorizing
+noise. The main levers:
+
+- `max_depth` — hard cap on how many questions deep the tree can go.
+- `min_samples_split` — a node needs at least this many samples before it's allowed to
+  split further.
+- `min_samples_leaf` — every leaf must end up with at least this many samples; smooths out
+  splits that isolate single outliers.
+- `max_leaf_nodes` — caps total leaves, letting the tree grow the *best* splits first
+  (best-first growth) rather than depth-first.
+- `ccp_alpha` — cost-complexity pruning. After growing a full tree, `ccp_alpha` penalizes
+  each leaf by a complexity cost, then prunes back subtrees whose accuracy gain doesn't
+  justify their added complexity. Larger `ccp_alpha` means more aggressive pruning.
+
+```python
+from sklearn.tree import DecisionTreeClassifier
+
+# unconstrained: near-perfect train score, poor generalization
+overfit = DecisionTreeClassifier(random_state=42)
+overfit.fit(X_train, y_train)
+
+# constrained
+tuned = DecisionTreeClassifier(
+    max_depth=5,
+    min_samples_leaf=10,
+    ccp_alpha=0.01,
+    random_state=42,
+)
+tuned.fit(X_train, y_train)
+
+print("overfit train/test:", overfit.score(X_train, y_train), overfit.score(X_test, y_test))
+print("tuned   train/test:", tuned.score(X_train, y_train), tuned.score(X_test, y_test))
+```
+
+You'll typically see the unconstrained tree hit ~1.0 training accuracy but noticeably
+lower test accuracy — the gap is the overfitting signal. `cost_complexity_pruning_path()`
+lets you compute a range of candidate `ccp_alpha` values and pick the best one via
+cross-validation rather than guessing.
+
+## Inspecting the learned tree
+
+```python
+from sklearn.tree import export_text, plot_tree
+import matplotlib.pyplot as plt
+
+print(export_text(tuned, max_depth=2))
+
+plt.figure(figsize=(12, 6))
+plot_tree(tuned, max_depth=2, filled=True, feature_names=load_breast_cancer().feature_names)
+plt.show()
+```
+
+`feature_importances_` gives a normalized score of how much each feature contributed to
+reducing impurity across all splits — useful for a quick sense of what the tree is
+actually keying off, though it's biased toward high-cardinality features.
+
+```python
+import numpy as np
+
+importances = tuned.feature_importances_
+top5 = np.argsort(importances)[::-1][:5]
+for i in top5:
+    print(load_breast_cancer().feature_names[i], round(importances[i], 3))
+```
+
+## Common pitfalls
+
+- **Unconstrained trees overfit badly.** Without `max_depth` or `min_samples_leaf`, a tree
+  will happily carve out a leaf for a single training point.
+- **Instability.** Because splits are chosen greedily and exactly, a small change in the
+  training data (even a handful of rows) can change the split at the root and cascade into
+  a completely different tree structure. This is the core motivation for ensemble methods
+  covered later (bagging, random forests, boosting).
+- **No extrapolation.** For regression trees, predictions are always the mean of training
+  targets in a leaf — a tree cannot predict values outside the range it saw during
+  training.

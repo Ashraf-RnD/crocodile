@@ -1,0 +1,82 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "KV Cache"
+level: intermediate
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "kv-cache"
+estReadTime: 9
+resources:
+  - type: article
+    title: "Efficient Memory Management for Large Language Model Serving with PagedAttention"
+    url: "https://arxiv.org/abs/2309.06180"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The memory math
+
+The KV cache isn't free — it's stored in GPU memory alongside the model weights, and
+its size is:
+
+```
+kv_cache_bytes = 2 * num_layers * num_kv_heads * head_dim * seq_len * batch_size * bytes_per_element
+```
+
+The leading `2` is for storing both K *and* V. Let's work this through for
+**Llama-3-8B** (32 layers, 8 KV heads via grouped-query attention, `head_dim=128`), at
+`seq_len=8192` and `batch_size=1`, in FP16 (2 bytes/element):
+
+```
+2 * 32 * 8 * 128 * 8192 * 1 * 2 bytes
+= 2 * 32 * 8 * 128 * 8192 * 2
+≈ 1.07 GB   (for a single sequence at 8K context)
+```
+
+That's for *one* request. Serving a batch of 32 concurrent requests at the same
+context length multiplies this to roughly **34 GB** — larger than the ~16GB the model's
+own FP16 weights occupy. This is the core reason KV cache, not model weights, is
+usually the dominant and most volatile consumer of GPU memory in production LLM
+serving: weight memory is fixed, but KV cache memory scales directly with how many
+requests you're serving concurrently and how long their contexts are.
+
+<Mermaid client:visible code={`flowchart TB
+  T1["Token 1: K,V cached\n(all layers)"] --> T2["Token 2: K,V cached\n(all layers)"]
+  T2 --> T3["Token 3: K,V cached\n(all layers)"]
+  T3 --> Tn["... Token N: cache grows\nlinearly with sequence length"]
+  Tn --> Mem["Total KV memory =\nlayers x heads x head_dim x seq_len x batch x bytes"]`} />
+
+## Why grouped-query attention shows up in the formula
+
+Notice the formula uses `num_kv_heads`, not the model's total number of attention
+heads. Llama-3-8B has 32 query heads but only 8 KV heads — multiple query heads share
+the same K/V pair (grouped-query attention, GQA). This directly and proportionally
+shrinks the KV cache: if Llama-3-8B used the older multi-head attention scheme (32 KV
+heads, matching the query heads), the same calculation above would be 4x larger, about
+4.3GB per sequence instead of 1.07GB. GQA is as much a memory-engineering decision as
+an architectural one.
+
+## What this means for serving configuration
+
+```bash
+vllm serve meta-llama/Meta-Llama-3-8B-Instruct \
+  --max-model-len 8192 \
+  --gpu-memory-utilization 0.90 \
+  --max-num-seqs 64
+```
+
+`--max-model-len` caps the context length any single request can use, directly
+bounding worst-case KV cache size per sequence. `--max-num-seqs` caps how many
+sequences can be batched concurrently — set too high relative to available memory
+(after weights are loaded) and vLLM either rejects requests or, worse, degrades
+throughput as it evicts/recomputes cache under pressure. Both flags exist because
+the KV cache, not the weights, is usually the binding constraint on how much
+concurrent traffic a given GPU can actually serve.
+
+## Growth is the whole problem
+
+The takeaway worth internalizing: KV cache memory grows linearly with both context
+length and batch size, and production LLM traffic pushes on both dimensions at once
+— longer conversations/documents, and more concurrent users. This tension is exactly
+what motivates the serving-engine and architecture-level techniques covered next:
+PagedAttention (reduce memory *waste* from fragmentation), prefix caching (avoid
+recomputing *shared* K/V), and quantized KV cache (shrink `bytes_per_element` itself).

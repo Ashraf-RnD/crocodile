@@ -1,0 +1,94 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Multi-Region Deployment"
+level: intermediate
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "multi-region-deployment"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "AWS — What is multi-region architecture?"
+    url: "https://aws.amazon.com/what-is/multi-region-architecture/"
+  - type: docs
+    title: "Google Cloud — Geography and regions"
+    url: "https://cloud.google.com/about/locations"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## What actually has to live in each region
+
+Multi-region deployment for AI systems is more involved than for typical
+stateless web apps, because GPU inference capacity is expensive and not
+instantly provisioned, and because some data has strict residency
+requirements. A realistic design separates what's **replicated per region**
+from what's **globally shared or centrally managed**.
+
+<Mermaid client:visible code={`flowchart TB
+  GeoDNS["Geo-aware routing<br/>(DNS or edge load balancer)"] --> US["US region"]
+  GeoDNS --> EU["EU region"]
+  GeoDNS --> Asia["Asia region"]
+
+  subgraph US["US region"]
+    USApi["API layer"] --> USInfer["Inference cluster"]
+    USApi --> USData[("Regional data store")]
+  end
+  subgraph EU["EU region"]
+    EUApi["API layer"] --> EUInfer["Inference cluster"]
+    EUApi --> EUData[("Regional data store<br/>(EU data stays here)")]
+  end
+
+  Global[("Global config / model registry")] -.-> USApi
+  Global -.-> EUApi`} />
+
+## Routing users to the right region
+
+**Geo-DNS or edge-based routing** directs a user's request to the nearest
+(or a legally required) region based on their location, before it ever
+reaches application servers. This is the first-line mechanism for reducing
+latency, and it needs a fallback: if the nearest region is unhealthy or at
+capacity, routing should fail over to the next-nearest healthy region
+rather than serving an error.
+
+## Data residency drives more of the design than latency does
+
+For products handling regulated data (personal data under GDPR, healthcare
+data, financial data), certain data may be legally required to stay within
+a specific geographic/legal boundary. This means the "nearest region"
+decision isn't purely a performance optimization — for some users, it's a
+hard compliance requirement determining which region their data (and
+often their inference requests, if prompts contain regulated data) must be
+processed in, overriding pure latency optimization if the two conflict.
+
+## GPU capacity is regional and expensive to duplicate
+
+Unlike stateless application servers, GPU inference capacity is costly to
+run idle. A naive "full active-active capacity in every region" approach
+multiplies GPU spend by the number of regions, much of it sitting
+underutilized outside that region's peak hours. Practical mitigations:
+
+- **Follow-the-sun capacity shifting** — scale capacity up in each region
+  ahead of its local peak hours and down during its off-hours, rather than
+  provisioning every region for 24/7 peak load.
+- **Overflow routing** — handle a region's demand spike by routing a
+  portion of traffic to a nearby region with spare capacity, when latency
+  and data-residency constraints allow it.
+
+## Keeping shared state consistent across regions
+
+Some data genuinely needs to be consistent across regions — user accounts,
+billing, global rate-limit quotas. Multi-region systems typically pick a
+primary/source-of-truth region for this kind of data (with asynchronous
+replication to others) or accept eventual consistency for data where a
+short propagation delay is tolerable, rather than trying to make every
+region strongly consistent with every other in real time, which would
+reintroduce cross-region latency into the critical path — defeating the
+purpose of going multi-region in the first place.
+
+```python
+# Simplified geo-routing decision
+def pick_region(user_location, data_residency_requirement=None):
+    if data_residency_requirement:
+        return data_residency_requirement  # compliance overrides latency
+    return nearest_healthy_region(user_location)
+```

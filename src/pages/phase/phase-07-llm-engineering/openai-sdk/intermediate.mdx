@@ -1,0 +1,125 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "OpenAI SDK"
+level: intermediate
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "openai-sdk"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "OpenAI — Responses API"
+    url: "https://platform.openai.com/docs/api-reference/responses"
+  - type: docs
+    title: "OpenAI — Error Codes"
+    url: "https://platform.openai.com/docs/guides/error-codes"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Chat Completions vs. the Responses API
+
+OpenAI now offers two API surfaces: the long-standing `chat.completions.create`, and
+the newer `responses.create`, which unifies text generation, tool calling, and
+built-in tools (web search, file search, code interpreter) under one interface with
+simpler multi-turn state handling:
+
+```python
+response = client.responses.create(
+    model="gpt-4o-mini",
+    input="What's the latest news about the James Webb telescope?",
+    tools=[{"type": "web_search"}],  # a built-in hosted tool, no custom function needed
+)
+print(response.output_text)
+```
+
+For new projects, prefer the Responses API — it's positioned as the forward path and
+includes built-in tools that would otherwise require custom integration work.
+`chat.completions` remains fully supported and is what most existing framework
+integrations (LangChain, etc.) still target under the hood.
+
+## Retries, timeouts, and rate limits — production non-negotiables
+
+API calls fail: transient network errors, rate limits (`429`), server errors (`5xx`).
+The SDK has built-in retry support, but production code should configure it
+explicitly rather than relying on defaults:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    max_retries=3,       # automatic retry with exponential backoff on transient errors
+    timeout=30.0,         # fail fast rather than hang indefinitely
+)
+
+import openai
+try:
+    response = client.chat.completions.create(model="gpt-4o-mini", messages=messages)
+except openai.RateLimitError:
+    # back off and retry later, or queue the request
+    ...
+except openai.APITimeoutError:
+    ...
+except openai.APIStatusError as e:
+    print(e.status_code, e.response)
+```
+
+<Mermaid client:visible code={`flowchart LR
+  A[Request] --> B{Success?}
+  B -->|Yes| C[Return response]
+  B -->|429 / 5xx| D[Exponential backoff]
+  D --> E{Retries left?}
+  E -->|Yes| A
+  E -->|No| F[Raise error to caller]`} />
+
+## Async for concurrent request throughput
+
+For batch workloads (processing many independent requests), the async client lets you
+run many calls concurrently instead of sequentially, which matters because LLM calls
+are I/O-bound — most of the wall-clock time is waiting on the network/model, not
+local computation:
+
+```python
+import asyncio
+from openai import AsyncOpenAI
+
+client = AsyncOpenAI()
+
+async def classify(text):
+    response = await client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": f"Classify sentiment: {text}"}],
+    )
+    return response.choices[0].message.content
+
+async def main():
+    texts = ["Great product!", "Terrible service.", "It's okay I guess."]
+    results = await asyncio.gather(*(classify(t) for t in texts))
+    print(results)
+
+asyncio.run(main())
+```
+
+Running these three sequentially would take roughly 3x as long as running them
+concurrently — a meaningful difference at any real batch size.
+
+## Structured output and function calling in practice
+
+```python
+from pydantic import BaseModel
+
+class Ticket(BaseModel):
+    category: str
+    urgency: int
+
+response = client.beta.chat.completions.parse(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "My payment failed twice, I need this fixed today."}],
+    response_format=Ticket,
+)
+ticket = response.choices[0].message.parsed
+print(ticket.category, ticket.urgency)
+```
+
+This is the same `response_format=<PydanticModel>` pattern covered in the Structured
+Output lesson — the OpenAI SDK is where that guarantee is actually implemented and
+enforced.

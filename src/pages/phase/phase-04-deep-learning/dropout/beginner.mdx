@@ -1,0 +1,95 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Dropout"
+level: beginner
+phaseSlug: "phase-04-deep-learning"
+phaseName: "Deep Learning"
+topicSlug: "dropout"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "PyTorch — Dropout documentation"
+    url: "https://pytorch.org/docs/stable/generated/torch.nn.Dropout.html"
+  - type: article
+    title: "Dropout: A Simple Way to Prevent Overfitting (Srivastava et al.)"
+    url: "https://jmlr.org/papers/v15/srivastava14a.html"
+---
+
+## Randomly benching players so the team doesn't over-rely on one
+
+If a sports team always practices with the exact same lineup, it can develop an
+over-reliance on one or two star players — and fall apart if that player is ever
+missing on game day. A good coach randomly benches different players during
+practice, forcing the rest of the team to develop the ability to cover for anyone.
+
+**Dropout** applies this idea to neural networks: during training, it randomly
+"turns off" (zeroes out) a fraction of neurons at each step, forcing the network to
+not over-rely on any single neuron and instead learn more robust, redundant
+representations.
+
+```python
+import torch
+import torch.nn as nn
+
+dropout = nn.Dropout(p=0.5)   # 50% chance each neuron gets zeroed out
+
+x = torch.ones(1, 10)
+print(dropout(x))
+# during training: roughly half the values become 0, the rest are scaled up
+```
+
+### Dropout behaves differently at train vs. test time
+
+During training, dropout randomly zeroes neurons. At test/inference time, you want
+the *full* network making predictions — no randomness — so dropout is automatically
+disabled:
+
+```python
+model = nn.Sequential(
+    nn.Linear(20, 64),
+    nn.ReLU(),
+    nn.Dropout(0.5),
+    nn.Linear(64, 2),
+)
+
+model.train()
+out1 = model(torch.randn(1, 20))   # dropout active — some neurons zeroed
+
+model.eval()
+out2 = model(torch.randn(1, 20))   # dropout OFF — full network used
+```
+
+This is exactly why every training loop calls `model.train()` before training and
+`model.eval()` before evaluation — forgetting either one gives you the wrong
+behavior for dropout (and BatchNorm too).
+
+### Try it yourself
+
+Build a small model: `Linear(10, 32)` -> `ReLU` -> `Dropout(0.3)` -> `Linear(32, 1)`.
+Run the same input through it twice in training mode and confirm the outputs differ
+(due to randomness), then switch to eval mode and confirm they're identical.
+
+<details>
+<summary>Solution</summary>
+
+```python
+import torch
+import torch.nn as nn
+
+model = nn.Sequential(
+    nn.Linear(10, 32),
+    nn.ReLU(),
+    nn.Dropout(0.3),
+    nn.Linear(32, 1),
+)
+
+x = torch.randn(1, 10)
+
+model.train()
+print(model(x), model(x))   # likely different — dropout randomness
+
+model.eval()
+print(model(x), model(x))   # identical — dropout disabled
+```
+
+</details>

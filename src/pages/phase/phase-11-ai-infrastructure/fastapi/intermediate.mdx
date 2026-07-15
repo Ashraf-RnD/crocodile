@@ -1,0 +1,123 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "FastAPI"
+level: intermediate
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "fastapi"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "FastAPI — Lifespan Events"
+    url: "https://fastapi.tiangolo.com/advanced/events/"
+  - type: docs
+    title: "Starlette — StreamingResponse"
+    url: "https://www.starlette.io/responses/#streamingresponse"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Why `async def` matters for LLM calls
+
+An LLM inference call — whether it's hitting an external API or a local GPU
+server — spends most of its wall-clock time waiting, not computing on the Python
+process itself. A synchronous `def` endpoint blocks the entire worker thread for
+that whole wait; an `async def` endpoint yields control back to the event loop
+while waiting, letting a single worker handle many concurrent requests instead of
+one at a time:
+
+```python
+import httpx
+from fastapi import FastAPI
+
+app = FastAPI()
+
+@app.post("/generate")
+async def generate(prompt: str):
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            "http://localhost:8001/v1/completions",
+            json={"prompt": prompt, "max_tokens": 200},
+        )
+    return resp.json()
+```
+
+Using a synchronous `requests.post(...)` call inside `async def` instead would
+block the event loop and defeat the entire point — the client library matters as
+much as the `async` keyword.
+
+## Loading a model once, at startup
+
+Loading a model per-request is disastrous for latency. `lifespan` runs setup code
+once when the server starts and teardown once when it stops, storing state on
+`app.state`:
+
+```python
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Request
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.model = load_model("./checkpoints/my-model")  # runs once, at startup
+    yield
+    del app.state.model  # cleanup on shutdown
+
+app = FastAPI(lifespan=lifespan)
+
+@app.post("/predict")
+async def predict(request: Request, prompt: str):
+    model = request.app.state.model
+    return {"result": model.generate(prompt)}
+```
+
+## Streaming tokens as they're generated
+
+For a chat-style UI, users expect tokens to appear incrementally rather than
+waiting for the full response. `StreamingResponse` sends chunks as an async
+generator yields them, commonly framed as Server-Sent Events (SSE):
+
+```python
+from fastapi.responses import StreamingResponse
+
+async def token_stream(prompt: str):
+    async for token in model.stream_generate(prompt):
+        yield f"data: {token}\n\n"   # SSE format
+
+@app.post("/chat")
+async def chat(prompt: str):
+    return StreamingResponse(token_stream(prompt), media_type="text/event-stream")
+```
+
+<Mermaid client:visible code={`sequenceDiagram
+  participant Client
+  participant FastAPI
+  participant Model
+  Client->>FastAPI: POST /chat
+  FastAPI->>Model: start generation
+  loop each token
+    Model-->>FastAPI: next token
+    FastAPI-->>Client: SSE chunk "data: token\\n\\n"
+  end
+  Model-->>FastAPI: generation done
+  FastAPI-->>Client: close stream`} />
+
+## Background tasks for fire-and-forget work
+
+Work that shouldn't block the response — logging a request, writing usage metrics
+— can run after the response is sent using `BackgroundTasks`:
+
+```python
+from fastapi import BackgroundTasks
+
+def log_usage(prompt: str, tokens: int):
+    print(f"logged: {tokens} tokens for prompt of length {len(prompt)}")
+
+@app.post("/predict")
+async def predict(prompt: str, background_tasks: BackgroundTasks):
+    result = model.generate(prompt)
+    background_tasks.add_task(log_usage, prompt, len(result))
+    return {"result": result}
+```
+
+Background tasks still run in the same process — they're for short, non-blocking
+follow-up work, not a replacement for a real task queue (Celery, RQ) for
+heavier jobs.

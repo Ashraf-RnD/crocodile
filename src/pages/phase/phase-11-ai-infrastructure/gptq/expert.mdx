@@ -1,0 +1,87 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "GPTQ"
+level: expert
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "gptq"
+estReadTime: 11
+resources:
+  - type: article
+    title: "GPTQ: Accurate Post-Training Quantization for Generative Pre-trained Transformers"
+    url: "https://arxiv.org/abs/2210.17323"
+  - type: article
+    title: "Optimal Brain Compression (OBC) — foundation for GPTQ's error-correction step"
+    url: "https://arxiv.org/abs/2208.11580"
+---
+
+## The math intuition: correcting, not just rounding
+
+Naive quantization rounds each weight `w` to the nearest representable 4-bit value
+independently. This is fast but ignores an important fact: weights within a layer
+interact — the layer's output is a weighted sum, so an error introduced by rounding
+one weight can be partially cancelled by adjusting other, not-yet-quantized weights in
+that same row.
+
+GPTQ formalizes this as a layer-wise reconstruction problem: for each linear layer,
+minimize the squared error between the original layer's output and the quantized
+layer's output *on the calibration data*, i.e. minimize `||WX - ŴX||²` where `W` is the
+original weight matrix, `Ŵ` is the quantized one, and `X` is the calibration
+activations. This is directly descended from **Optimal Brain Compression/Surgeon**:
+quantize one weight, then use the inverse of the layer's Hessian (which captures how
+sensitive the output is to each remaining weight, computed cheaply from `X^T X`) to
+compute the optimal update to the *not-yet-quantized* weights that best cancels the
+error just introduced. GPTQ's contribution was making this tractable at LLM scale — it
+processes weights column-by-column with a Cholesky-based reformulation of the
+Hessian-inverse update, which turns an operation that's naively too slow for
+billion-parameter matrices into something that runs on a single GPU in a few GPU-hours
+even for 70B-class models.
+
+## Why this needs calibration data (and GGUF often doesn't)
+
+Because the objective is defined in terms of `X` (real activations), GPTQ is inherently
+**data-dependent**: its quantization decisions are tuned to minimize error on
+the specific distribution of inputs seen during calibration, and its quality can
+degrade somewhat if the deployment distribution differs sharply (e.g. calibrating on
+English prose, deploying on code). Simpler schemes used by many GGUF quantization
+levels (e.g. `Q4_0`, `Q4_K_M`) instead use data-free or lightly data-informed heuristics
+— per-block min/max scaling with no Hessian correction — which sacrifices some accuracy
+per bit but removes the calibration dependency and its associated risks entirely,
+part of why GGUF is popular for local/CPU inference where "good enough, no surprises"
+matters more than squeezing out the last point of accuracy.
+
+## GPTQ vs AWQ vs GGUF
+
+| Axis | GPTQ | AWQ | GGUF (llama.cpp) |
+|---|---|---|---|
+| Calibration data required | Yes (activation-based Hessian) | Yes (but only to find salient channels, not full reconstruction) | Usually no (data-free scale/zero-point per block) |
+| Target hardware | GPU | GPU | CPU and GPU (unified format) |
+| Accuracy at 4-bit | Very good, can be fragile if calibration data is unrepresentative | Comparable or better than GPTQ, more robust to calibration mismatch | Good, especially K-quant variants; slightly behind GPTQ/AWQ at same bit-width |
+| Core idea | Error-compensation via Hessian-based weight updates | Protect the ~1% of "salient" weight channels identified by activation magnitude, scale the rest | Per-block scale/zero-point quantization, minimal or no activation awareness |
+| Inference kernel/speed support | Mature (ExLlama, Marlin kernels), well-supported in vLLM/TGI | Mature, dedicated fast kernels, also supported in vLLM/TGI | Mature on CPU (llama.cpp), GPU support improving but not the primary use case |
+| Typical use case | GPU serving, well-established tooling | GPU serving, often edges out GPTQ on accuracy/robustness | Local/CPU inference, offline use, resource-constrained edge devices |
+
+## Quantization time as an operational cost
+
+Unlike simple rounding (seconds), GPTQ's layer-by-layer Hessian computation and
+weight updates take real wall-clock time — commonly 10 minutes to a few hours for
+7B-13B models and multiple GPU-hours for 70B+ models, depending on calibration set
+size and hardware. This matters operationally in two ways: it's a one-time cost you
+pay per model version (not per deployment, since the quantized checkpoint is reused
+across every serving instance), but it also means GPTQ isn't suited to workflows that
+need to requantize frequently — e.g. quantizing every fine-tuning checkpoint in a fast
+iteration loop is often not worth the wait, and teams in that situation either
+quantize only release candidates or use a faster (if less accurate) method during
+active iteration.
+
+## Practical failure mode: outlier-heavy layers
+
+GPTQ's per-group error minimization can still struggle on layers with extreme
+activation outliers (common in some attention projection layers of larger models),
+where a handful of unusually large activation values dominate the reconstruction
+objective and can produce a locally poor fit for the "typical" weights in that group.
+This is one of the motivations behind AWQ's alternative strategy of explicitly
+protecting the small number of weight channels tied to those large-magnitude
+activations rather than relying purely on post-hoc error correction — worth knowing
+if you quantize a model and see accuracy degrade more than expected on a specific
+layer type rather than uniformly across the network.

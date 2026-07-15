@@ -1,0 +1,82 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "FastText"
+level: expert
+phaseSlug: "phase-05-natural-language-processing"
+phaseName: "Natural Language Processing"
+topicSlug: "fasttext"
+estReadTime: 11
+resources:
+  - type: article
+    title: "Joulin et al. — Bag of Tricks for Efficient Text Classification"
+    url: "https://arxiv.org/abs/1607.01759"
+  - type: article
+    title: "Bojanowski et al. — Enriching Word Vectors with Subword Information"
+    url: "https://arxiv.org/abs/1607.04606"
+---
+
+## The hashing trick and its collision trade-off
+
+Storing a distinct vector for every possible character n-gram would explode the
+vocabulary (millions of n-grams for even a modest corpus). FastText instead hashes
+each n-gram into a fixed-size bucket array (default 2 million buckets) using a
+cheap hash function, and multiple distinct n-grams can collide into the same bucket.
+This is a deliberate memory/accuracy trade-off, not an oversight: collisions
+introduce a small amount of noise into rare n-grams' vectors, but the memory savings
+(a fixed-size hash table instead of an unbounded n-gram vocabulary) make training on
+web-scale corpora tractable on commodity hardware. Increasing the bucket count
+reduces collision-induced noise at the direct cost of memory — this is a tunable
+hyperparameter (`-bucket` in the CLI) that most tutorials omit but that matters for
+morphologically rich or noisy-text domains where n-gram diversity is very high.
+
+## Why "bag of tricks" classification is competitive with deep models
+
+The supervised FastText classifier is deliberately a *linear* model over averaged
+n-gram features — no recurrence, no attention, no non-linear hidden layers beyond the
+single softmax/hierarchical-softmax output layer. Joulin et al.'s central empirical
+claim is that this achieves accuracy on par with far more expensive CNN/RNN-based
+classifiers of the era, *specifically* on tasks where the label is largely determined
+by lexical content (topic classification, sentiment) rather than deep compositional
+or long-range reasoning. This is an important calibration point: architectural
+complexity buys the most when a task genuinely requires modeling word order and
+long-range dependencies (translation, entailment); for surface-level classification
+tasks, a well-engineered linear bag-of-n-grams model is often not meaningfully worse,
+and is orders of magnitude cheaper to train and serve.
+
+## Hierarchical softmax for large label/vocabulary spaces
+
+Training with a full softmax over a large output space (a large vocabulary during
+unsupervised training, or thousands of classes during supervised training) costs
+`O(vocab_size)` per training step. FastText supports **hierarchical softmax**, which
+organizes outputs into a Huffman tree weighted by label frequency, reducing the
+per-step cost to `O(log(vocab_size))`. This is the same core optimization idea as
+negative sampling in Word2Vec (both trade exactness for speed), but structurally
+different — hierarchical softmax still computes a normalized probability distribution
+implicitly via the tree path, whereas negative sampling abandons normalization
+entirely in favor of local binary classification. Choosing between them in practice
+comes down to label distribution: hierarchical softmax tends to win when the label
+space is very large and Zipfian (as with large vocabularies), while negative sampling
+is simpler to reason about for moderate vocabulary/label sizes.
+
+## Quantization for edge and mobile deployment
+
+FastText ships a dedicated model compression path (`quantize`) that reduces trained
+models from hundreds of megabytes to a few megabytes via product quantization of the
+embedding matrices, explicitly targeting **on-device inference** — spam filters,
+language identification, and autocomplete running client-side without a network
+round-trip. This is a rare case in the embedding-model space where compression tooling
+was a first-class design goal from the start rather than a bolted-on optimization, and
+it's the direct reason FastText remains a default choice for latency- and
+memory-constrained deployments (e.g. mobile keyboards, browser extensions) where a
+transformer-based alternative simply cannot fit the resource budget.
+
+## Trade-off summary
+
+| Dimension | FastText | Word2Vec | Transformer contextual embeddings |
+|---|---|---|---|
+| Out-of-vocabulary handling | Strong (n-gram composition) | None | Strong (sub-word tokenization + context) |
+| Training compute | Low (CPU-friendly) | Low (CPU-friendly) | High (GPU required at scale) |
+| Inference latency | Very low (lookup + sum) | Very low (lookup) | Higher (forward pass) |
+| Polysemy handling | None (one vector per word) | None (one vector per word) | Strong (context-dependent) |
+| Model size after quantization | Megabytes | Megabytes | Hundreds of MB to GBs, even after distillation |
+| Best fit | Edge/mobile NLP, fast baselines, morphologically rich languages | Cold-start recommenders, simple semantic lookup | Any task where contextual accuracy dominates cost concerns |

@@ -1,0 +1,76 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "GRU"
+level: intermediate
+phaseSlug: "phase-04-deep-learning"
+phaseName: "Deep Learning"
+topicSlug: "gru"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "PyTorch — GRU documentation"
+    url: "https://pytorch.org/docs/stable/generated/torch.nn.GRU.html"
+  - type: article
+    title: "Empirical Evaluation of Gated Recurrent Neural Networks (Chung et al.)"
+    url: "https://arxiv.org/abs/1412.3555"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Two gates instead of three
+
+A GRU merges the LSTM's forget and input gates into a single **update gate**, and
+adds a **reset gate** that controls how much of the past hidden state to consider
+when computing a new candidate value:
+
+<Mermaid client:visible code={`flowchart LR
+  X["x_t, h_{t-1}"] --> R["reset gate: how much past state to use for the candidate"]
+  X --> Z["update gate: blend of old state vs new candidate"]
+  R --> Cand["candidate hidden state"]
+  Cand --> Z
+  Z --> H["h_t"]`} />
+
+Where an LSTM's cell state and hidden state are separate, a GRU folds everything
+into a single hidden state that is both the memory and the output — one fewer moving
+part to track, at the cost of slightly less fine-grained control over "what to
+remember" vs. "what to output."
+
+## A stacked, bidirectional GRU in practice
+
+```python
+import torch.nn as nn
+
+class GRUEncoder(nn.Module):
+    def __init__(self, vocab_size, embed_dim, hidden_dim, num_layers=2):
+        super().__init__()
+        self.embedding = nn.Embedding(vocab_size, embed_dim)
+        self.gru = nn.GRU(
+            embed_dim, hidden_dim,
+            num_layers=num_layers,
+            batch_first=True,
+            bidirectional=True,
+            dropout=0.3,
+        )
+
+    def forward(self, token_ids):
+        embedded = self.embedding(token_ids)
+        output, hidden = self.gru(embedded)
+        return output   # (batch, seq_len, hidden_dim * 2)
+```
+
+## Choosing GRU over LSTM in a real project
+
+Both are drop-in replacements for each other (`nn.LSTM` -> `nn.GRU` with matching
+signatures for basic usage), so many teams simply benchmark both on their actual
+validation set rather than choosing analytically. That said, GRUs are often the
+practical default when:
+
+- **Training data is limited** — fewer parameters means less overfitting risk.
+- **Inference latency/memory is tight** (mobile, edge, real-time) — roughly 25%
+  fewer parameters and faster per-step computation.
+- **Sequences are short to moderate** — GRU's simpler gating is less likely to
+  matter on tasks that don't stress long-range memory in the first place.
+
+LSTM tends to be favored when the task is known to require very precise long-range
+memory control (e.g., certain language modeling and machine translation
+benchmarks), where the extra gate has empirically shown a measurable edge — though
+this gap has narrowed considerably as tuning practices improved for both.

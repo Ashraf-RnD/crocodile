@@ -1,0 +1,125 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "XGBoost"
+level: intermediate
+phaseSlug: "phase-03-machine-learning"
+phaseName: "Machine Learning"
+topicSlug: "xgboost"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "XGBoost — Parameters"
+    url: "https://xgboost.readthedocs.io/en/stable/parameter.html"
+  - type: video
+    title: "StatQuest: XGBoost Part 1, Regression"
+    url: "https://www.youtube.com/watch?v=OtD8wVaFm6E"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The mechanics: fitting the residual, not the label
+
+Each tree in an XGBoost ensemble is trained not on the original target `y`,
+but on the **gradient of the loss function** with respect to the current
+ensemble's predictions — in the simplest case (squared error), that gradient
+is just the residual: `actual - predicted so far`. Tree 1 predicts something
+crude. Tree 2 is trained to predict the errors tree 1 left behind. Tree 3
+is trained on what's still wrong after trees 1 and 2. The final prediction
+is the sum of every tree's output, scaled by a learning rate.
+
+<Mermaid client:visible code={`flowchart LR
+  A[Tree 1: initial prediction] --> B[Residuals]
+  B --> C[Tree 2: fits residuals]
+  C --> D[Residuals]
+  D --> E[Tree 3: fits residuals]
+  E --> F[Sum of all trees = final prediction]`} />
+
+```python
+from xgboost import XGBClassifier
+from sklearn.datasets import make_classification
+from sklearn.model_selection import train_test_split
+
+X, y = make_classification(n_samples=2000, n_features=10, random_state=0)
+X_train, X_test, y_train, y_test = train_test_split(X, y, random_state=0)
+
+model = XGBClassifier(
+    n_estimators=300,
+    learning_rate=0.05,
+    max_depth=4,
+    subsample=0.8,
+    colsample_bytree=0.8,
+    eval_metric="logloss",
+    random_state=0,
+)
+model.fit(X_train, y_train)
+print(model.score(X_test, y_test))
+```
+
+## Key hyperparameters
+
+- **`n_estimators`** — number of boosting rounds (trees). More trees can
+  keep reducing training error, but past a point they start fitting noise.
+- **`learning_rate`** (aka `eta`) — how much each tree's correction
+  contributes to the running sum, typically `0.01`–`0.3`. Lower values need
+  more trees but generalize better; this trade-off is the single most
+  important tuning decision in boosting.
+- **`max_depth`** — depth of each individual tree. Boosted trees are usually
+  kept shallow (3–8) since the ensemble, not any one tree, does the heavy
+  lifting.
+- **`subsample`** — fraction of training rows sampled (without replacement)
+  for each tree, adding randomness that reduces overfitting (similar in
+  spirit to bagging).
+- **`colsample_bytree`** — fraction of features sampled per tree, another
+  regularization knob borrowed from random forests.
+
+## Early stopping
+
+Because boosting keeps adding trees that chase the training residual, it can
+overfit if you let it run too long, especially with a high `learning_rate`.
+The standard defense is an evaluation set plus early stopping: training
+halts once validation performance stops improving for a set number of
+rounds, instead of relying purely on a fixed `n_estimators`.
+
+```python
+from sklearn.model_selection import train_test_split
+
+X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, random_state=0)
+
+model = XGBClassifier(
+    n_estimators=1000,
+    learning_rate=0.05,
+    max_depth=4,
+    eval_metric="logloss",
+    early_stopping_rounds=20,
+    random_state=0,
+)
+model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
+
+print("best iteration:", model.best_iteration)
+```
+
+`n_estimators=1000` is a safe upper bound here — training stops as soon as
+validation log-loss hasn't improved for 20 consecutive rounds, so the actual
+number of trees used is usually far lower.
+
+## Missing values and regularization, out of the box
+
+XGBoost handles missing values (`NaN`) natively — at each split, it learns
+the best default direction (left or right) to send missing entries, rather
+than requiring you to impute beforehand. It also bakes L1/L2 regularization
+and a minimum-loss-reduction threshold into its objective, which is why it
+tends to overfit less than a plain, unregularized gradient boosting
+implementation (like classic `sklearn.ensemble.GradientBoostingClassifier`)
+given similar tree counts.
+
+## Common pitfalls
+
+- **Too many estimators with too high a learning rate and no early
+  stopping** is the classic overfitting recipe — training accuracy climbs
+  while validation accuracy quietly degrades.
+- **Training time** is generally longer than a random forest with a
+  comparable tree count, since trees must be built sequentially (each one
+  depends on the previous ensemble's residuals) rather than in parallel
+  across independent trees.
+- **Forgetting an eval set** — early stopping requires `eval_set`; without
+  it, `n_estimators` is a hard cap with no signal about whether you've
+  already overshot the ideal number of rounds.

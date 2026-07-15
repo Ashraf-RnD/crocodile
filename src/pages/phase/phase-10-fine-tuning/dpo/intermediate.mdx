@@ -1,0 +1,127 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "DPO"
+level: intermediate
+phaseSlug: "phase-10-fine-tuning"
+phaseName: "Fine-tuning"
+topicSlug: "dpo"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "TRL — DPOConfig and DPOTrainer API reference"
+    url: "https://huggingface.co/docs/trl/main/en/dpo_trainer"
+  - type: docs
+    title: "Hugging Face — Preference dataset formats for TRL"
+    url: "https://huggingface.co/docs/trl/main/en/dataset_formats#preference"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The production DPO workflow
+
+<Mermaid client:visible code={`flowchart LR
+  Base["Base pretrained model"] --> SFT["SFT fine-tuned model"]
+  SFT --> Policy["Policy model (trainable copy)"]
+  SFT --> Ref["Reference model (frozen copy)"]
+  Data["(prompt, chosen, rejected) dataset"] --> Policy
+  Policy --> Loss["DPO loss compares policy vs reference likelihoods"]
+  Ref --> Loss
+  Loss --> Update["Backprop updates policy only"]`} />
+
+Only two models are needed at once — the trainable policy and a frozen reference copy
+of the SFT model — versus RLHF's four. This is the main reason DPO has become the
+default first choice for preference tuning in most fine-tuning stacks.
+
+## A realistic DPO fine-tuning script
+
+```python
+from datasets import load_dataset
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from trl import DPOTrainer, DPOConfig
+from peft import LoraConfig
+
+model_id = "meta-llama/Llama-3.1-8B-Instruct"  # already SFT'd / instruction-tuned
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+model = AutoModelForCausalLM.from_pretrained(model_id)
+
+dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
+# each row already has: prompt, chosen, rejected
+
+peft_config = LoraConfig(r=16, lora_alpha=32, target_modules="all-linear")
+
+training_args = DPOConfig(
+    output_dir="./llama3-dpo-out",
+    beta=0.1,                      # controls how strongly the model can diverge from the reference
+    per_device_train_batch_size=2,
+    gradient_accumulation_steps=8,
+    learning_rate=5e-6,            # DPO learning rates are typically much lower than SFT
+    num_train_epochs=1,
+    max_length=1024,
+    max_prompt_length=512,
+)
+
+trainer = DPOTrainer(
+    model=model,
+    ref_model=None,                # None lets TRL auto-create a frozen reference from `model`
+    args=training_args,
+    train_dataset=dataset,
+    processing_class=tokenizer,
+    peft_config=peft_config,       # DPO composes naturally with LoRA/QLoRA
+)
+trainer.train()
+```
+
+When `ref_model=None` and `peft_config` is set, TRL is smart about memory: instead of
+loading a whole second copy of the model, it temporarily disables the LoRA adapter to
+get "reference model" behavior from the same underlying weights — a meaningful memory
+saving versus hosting two full model copies.
+
+## The `beta` hyperparameter, practically speaking
+
+`beta` controls how strongly the DPO loss penalizes the policy for diverging from the
+reference model — conceptually similar to RLHF's KL coefficient, but baked directly
+into the loss rather than a separate RL-loop penalty term.
+
+- **Low `beta` (e.g. 0.05)**: allows the policy to move further from the reference
+  model per training step — faster preference shift, higher risk of overfitting to
+  quirks of the preference dataset.
+- **High `beta` (e.g. 0.5)**: keeps the policy closer to the reference model —
+  more conservative, safer against degenerate outputs, but slower to shift behavior.
+
+`beta=0.1` is a common practical starting point; tuning it is usually the first lever
+to pull if DPO training either isn't moving preferences enough or is degrading general
+output quality.
+
+## Building a preference dataset without a full RLHF pipeline
+
+A common production pattern for building `chosen`/`rejected` pairs without hiring human
+raters for every example:
+
+```python
+# Generate multiple candidate responses per prompt
+candidates = [model.generate(prompt) for _ in range(4)]
+
+# Use a stronger "judge" model (or targeted heuristics) to rank them
+ranked = judge_model.rank(prompt, candidates)
+
+dataset_row = {
+    "prompt": prompt,
+    "chosen": ranked[0],
+    "rejected": ranked[-1],
+}
+```
+
+This "AI feedback" pattern (sometimes called RLAIF when applied at scale) is how many
+production teams bootstrap preference datasets cheaply, reserving human labeling for
+smaller, higher-stakes calibration sets.
+
+## Common pitfalls
+
+- **Reusing the SFT learning rate**: DPO is much more sensitive to learning rate than
+  SFT; values that work for SFT (1e-4 to 2e-4 range) will often destabilize DPO
+  training. Start an order of magnitude or more lower.
+- **Skipping SFT first**: running DPO directly on a base (non-instruction-tuned) model
+  usually underperforms — DPO sharpens an already-reasonable response distribution, it
+  doesn't establish one.
+- **Unbalanced or low-contrast pairs**: if `chosen` and `rejected` are nearly
+  identical, the loss gradient is weak and training is inefficient — better datasets
+  have a clear, consistent quality gap between the two.

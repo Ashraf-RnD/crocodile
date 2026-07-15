@@ -1,0 +1,73 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "YOLO"
+level: beginner
+phaseSlug: "phase-09-multimodal-ai"
+phaseName: "Multimodal AI"
+topicSlug: "yolo"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "Ultralytics YOLO documentation"
+    url: "https://docs.ultralytics.com/"
+  - type: article
+    title: "You Only Look Once (original YOLO paper)"
+    url: "https://arxiv.org/abs/1506.02640"
+---
+
+## What "You Only Look Once" means
+
+Older object detectors worked like scanning a magnifying glass over every part of a
+photo, checking each small window for "is there an object here?" one at a time — slow,
+and it multiplies work across thousands of overlapping windows. **YOLO** instead looks
+at the *entire image once* and directly predicts every object's location and class in
+a single pass — hence the name.
+
+Think of it like glancing at a busy street photo for a split second and immediately
+being able to say "car, here; person, there; dog, over there" — versus scanning the
+photo inch by inch.
+
+### Your first detection
+
+```python
+from ultralytics import YOLO
+
+model = YOLO("yolo11n.pt")  # small, fast pretrained model
+results = model("street.jpg")
+
+for r in results:
+    for box in r.boxes:
+        cls_name = model.names[int(box.cls)]
+        confidence = float(box.conf)
+        print(f"{cls_name}: {confidence:.2f}")
+```
+
+`yolo11n.pt` is a small pretrained model (the "n" stands for nano) trained on the COCO
+dataset — 80 common object classes like `person`, `car`, `dog`, `chair`. No training
+needed to try it on your own photos.
+
+### Seeing the boxes
+
+```python
+results[0].show()  # opens a window with boxes drawn on the image
+results[0].save("street_detected.jpg")
+```
+
+## Try it yourself
+
+Modify the loop to only print detections for the `person` class with confidence above
+`0.5`.
+
+<details>
+<summary>Solution</summary>
+
+```python
+for r in results:
+    for box in r.boxes:
+        cls_name = model.names[int(box.cls)]
+        confidence = float(box.conf)
+        if cls_name == "person" and confidence > 0.5:
+            print(f"person detected, confidence {confidence:.2f}")
+```
+
+</details>

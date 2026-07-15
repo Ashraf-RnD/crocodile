@@ -1,0 +1,114 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "PEFT"
+level: expert
+phaseSlug: "phase-10-fine-tuning"
+phaseName: "Fine-tuning"
+topicSlug: "peft"
+estReadTime: 12
+resources:
+  - type: article
+    title: "Scaling Down to Scale Up: A Guide to PEFT Methods (survey)"
+    url: "https://arxiv.org/abs/2303.15647"
+  - type: docs
+    title: "PEFT — custom method integration guide"
+    url: "https://huggingface.co/docs/peft/developer_guides/custom_models"
+---
+
+## PEFT is a spectrum of where you inject trainable capacity, not a single idea
+
+The unifying frame across the PEFT family is: pretrained weights encode a huge amount
+of general knowledge, and most downstream adaptation needs only a small, structured
+perturbation of that knowledge. Methods differ in *where* they inject the trainable
+degrees of freedom, which has real consequences beyond parameter count:
+
+- **Weight-space methods (LoRA, DoRA)**: modify the linear transformations directly.
+  Merge cleanly into the base weights at inference time (zero added latency post-merge),
+  and compose reasonably well with quantization.
+- **Input-space methods (prompt/prefix tuning)**: modify what the model "sees," not
+  what it computes with. Cannot be merged away — they permanently consume context
+  window or require the virtual token computation at every inference call, and their
+  optimization landscape is empirically harder (more sensitive to init, more prone to
+  local minima) because gradients flow through the entire frozen network to reach a
+  small number of input-level parameters.
+- **Activation-scaling methods (IA3)**: learn multiplicative rescaling of activations
+  at specific points. Extremely parameter-efficient (fewer params than even low-rank
+  LoRA) but limited expressiveness — a scaling vector can amplify or suppress existing
+  directions in activation space but cannot introduce genuinely new directions the way
+  a low-rank additive update can.
+
+## The capacity-vs-optimizability trade-off is not monotonic with parameter count
+
+A naive assumption is "more trainable parameters = strictly better, less trainable
+parameters = strictly worse but cheaper." In practice, this breaks down at both ends:
+
+- **Prompt tuning at small parameter counts can underperform even smaller alternatives**
+  on tasks requiring precise behavioral edits, because gradient signal has to travel
+  through the entire frozen network to reach the virtual tokens, making optimization
+  noisier per parameter than a weight-space method with a shorter gradient path.
+- **LoRA at very high rank can approach — but rarely exceeds — full fine-tuning**,
+  because the low-rank structural assumption itself is a form of regularization
+  independent of how many parameters within that structure you allow.
+
+This means PEFT method selection is genuinely a per-task empirical question, not a
+strict ordering — teams that assume "just use the PEFT method with the most trainable
+parameters available in our budget" are optimizing the wrong variable.
+
+## Why the ecosystem converged on LoRA-family defaults anyway
+
+Despite the theoretical diversity of the PEFT space, production tooling (TRL, Axolotl,
+Unsloth, most fine-tuning-as-a-service platforms) defaults overwhelmingly to LoRA/DoRA/
+QLoRA. This isn't purely an accuracy argument — it reflects infrastructure economics:
+
+1. **Mergeability**: weight-space adapters merge into ordinary dense weights, so
+   serving infrastructure needs zero special-casing at inference time (unlike
+   prompt-tuning's need for context-window budget or IA3's persistent activation
+   hooks).
+2. **Composability with quantization**: LoRA-family methods are what QLoRA formalized;
+   input-space methods don't have an equivalent well-established quantized-base
+   variant.
+3. **Tooling gravity**: as LoRA became the default, kernel-level optimizations
+   (fused LoRA kernels in Unsloth, multi-LoRA batching in vLLM) accumulated
+   specifically around it, further widening the practical gap versus methods without
+   comparable infrastructure investment.
+
+## Building a custom PEFT method
+
+The library exposes `BaseTuner`/`BaseTunerLayer` so custom adaptation strategies can
+plug into the same `get_peft_model()` workflow rather than requiring bespoke training
+loops:
+
+```python
+from peft.tuners.tuners_utils import BaseTuner, BaseTunerLayer
+
+class MyCustomTunerLayer(BaseTunerLayer):
+    # implement forward() to combine frozen base output with a custom trainable delta
+    ...
+
+class MyCustomTuner(BaseTuner):
+    # implement _create_and_replace() to swap target modules with MyCustomTunerLayer
+    ...
+```
+
+This matters at the expert level because it means PEFT is better understood as an
+**extensible framework for parameter-efficient adaptation strategies**, not a fixed
+catalog — teams building novel adaptation mechanisms for a specific architecture (e.g.
+mixture-of-experts routing adapters) increasingly build on this scaffold rather than
+a from-scratch training loop.
+
+## Trade-off summary
+
+| Method | Merges into base weights | Consumes context window | Composes with quantization | Typical use case |
+|---|---|---|---|---|
+| LoRA / DoRA | Yes | No | Yes (QLoRA) | General-purpose default |
+| Prefix tuning | No | Yes | Limited | Multi-task setups needing task-specific "steering" without weight changes |
+| Prompt tuning | No | Yes | Limited | Very constrained parameter budgets, classification-style tasks |
+| IA3 | Partially (scaling folds in) | No | Limited | Extreme parameter efficiency, simpler tasks |
+
+## The practical decision rule
+
+Default to LoRA/DoRA unless you have a specific reason not to: no context-window
+budget to spare for virtual tokens, need for clean weight merging at serve time, and
+mature tooling support. Reach for prompt tuning or IA3 primarily in research settings
+or extremely parameter-constrained multi-tenant deployments where even LoRA's already
+small footprint needs to shrink further.

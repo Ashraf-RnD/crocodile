@@ -1,0 +1,90 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Precision"
+level: beginner
+phaseSlug: "phase-03-machine-learning"
+phaseName: "Machine Learning"
+topicSlug: "precision"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "scikit-learn: Precision, recall and F-measures"
+    url: "https://scikit-learn.org/stable/modules/model_evaluation.html#precision-recall-f-measure-metrics"
+  - type: video
+    title: "StatQuest: Precision and Recall"
+    url: "https://www.youtube.com/watch?v=qWfzIYCvBqo"
+---
+
+## The spam filter analogy
+
+Imagine a spam filter that flags 100 emails as spam. When you check them by hand, only 80 are actually spam — the other 20 were legitimate emails wrongly flagged.
+
+**Precision** answers one specific question: *of everything I predicted as positive, how much did I get right?*
+
+It says nothing about how many spam emails slipped through the filter uncaught — that's a different metric (recall). Precision is purely about the **quality** of your positive predictions.
+
+## The formula
+
+```
+Precision = TP / (TP + FP)
+```
+
+- **TP (True Positives)**: correctly flagged as spam
+- **FP (False Positives)**: legitimate emails wrongly flagged as spam
+
+In the example above: `Precision = 80 / (80 + 20) = 0.8`, or 80%.
+
+## Computing it in scikit-learn
+
+```python
+from sklearn.metrics import precision_score
+
+# 1 = spam, 0 = not spam
+y_true = [1, 0, 1, 1, 0, 1, 0, 0, 1, 0]
+y_pred = [1, 0, 1, 0, 0, 1, 1, 0, 1, 1]
+
+precision = precision_score(y_true, y_pred)
+print(f"Precision: {precision:.2f}")
+```
+
+## Doing it by hand
+
+It helps to compute precision manually once, so the formula isn't a black box.
+
+```python
+tp = sum((yt == 1 and yp == 1) for yt, yp in zip(y_true, y_pred))
+fp = sum((yt == 0 and yp == 1) for yt, yp in zip(y_true, y_pred))
+
+manual_precision = tp / (tp + fp)
+print(f"TP={tp}, FP={fp}, Precision={manual_precision:.2f}")
+```
+
+Both approaches should print the same number. `precision_score` just saves you from writing this loop every time.
+
+## Try it yourself
+
+A medical test flags 50 patients as having a disease. After confirmation, 45 truly have it and 5 do not. Compute the precision, first by hand and then using `precision_score`.
+
+<details>
+<summary>Solution</summary>
+
+```python
+from sklearn.metrics import precision_score
+
+# Build labels consistent with the scenario: 45 true positives, 5 false positives
+y_true = [1] * 45 + [0] * 5
+y_pred = [1] * 50
+
+# Manual calculation
+tp = sum((yt == 1 and yp == 1) for yt, yp in zip(y_true, y_pred))
+fp = sum((yt == 0 and yp == 1) for yt, yp in zip(y_true, y_pred))
+manual_precision = tp / (tp + fp)
+print(f"Manual precision: {manual_precision:.2f}")  # 0.90
+
+# scikit-learn calculation
+print(f"sklearn precision: {precision_score(y_true, y_pred):.2f}")  # 0.90
+```
+
+Precision is 45 / 50 = 0.90. Nine out of every ten patients the test flagged actually had the disease.
+
+</details>

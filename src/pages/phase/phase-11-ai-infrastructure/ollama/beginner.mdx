@@ -1,0 +1,76 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Ollama"
+level: beginner
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "ollama"
+estReadTime: 5
+resources:
+  - type: docs
+    title: "Ollama Documentation"
+    url: "https://github.com/ollama/ollama/blob/main/docs/README.md"
+---
+
+## Running a local LLM in one line
+
+Most tools in this section are about *serving* models to many users in production.
+**Ollama** solves a different, simpler problem: running an LLM on your own laptop or
+desktop with the least possible friction. Install it, then:
+
+```bash
+ollama run llama3.1
+```
+
+That single command downloads the model (a quantized version, sized to fit on
+consumer hardware), starts it, and drops you into an interactive chat right in your
+terminal. No Python environment, no CUDA setup, no config files — this is Ollama's
+entire value proposition: local models should be as easy as a Docker one-liner.
+
+## What's happening under the hood
+
+Ollama wraps **llama.cpp**, a highly optimized C++ inference engine that runs
+efficiently on CPUs and consumer GPUs (including Apple Silicon), and models are
+distributed in the **GGUF** format — a single-file, quantized model format designed
+for exactly this kind of easy local distribution. When you run `ollama run llama3.1`,
+Ollama pulls a pre-quantized GGUF file (commonly 4-bit) from its model library, so an
+8B-parameter model that would need ~16GB in fp16 fits in roughly 4-5GB instead.
+
+## Using the REST API
+
+Ollama also runs a local server, so you can call it from code instead of the
+terminal:
+
+```bash
+ollama serve   # usually already running in the background after install
+```
+
+```bash
+curl http://localhost:11434/api/generate -d '{
+  "model": "llama3.1",
+  "prompt": "Why is the sky blue?",
+  "stream": false
+}'
+```
+
+This is the same pattern you'll use with production servers like vLLM later — a local
+HTTP API that any language can call — just optimized for single-user convenience
+instead of many concurrent requests.
+
+## Try it yourself
+
+You want to try three different open models this afternoon without installing any
+Python packages or managing CUDA drivers. Which tool from this phase is built exactly
+for that use case, and why would it be a poor choice if you instead needed to serve
+500 concurrent users?
+
+<details>
+<summary>Solution</summary>
+
+Ollama is built exactly for this — `ollama run <model>` for each one, with zero setup
+beyond the initial install. It would be a poor choice for 500 concurrent users because
+it's optimized for single-user local convenience, not high-throughput multi-tenant
+serving: it doesn't do the continuous batching or PagedAttention-style memory sharing
+that engines like vLLM use to serve many simultaneous requests efficiently on the same
+GPU.
+</details>

@@ -1,0 +1,99 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Jupyter Notebook"
+level: intermediate
+phaseSlug: "phase-01-python-for-ai"
+phaseName: "Python for AI"
+topicSlug: "jupyter-notebook"
+estReadTime: 8
+resources:
+  - type: docs
+    title: "IPython — Built-in magic commands"
+    url: "https://ipython.readthedocs.io/en/stable/interactive/magics.html"
+  - type: article
+    title: "JupyterLab documentation"
+    url: "https://jupyterlab.readthedocs.io/en/stable/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Magic commands: the productivity layer
+
+Cells aren't just Python — the underlying IPython kernel adds **magic commands**
+(prefixed `%` for line magics, `%%` for whole-cell magics) that solve common
+notebook-specific problems.
+
+```python
+%timeit df["price"].mean()      # benchmarks a line, runs it multiple times
+
+%%time
+model.fit(X_train, y_train)     # times a whole cell once
+
+%matplotlib inline               # render plots directly below the cell
+
+%load_ext autoreload
+%autoreload 2                    # auto-reload edited .py modules without restarting kernel
+
+!pip install scikit-learn        # ! runs a shell command directly
+```
+
+`%autoreload 2` is the one experienced practitioners reach for constantly: it lets
+you edit a `.py` file (e.g. a `model.py` with your architecture) in an editor and
+have the notebook pick up the changes on the next cell run, without restarting the
+kernel and losing your loaded data.
+
+<Mermaid client:visible code={`flowchart LR
+  Edit["Edit model.py in editor"] --> Save["Save file"]
+  Save -->|"%autoreload 2 active"| Notebook["Next cell run in notebook uses new code"]
+  Notebook -->|"no restart needed"| State["Loaded data/variables preserved"]`} />
+
+## Notebooks as the front end for experiment iteration
+
+A typical ML prototyping loop looks like:
+
+```python
+# Cell: load once, expensive
+train_ds, val_ds = load_datasets()
+
+# Cell: define model — re-run often as you tweak architecture
+model = build_model(hidden_dim=128)
+
+# Cell: train — re-run to try different hyperparameters
+history = train(model, train_ds, val_ds, lr=1e-3, epochs=5)
+
+# Cell: inspect results immediately
+import matplotlib.pyplot as plt
+plt.plot(history["val_loss"])
+```
+
+Because `train_ds`/`val_ds` stay in memory, you can tweak `build_model` or the
+learning rate and re-run just the last two cells — this fast iteration loop, not
+possible with a plain script, is the actual reason notebooks dominate early-stage
+model development.
+
+## Version control: the diff problem
+
+A `.ipynb` file is JSON containing code, markdown, *and* cell outputs (including
+base64-encoded images). Committing it to git means every run — even ones that only
+change a plot's random seed — produces a huge, unreadable diff full of output blobs.
+
+```bash
+# Strip outputs before committing, keeping the diff to just code/markdown changes
+jupyter nbconvert --clear-output --inplace notebook.ipynb
+
+# Or automate it with nbstripout so it happens on every commit automatically
+pip install nbstripout
+nbstripout --install   # registers a git filter for *.ipynb in this repo
+```
+
+Teams that version-control notebooks seriously almost always adopt `nbstripout` (or
+convert exploratory notebooks into `.py` scripts via tools like `jupytext` once the
+code stabilizes) — raw `.ipynb` diffs in a PR are close to unreviewable otherwise.
+
+## JupyterLab vs. classic Notebook vs. VS Code notebooks
+
+Today "Jupyter Notebook" usually means one of three interfaces around the same
+kernel/`.ipynb` format: classic Notebook (simple, single-document), JupyterLab
+(multi-pane IDE-like environment with file browser, terminal, multiple notebooks),
+or VS Code's built-in notebook support (same `.ipynb` format, integrated with a full
+code editor, debugger, and git). All three run the same underlying kernel — the
+choice is about tooling around it, not the notebook format itself.

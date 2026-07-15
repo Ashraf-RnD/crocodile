@@ -1,0 +1,89 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Encoder"
+level: expert
+phaseSlug: "phase-06-transformers"
+phaseName: "Transformers"
+topicSlug: "encoder"
+estReadTime: 11
+resources:
+  - type: article
+    title: "On Layer Normalization in the Transformer Architecture"
+    url: "https://arxiv.org/abs/2002.04745"
+  - type: article
+    title: "DeBERTa: Decoding-enhanced BERT with Disentangled Attention"
+    url: "https://arxiv.org/abs/2006.03654"
+---
+
+## Pre-LN vs. post-LN: a training-stability decision, not a cosmetic one
+
+The original Transformer used **post-layer-norm** — normalize *after* adding the
+sublayer output to the residual stream. This works, but empirically requires a
+careful learning-rate warmup schedule; without it, deep post-LN stacks are prone to
+training instability, because gradients at the top of a deep post-LN stack can grow
+large before normalization has a chance to rescale them.
+
+**Pre-layer-norm** — normalize the input to each sublayer, then add the (unnormalized)
+sublayer output to the residual stream — was shown (Xiong et al., 2020) to keep
+gradient magnitudes bounded near the identity function at initialization, allowing
+stable training even without warmup, and making very deep stacks (dozens of layers)
+noticeably easier to train. This is why virtually every modern Transformer
+implementation defaults to pre-LN, at a small, generally accepted cost: pre-LN
+stacks can slightly underperform a *well-tuned* post-LN stack of the same depth,
+because the unnormalized residual stream growing across layers can make the final
+representations less calibrated — some architectures add a final extra LayerNorm
+specifically to correct for this.
+
+## Bidirectionality is a strength and a hard constraint simultaneously
+
+An encoder's defining property — every token attends to every other token, including
+ones "after" it in the sequence — is precisely what makes it unsuitable for
+autoregressive generation. There's no way to use a pure bidirectional encoder to
+generate text left-to-right without leaking future tokens into the computation for
+earlier ones. This is a structural, not a training, limitation — it's why
+encoder-only models (BERT, RoBERTa, DeBERTa) are architected for
+classification/extraction tasks where the full input is known upfront, while
+generation requires either a decoder-only design or an encoder feeding a *separate*
+causally-masked decoder (as in T5/BART).
+
+## Disentangled attention and encoder-specific refinements
+
+Not every encoder innovation happens at the objective level (masked language
+modeling, discussed under BERT). **DeBERTa** modifies the encoder's attention
+computation itself: instead of encoding position by adding a positional vector to
+the content embedding (conflating content and position into one vector before
+attention), DeBERTa keeps content and relative-position representations **separate**
+and computes attention scores as a sum of content-to-content, content-to-position,
+and position-to-content terms. This disentanglement measurably improved downstream
+task performance over RoBERTa at comparable scale — evidence that even within the
+"encoder" architectural family, there's meaningful room for attention-mechanism
+refinement beyond just stacking more standard layers.
+
+## Encoder depth/width scaling and diminishing returns
+
+Encoder-only pretraining scaling (BERT-base → BERT-large → later encoder scaling
+work) shows the now-familiar pattern: performance improves with scale, but not
+indefinitely for free — beyond a certain depth, additional encoder layers show
+diminishing per-layer marginal improvement on standard benchmarks (GLUE/SuperGLUE),
+and larger encoders quickly become dominated in cost-effectiveness by
+parameter-efficient approaches (ELECTRA's replaced-token-detection pretraining,
+DeBERTa's disentangled attention) that squeeze more signal per pretraining FLOP
+rather than purely scaling depth or width.
+
+## Trade-off summary
+
+| Design choice | Pre-LN | Post-LN |
+|---|---|---|
+| Training stability at depth | High — trains without careful warmup | Lower — often needs learning-rate warmup |
+| Final representation calibration | Slightly less calibrated (often needs a final LayerNorm) | More calibrated by construction |
+| Adoption in modern encoders/decoders | Default (BERT variants after ~2020, GPT-2+, LLaMA) | Original Transformer, original BERT |
+
+## The practical engineering takeaway
+
+Treating "the encoder" as a fixed, settled architecture undersells how much
+production-relevant refinement has happened inside it — normalization placement
+(pre- vs. post-LN), how position is fused into attention (additive vs. disentangled),
+and pretraining objective choice (MLM vs. replaced-token detection) all meaningfully
+move the needle on downstream task quality per unit of pretraining compute, even
+though the high-level "stack of self-attention + feed-forward blocks" story stays the
+same across all of them.

@@ -1,0 +1,110 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "LangChain"
+level: intermediate
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "langchain"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "LangChain — Tool Calling"
+    url: "https://python.langchain.com/docs/how_to/tool_calling/"
+  - type: docs
+    title: "LangChain — Structured Output"
+    url: "https://python.langchain.com/docs/how_to/structured_output/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Structured output through a chain
+
+`with_structured_output` binds a Pydantic model to a chat model so the chain returns
+a validated object, not raw text — the same guarantee covered in the Structured Output
+lesson, expressed as an LCEL-composable step:
+
+```python
+from pydantic import BaseModel, Field
+from langchain_openai import ChatOpenAI
+
+class MovieReview(BaseModel):
+    title: str
+    rating: int = Field(description="1-5 stars")
+    recommended: bool
+
+model = ChatOpenAI(model="gpt-4o-mini")
+structured_model = model.with_structured_output(MovieReview)
+
+chain = prompt | structured_model
+result = chain.invoke({"review_text": "Loved it — 5 stars, would recommend to anyone."})
+print(result.rating, result.recommended)  # 5 True — a real MovieReview instance, not a string
+```
+
+## Tool calling and building a simple agent
+
+LangChain wraps the function-calling loop into `create_react_agent` (via LangGraph
+under the hood, in current versions) so you don't hand-roll it:
+
+```python
+from langchain_core.tools import tool
+from langgraph.prebuilt import create_react_agent
+
+@tool
+def get_stock_price(ticker: str) -> float:
+    """Get the current stock price for a ticker symbol."""
+    return 189.43  # pretend API call
+
+agent = create_react_agent(model="gpt-4o-mini", tools=[get_stock_price])
+result = agent.invoke({"messages": [{"role": "user", "content": "What's Apple's stock price?"}]})
+print(result["messages"][-1].content)
+```
+
+The `@tool` decorator turns a plain typed Python function into a LangChain tool,
+deriving its schema from the function signature and docstring — the same
+schema-from-code pattern covered in the Function Calling lesson.
+
+## Retrieval chains (RAG) with LCEL
+
+Composing retrieval into a chain follows the same pipe pattern as everything else in
+LangChain — a retriever is just another step whose output feeds the prompt:
+
+```python
+from langchain_community.vectorstores import Chroma
+from langchain_openai import OpenAIEmbeddings
+from langchain_core.runnables import RunnablePassthrough
+
+vectorstore = Chroma.from_documents(documents, OpenAIEmbeddings())
+retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
+
+rag_prompt = ChatPromptTemplate.from_template(
+    "Answer using only this context:\n{context}\n\nQuestion: {question}"
+)
+
+def format_docs(docs):
+    return "\n\n".join(d.page_content for d in docs)
+
+rag_chain = (
+    {"context": retriever | format_docs, "question": RunnablePassthrough()}
+    | rag_prompt
+    | model
+    | StrOutputParser()
+)
+print(rag_chain.invoke("What is our refund policy?"))
+```
+
+<Mermaid client:visible code={`flowchart LR
+  Q[Question] --> R[Retriever]
+  Q --> P[RunnablePassthrough]
+  R --> F[format_docs]
+  F --> Prompt[RAG prompt]
+  P --> Prompt
+  Prompt --> Model[Chat model]
+  Model --> Out[Answer]`} />
+
+## Why LCEL composition matters beyond convenience
+
+Every LCEL chain automatically supports `.invoke()`, `.stream()`, and `.batch()`
+without extra code — streaming a RAG answer token-by-token to a UI, or batching 100
+questions concurrently, works out of the box on any chain built this way. This is the
+practical payoff of standardized composition: capabilities like streaming and batching
+are implemented once, in the framework, and apply uniformly to every chain you build
+on top of it, instead of being reimplemented per use case.

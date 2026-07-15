@@ -1,0 +1,82 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Retrieval"
+level: beginner
+phaseSlug: "phase-08-retrieval-augmented-generation"
+phaseName: "Retrieval-Augmented Generation"
+topicSlug: "retrieval"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "LangChain — Retrievers concept guide"
+    url: "https://python.langchain.com/docs/concepts/retrievers/"
+  - type: video
+    title: "What is Retrieval Augmented Generation (RAG)?"
+    url: "https://www.youtube.com/watch?v=T-D1OfcDW1M"
+---
+
+## Finding the right needle before answering
+
+An LLM only knows what was in its training data — it doesn't know your company's
+internal docs, today's news, or your personal notes. **Retrieval** is the step that
+fixes this: given a user's question, search a collection of documents and pull out the
+pieces most likely to contain the answer, *before* asking the LLM to respond. That's
+the "R" in RAG (Retrieval-Augmented Generation).
+
+The basic recipe is: embed the question, embed all the documents (once, ahead of
+time), and return whichever documents are closest to the question in embedding space.
+
+## A minimal retrieval loop
+
+```python
+from sentence_transformers import SentenceTransformer, util
+
+model = SentenceTransformer("all-MiniLM-L6-v2")
+
+documents = [
+    "Our refund policy allows returns within 30 days of purchase.",
+    "To reset your password, go to Settings and click Forgot Password.",
+    "Standard shipping takes 5-7 business days within the US.",
+]
+doc_vectors = model.encode(documents)
+
+def retrieve(query, top_k=2):
+    query_vector = model.encode(query)
+    scores = util.cos_sim(query_vector, doc_vectors)[0]
+    top_results = scores.topk(top_k)
+    return [(documents[i], scores[i].item()) for i in top_results.indices]
+
+results = retrieve("How long do I have to return something?")
+for doc, score in results:
+    print(f"{score:.2f}  {doc}")
+```
+
+The output ranks the refund policy sentence first, even though the query says "return
+something" and the document says "returns" — that's semantic retrieval working as
+intended, matching by meaning rather than exact words.
+
+## From this toy example to a real system
+
+At scale, you don't compare a query against every document one by one (that's `O(n)`
+per query, too slow for millions of documents) — you store document vectors in a
+**vector database** that builds an index for fast approximate nearest-neighbor search.
+The core idea is identical to the loop above; a vector database just makes it fast at
+scale.
+
+## Try it yourself
+
+Add a fourth document, `"Contact support at help@example.com for any issues."`, to the
+list above. If a user asks `"I want my money back"`, which document should rank
+highest, and why does semantic retrieval (versus plain keyword search) make that
+possible even though no words overlap?
+
+<details>
+<summary>Solution</summary>
+
+The refund policy document should rank highest — "I want my money back" and "refund
+policy... returns" share essentially zero exact words, but they express the same
+underlying intent (getting money returned for a purchase). Keyword search (matching
+literal terms like "money" or "back") would likely miss this connection entirely or
+rank it no higher than unrelated documents; semantic retrieval works because the
+embedding model captures *meaning*, not just vocabulary overlap.
+</details>

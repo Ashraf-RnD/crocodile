@@ -1,0 +1,112 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Qdrant"
+level: expert
+phaseSlug: "phase-08-retrieval-augmented-generation"
+phaseName: "Retrieval-Augmented Generation"
+topicSlug: "qdrant"
+estReadTime: 13
+resources:
+  - type: docs
+    title: "Qdrant — Quantization"
+    url: "https://qdrant.tech/documentation/guides/quantization/"
+  - type: docs
+    title: "Qdrant — Distributed deployment"
+    url: "https://qdrant.tech/documentation/guides/distributed_deployment/"
+---
+
+## HNSW under the hood, and what its parameters actually trade off
+
+Qdrant's default index is **HNSW** (Hierarchical Navigable Small World) — a
+multi-layer graph structure where search starts at a sparse top layer and descends
+through progressively denser layers, greedily walking toward the query. Two
+construction parameters control the core recall/speed/memory trade-off:
+
+```python
+from qdrant_client.models import VectorParams, HnswConfigDiff, Distance
+
+client.create_collection(
+    collection_name="docs",
+    vectors_config=VectorParams(size=1536, distance=Distance.COSINE),
+    hnsw_config=HnswConfigDiff(
+        m=16,              # edges per node — higher = better recall, more memory
+        ef_construct=200,  # candidate list size at build time — higher = better graph, slower build
+    ),
+)
+# ef (search-time candidate list size) is set per query, trading query latency for recall
+results = client.query_points(collection_name="docs", query=vec, limit=10, search_params={"hnsw_ef": 128})
+```
+
+`m` and `ef_construct` are paid once, at index-build time; `hnsw_ef` is paid per query
+and is the lever to tune when you need to trade query latency against recall without
+rebuilding the index — a higher `hnsw_ef` explores more of the graph per query,
+improving recall at the cost of latency.
+
+## Quantization: the memory/recall trade-off at scale
+
+Storing raw float32 vectors gets expensive fast — 1M vectors at 1536 dimensions is
+~6GB before any index overhead. Qdrant supports quantization to shrink this:
+
+```python
+from qdrant_client.models import ScalarQuantization, ScalarQuantizationConfig, ScalarType
+
+client.create_collection(
+    collection_name="docs",
+    vectors_config=VectorParams(size=1536, distance=Distance.COSINE),
+    quantization_config=ScalarQuantization(
+        scalar=ScalarQuantizationConfig(type=ScalarType.INT8, quantile=0.99, always_ram=True),
+    ),
+)
+```
+
+Scalar quantization (float32 → int8) cuts memory ~4x with a small, usually acceptable
+recall hit; binary quantization goes further (~32x) at a steeper recall cost, and is
+best paired with a rescoring step against original float vectors for the final
+top-k — Qdrant supports this natively via `oversampling`, quantized search for speed,
+then a precise rescore on a slightly larger candidate set to recover accuracy.
+
+## Distributed Qdrant: sharding and replication trade-offs
+
+At a scale beyond a single node's memory, Qdrant shards a collection across nodes and
+replicates shards for availability:
+
+| Configuration | Behavior | Trade-off |
+|---|---|---|
+| Single shard, no replication | Simplest; one node holds everything | No horizontal scale, no fault tolerance |
+| Multiple shards, no replication | Distributes vectors and query load across nodes | Loses data (not just availability) if a shard's node fails |
+| Multiple shards, replication factor ≥2 | Each shard has redundant copies on different nodes | Higher storage/compute cost, but survives node failure without data loss |
+
+Sharding strategy also interacts with filtering: Qdrant's default sharding is
+consistent-hash-based (even distribution, no control over which vectors land where),
+but **custom sharding by payload key** (e.g. shard by `tenant_id`) lets a filtered
+query targeting one tenant hit only the relevant shard instead of scattering across
+the whole cluster — a meaningful latency win for multi-tenant RAG systems at the cost
+of needing to choose the shard key correctly upfront, since resharding an existing
+collection is a heavier operation than adjusting other config.
+
+## Filterable HNSW and the cost of restrictive filters
+
+Naively, combining ANN search with a filter risks a bad outcome: if the filter
+excludes most of the collection, HNSW's graph traversal can struggle to find enough
+matching neighbors, degrading effectively to a broader scan. Qdrant mitigates this
+with a filterable HNSW implementation that incorporates payload filtering into graph
+traversal itself rather than filtering after retrieval — but very restrictive filters
+(a filter matching under 1% of the collection) still cost more than permissive ones, and
+in the most restrictive cases Qdrant may fall back to a full scan of matching points,
+which is actually *correct and fast enough* on small filtered subsets despite skipping
+the ANN index entirely. Understanding this matters for capacity planning: a
+multi-tenant system with thousands of tenants and highly selective per-tenant filters
+has fundamentally different indexing needs (favoring custom sharding by tenant) than
+one with broad, low-selectivity filters.
+
+## Operational trade-off: managed vs. self-hosted at scale
+
+Running Qdrant yourself at scale means owning HNSW parameter tuning, quantization
+configuration, shard/replica topology, backup and disaster recovery, and version
+upgrades — real, ongoing operational surface area, not a one-time setup cost. Qdrant
+Cloud absorbs this at a per-node price premium. The crossover point where self-hosting
+becomes worth the operational investment is typically when a team has both the SRE
+capacity to own it *and* a strong reason (data residency, cost at very large scale, or
+tight integration with existing infrastructure) — for most teams below that scale, the
+managed offering is the better default, mirroring the same build-vs-buy calculus as
+any other stateful infrastructure component.

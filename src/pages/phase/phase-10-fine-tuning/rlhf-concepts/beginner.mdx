@@ -1,0 +1,83 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "RLHF Concepts"
+level: beginner
+phaseSlug: "phase-10-fine-tuning"
+phaseName: "Fine-tuning"
+topicSlug: "rlhf-concepts"
+estReadTime: 7
+resources:
+  - type: article
+    title: "Hugging Face — Illustrating Reinforcement Learning from Human Feedback"
+    url: "https://huggingface.co/blog/rlhf"
+  - type: video
+    title: "RLHF explained (visually)"
+    url: "https://www.youtube.com/watch?v=2MBJOuVq380"
+---
+
+## Teaching a model to prefer better answers
+
+[Supervised Fine-Tuning](/phase/phase-10-fine-tuning/supervised-fine-tuning/beginner)
+teaches a model to imitate example answers. But often you don't have one "correct"
+answer — you have several *okay* answers and want the model to learn which ones are
+*better*. That's what **RLHF (Reinforcement Learning from Human Feedback)** is for.
+
+Think of training a dog. You don't just show it the "right" way to sit once — you give
+a treat every time it does something closer to what you want, and no treat (or a
+correction) when it doesn't. Over many rounds, it learns to prefer the rewarded
+behavior. RLHF does the same thing for language models: humans rank multiple model
+responses, that ranking trains a "reward model" that predicts which responses humans
+would prefer, and then the language model is optimized to produce responses that score
+higher on that reward model.
+
+### The three-stage pipeline
+
+1. **Start with an SFT model** — already knows how to follow instructions reasonably
+   well.
+2. **Train a reward model** — humans compare pairs of responses ("Response A is better
+   than Response B"), and a separate model learns to predict this preference as a
+   score.
+3. **Optimize the language model against the reward model** — using reinforcement
+   learning (typically PPO), the model is nudged to produce responses the reward model
+   scores highly, while a penalty keeps it from drifting too far from its original
+   behavior.
+
+```python
+# Conceptual sketch, not a runnable script:
+response_a = model.generate(prompt)
+response_b = model.generate(prompt)
+
+# A human (or a trained reward model standing in for one) picks the better one
+preferred = human_labeler.compare(response_a, response_b)  # "A" or "B"
+
+# The reward model learns from many such comparisons
+reward_model.train_on_preference(response_a, response_b, preferred)
+
+# The language model is then optimized to produce higher-reward responses
+```
+
+### Why not just use more SFT examples?
+
+Ranking two responses ("A is better than B") is often much easier and cheaper for a
+human than writing a perfect response from scratch. RLHF lets you scale up the
+*quality signal* — "which of these is better" — without needing a human to author every
+ideal answer by hand.
+
+## Try it yourself
+
+You're building a customer support bot and have two candidate replies to the same
+question. What's an easier data-collection task: asking a human to rank which reply is
+better, or asking a human to write the ideal reply from scratch? Why does that
+difference matter for RLHF?
+
+<details>
+<summary>Solution</summary>
+
+Ranking is almost always easier and faster — a human can usually tell which of two
+replies is better in a few seconds, but writing a perfect reply from scratch takes much
+longer and requires more expertise. This is exactly why RLHF (and preference-based
+methods more broadly) can scale to far more feedback than SFT alone: you can collect
+many more preference judgments than hand-written ideal answers for the same labeling
+budget.
+
+</details>

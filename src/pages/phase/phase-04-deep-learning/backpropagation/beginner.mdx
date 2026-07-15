@@ -1,0 +1,89 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Backpropagation"
+level: beginner
+phaseSlug: "phase-04-deep-learning"
+phaseName: "Deep Learning"
+topicSlug: "backpropagation"
+estReadTime: 7
+resources:
+  - type: video
+    title: "3Blue1Brown — What is Backpropagation Really Doing?"
+    url: "https://www.youtube.com/watch?v=Ilg3gGewQ5U"
+  - type: docs
+    title: "PyTorch — Neural Networks tutorial"
+    url: "https://pytorch.org/tutorials/beginner/blitz/neural_networks_tutorial.html"
+---
+
+## Passing the blame backward
+
+Imagine a relay race where the final runner drops the baton. To figure out what went
+wrong, you'd trace backward: did the last handoff fail, or did it start further back
+with the second runner? **Backpropagation** does this for neural networks — it
+figures out how much each layer (and each individual weight) is "to blame" for the
+final error, by working backward from the output to the input, one layer at a time.
+
+Mathematically, this "blame assignment" is just repeated application of the **chain
+rule** from calculus. Backpropagation is the algorithm; autograd (covered separately)
+is what actually implements it in PyTorch so you never have to do it by hand.
+
+### A tiny network, done manually
+
+```python
+import torch
+
+# a 1-input, 1-output "network": y = w2 * relu(w1 * x)
+x = torch.tensor(2.0)
+w1 = torch.tensor(0.5, requires_grad=True)
+w2 = torch.tensor(1.5, requires_grad=True)
+target = torch.tensor(5.0)
+
+# forward pass
+hidden = torch.relu(w1 * x)
+output = w2 * hidden
+loss = (output - target) ** 2
+
+# backward pass: PyTorch propagates the error back through both layers
+loss.backward()
+
+print(w1.grad)   # how much loss would change if w1 changed slightly
+print(w2.grad)   # how much loss would change if w2 changed slightly
+```
+
+Each `.grad` tells you the direction and size of the "blame" for that weight — and
+`optimizer.step()` uses exactly this to nudge weights in the direction that reduces
+the loss.
+
+### The big picture
+
+1. **Forward pass**: input flows through the network, layer by layer, producing a
+   prediction.
+2. **Loss**: compare the prediction to the true answer — how wrong were we?
+3. **Backward pass**: propagate that error backward through every layer, computing
+   how much each weight contributed to it.
+4. **Update**: nudge every weight slightly in the direction that reduces the error.
+
+Repeat thousands of times, and the network gradually gets better.
+
+### Try it yourself
+
+Given `w = torch.tensor(3.0, requires_grad=True)`, `x = torch.tensor(4.0)`, and
+`target = torch.tensor(10.0)`, compute `loss = (w * x - target) ** 2`, backpropagate,
+and print `w.grad`.
+
+<details>
+<summary>Solution</summary>
+
+```python
+import torch
+
+w = torch.tensor(3.0, requires_grad=True)
+x = torch.tensor(4.0)
+target = torch.tensor(10.0)
+
+loss = (w * x - target) ** 2
+loss.backward()
+print(w.grad)   # tensor(16.) -> d/dw (wx - target)^2 = 2(wx-target)*x = 2(2)(4) = 16
+```
+
+</details>

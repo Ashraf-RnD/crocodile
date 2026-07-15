@@ -1,0 +1,95 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Multi-Agent Systems"
+level: intermediate
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "multi-agent-systems"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "LangGraph — Supervisor Pattern"
+    url: "https://langchain-ai.github.io/langgraph/tutorials/multi_agent/agent_supervisor/"
+  - type: article
+    title: "Anthropic — Multi-Agent Research System"
+    url: "https://www.anthropic.com/engineering/multi-agent-research-system"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Common coordination topologies
+
+Multi-agent systems differ mainly in *how* agents are coordinated:
+
+- **Supervisor (orchestrator-worker)** — one agent decides which specialized agent to
+  invoke next, based on the task; workers report back to the supervisor, never to
+  each other directly.
+- **Sequential pipeline** — a fixed order (research → draft → review), each agent's
+  output is the next one's input, no dynamic routing.
+- **Peer-to-peer / debate** — agents communicate directly with each other, often used
+  for tasks that benefit from multiple perspectives converging (critique loops,
+  adversarial review).
+
+<Mermaid client:visible code={`flowchart TB
+  subgraph Supervisor["Supervisor pattern"]
+    S[Supervisor] --> W1[Worker A]
+    S --> W2[Worker B]
+    W1 --> S
+    W2 --> S
+  end`} />
+
+The supervisor pattern is the most common in production because it keeps a single
+point of control and observability — every hand-off passes through the supervisor,
+which makes debugging and guardrails (max steps, cost budgets) much easier to enforce
+than a fully peer-to-peer mesh.
+
+## Implementing a supervisor with LangGraph
+
+```python
+from langgraph.graph import StateGraph, END, MessagesState
+from langgraph_supervisor import create_supervisor
+from langchain.chat_models import init_chat_model
+
+research_agent = create_react_agent(
+    model="gpt-4o-mini", tools=[search_tool], name="researcher",
+    prompt="You research topics and return concise factual findings."
+)
+writer_agent = create_react_agent(
+    model="gpt-4o-mini", tools=[], name="writer",
+    prompt="You write polished prose from research findings."
+)
+
+supervisor = create_supervisor(
+    agents=[research_agent, writer_agent],
+    model=init_chat_model("gpt-4o"),
+    prompt="Route research tasks to 'researcher' and writing tasks to 'writer'. Combine their outputs into a final answer.",
+).compile()
+
+result = supervisor.invoke({"messages": [{"role": "user", "content": "Write a short piece on the history of tea."}]})
+```
+
+The supervisor model itself decides, turn by turn, which named agent to route to next
+— it's a specialized case of the tool-calling loop where each "tool" is actually
+another full agent rather than a single function.
+
+## Shared state vs. isolated context
+
+A key design decision: do sub-agents see the full conversation history, or only the
+specific task handed to them? Passing full history gives sub-agents more context but
+risks each one being distracted by information irrelevant to its narrow job (and
+burns more tokens); passing only the isolated task keeps each agent focused but can
+lose useful context a downstream agent might have benefited from. Most production
+systems default to **isolated context per sub-agent** (pass only what's needed for
+that agent's specific task) precisely because it keeps each agent's decisions
+grounded in what's relevant to it, mirroring the context-management principle that
+more context isn't automatically better.
+
+## When multi-agent is worth the added complexity
+
+Splitting into multiple agents adds real overhead: more model calls (cost and
+latency), a coordination layer that can itself fail, and harder end-to-end debugging.
+It's worth it when sub-tasks genuinely benefit from different tools, different system
+prompts, or parallel execution — a single well-scoped agent with a good tool set is
+usually simpler, cheaper, and more reliable than a multi-agent system for tasks that
+don't actually decompose into meaningfully distinct roles. Reach for multi-agent
+architecture when a single agent's context or tool set would otherwise become
+unmanageably broad, not by default.

@@ -1,0 +1,94 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Python Advanced"
+level: expert
+phaseSlug: "phase-01-python-for-ai"
+phaseName: "Python for AI"
+topicSlug: "python-advanced"
+estReadTime: 12
+resources:
+  - type: docs
+    title: "CPython — Data model reference"
+    url: "https://docs.python.org/3/reference/datamodel.html"
+  - type: article
+    title: "Python's GIL and the multiprocessing module"
+    url: "https://docs.python.org/3/library/multiprocessing.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The GIL and why AI code reaches for multiprocessing, not threading
+
+CPython's Global Interpreter Lock means only one thread executes Python bytecode at a
+time, even on multi-core machines. This is why data-loading pipelines (`DataLoader(num_workers=4)`)
+use **separate processes**, not threads, to parallelize CPU-bound preprocessing —
+threads would contend for the GIL and gain nothing on CPU-bound work.
+
+<Mermaid client:visible code={`flowchart TB
+  subgraph Threads ["Threading (CPU-bound work)"]
+    T1[Thread 1] -.blocked by GIL.-> T2[Thread 2]
+  end
+  subgraph Processes ["Multiprocessing"]
+    P1[Process 1 - own GIL] --- P2[Process 2 - own GIL]
+  end
+  Threads -->|no real parallelism| Slow[Same speed as 1 thread]
+  Processes -->|true parallelism| Fast[N-way speedup]`} />
+
+Note: threading still helps for I/O-bound work (HTTP calls to an LLM API) because the
+GIL is released during I/O waits — this is why `asyncio` and thread pools are fine for
+concurrent API calls but useless for CPU-bound tensor math in pure Python.
+
+## Descriptors: what actually powers `@property` and ORMs
+
+A descriptor is any object implementing `__get__`/`__set__`. `@property` is a thin
+wrapper around this protocol, and it's exactly how Pydantic/SQLAlchemy fields validate
+on assignment:
+
+```python
+class TypedField:
+    def __init__(self, expected_type):
+        self.expected_type = expected_type
+
+    def __set_name__(self, owner, name):
+        self.name = f"_{name}"
+
+    def __get__(self, obj, objtype=None):
+        return getattr(obj, self.name, None)
+
+    def __set__(self, obj, value):
+        if not isinstance(value, self.expected_type):
+            raise TypeError(f"{value!r} is not {self.expected_type}")
+        setattr(obj, self.name, value)
+
+class Config:
+    learning_rate = TypedField(float)
+
+c = Config()
+c.learning_rate = 0.01     # OK
+c.learning_rate = "fast"   # raises TypeError
+```
+
+## `__slots__` for memory-critical batch objects
+
+When you instantiate millions of small objects (e.g. token/example wrappers in a
+preprocessing pass), the default per-instance `__dict__` costs real memory. `__slots__`
+trades flexibility for a fixed, denser layout:
+
+```python
+class Token:
+    __slots__ = ("text", "id")
+
+    def __init__(self, text, id):
+        self.text = text
+        self.id = id
+```
+
+This alone can cut memory per instance by roughly 40-50% at the cost of losing dynamic
+attribute assignment and multiple inheritance with other `__slots__` classes.
+
+## Trade-off summary
+
+| Technique | Gains | Costs |
+|---|---|---|
+| `multiprocessing` over `threading` | True CPU parallelism | Serialization overhead (pickling), higher memory |
+| Descriptors (`__get__`/`__set__`) | Centralized validation logic | Harder to debug than plain attributes |
+| `__slots__` | Lower memory, faster attribute access | No dynamic attrs, inheritance constraints |

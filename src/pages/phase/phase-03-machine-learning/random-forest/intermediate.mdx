@@ -1,0 +1,127 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Random Forest"
+level: intermediate
+phaseSlug: "phase-03-machine-learning"
+phaseName: "Machine Learning"
+topicSlug: "random-forest"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "scikit-learn: RandomForestClassifier"
+    url: "https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.RandomForestClassifier.html"
+  - type: article
+    title: "scikit-learn: Feature importances with a forest of trees"
+    url: "https://scikit-learn.org/stable/auto_examples/ensemble/plot_forest_importances.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Intermediate: Random Forest
+
+A random forest gets its power from two independent sources of randomness that work together
+to decorrelate its trees. Understanding both is the key to tuning it well.
+
+### Bagging: bootstrap aggregating
+
+Each tree is trained on a **bootstrap sample** — a sample of size `n` drawn *with
+replacement* from the `n` training rows. On average, about 63% of the original rows appear in
+any given bootstrap sample (some multiple times), and the remaining ~37% are left out
+entirely. Training many trees on different bootstrap samples and aggregating their predictions
+(majority vote for classification, mean for regression) is called **bagging**.
+
+### Random feature subsampling
+
+Bagging alone still produces fairly correlated trees, because if one feature is a strong
+predictor, most bootstrap samples will pick it for the first split. Random forests add a
+second layer of randomness: at every split, only a random subset of features (controlled by
+`max_features`) is considered as a candidate. This forces trees to occasionally split on
+weaker features, producing a more diverse ensemble.
+
+<Mermaid client:visible code={`flowchart LR
+  D[Training data] -->|bootstrap sample 1| T1[Tree 1]
+  D -->|bootstrap sample 2| T2[Tree 2]
+  D -->|bootstrap sample N| T3[Tree N]
+  T1 --> V[Majority vote / average]
+  T2 --> V
+  T3 --> V`} />
+
+Together, bagging and feature subsampling decorrelate the trees. Averaging predictions from
+correlated trees still leaves correlated errors; averaging predictions from decorrelated trees
+cancels out more noise, which is why both mechanisms matter.
+
+### Out-of-bag evaluation
+
+Because each tree only sees ~63% of the rows, the other ~37% ("out-of-bag" rows) act as a free
+held-out set for that tree. scikit-learn can aggregate these OOB predictions across all trees
+to estimate generalization error without a separate validation split:
+
+```python
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.datasets import load_breast_cancer
+
+X, y = load_breast_cancer(return_X_y=True)
+
+forest = RandomForestClassifier(
+    n_estimators=300,
+    oob_score=True,
+    n_jobs=-1,
+    random_state=0,
+)
+forest.fit(X, y)
+print(forest.oob_score_)
+```
+
+OOB score is a reasonable proxy for cross-validation accuracy on medium-to-large datasets and
+is essentially free — no extra training runs needed. It's not a full replacement for a proper
+train/test split or CV when you need to tune hyperparameters, since the OOB estimate is
+computed on the same model you're evaluating.
+
+### Key hyperparameters
+
+- `n_estimators` — number of trees. More trees reduce variance and stabilize predictions but
+  increase training and inference time; returns diminish well before 1000 in most cases.
+- `max_depth` / `min_samples_leaf` — control how deep individual trees grow. Random forests
+  are usually built from deep, low-bias trees (bagging handles the variance), but capping
+  depth or raising `min_samples_leaf` still helps on noisy data and shrinks model size.
+- `max_features` — how many features are considered per split (`"sqrt"` is a common default
+  for classification). Lower values decorrelate trees more but can raise per-tree bias.
+- `n_jobs=-1` — trees are trained independently, so fitting parallelizes trivially across
+  CPU cores.
+
+```python
+forest = RandomForestClassifier(
+    n_estimators=500,
+    max_depth=None,
+    min_samples_leaf=2,
+    max_features="sqrt",
+    n_jobs=-1,
+    random_state=0,
+)
+forest.fit(X, y)
+```
+
+### Feature importance
+
+```python
+import numpy as np
+
+importances = forest.feature_importances_
+top5 = np.argsort(importances)[::-1][:5]
+print(top5, importances[top5])
+```
+
+`feature_importances_` (mean decrease in impurity, MDI) is convenient but biased toward
+high-cardinality and continuous features, since they offer more possible split points and so
+tend to reduce impurity more often just by chance. For a more trustworthy ranking, prefer
+`sklearn.inspection.permutation_importance`, which measures the actual drop in model
+performance when a feature's values are shuffled.
+
+### Common pitfalls
+
+- **Inflated MDI importance** for high-cardinality categorical or ID-like columns — drop or
+  hash these before trusting `feature_importances_`, or switch to permutation importance.
+- **Memory and inference cost**: hundreds of deep trees mean a large serialized model and
+  slower single-prediction latency compared to a linear model or a single tree — every
+  prediction has to traverse every tree.
+- **Extrapolation**: like any tree-based model, random forests can't predict outside the range
+  of target values seen in training, which matters for regression on trending data.

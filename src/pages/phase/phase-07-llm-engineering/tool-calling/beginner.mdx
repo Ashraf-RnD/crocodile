@@ -1,0 +1,99 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Tool Calling"
+level: beginner
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "tool-calling"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "Anthropic — Tool Use Overview"
+    url: "https://docs.anthropic.com/en/docs/build-with-claude/tool-use/overview"
+  - type: article
+    title: "ReAct: Synergizing Reasoning and Acting in Language Models"
+    url: "https://arxiv.org/abs/2210.03629"
+---
+
+## Think of "tools" as the whole toolbox, not one function
+
+**Function calling** (a separate lesson) is the underlying API mechanism — one
+function, one schema, one call. **Tool calling** is the bigger idea: giving a model a
+whole *toolbox* — a calculator, a search engine, a calendar, a database lookup — and
+letting it choose which tool to reach for, in what order, to accomplish a goal that
+might take several steps.
+
+### A model using more than one tool to answer a question
+
+```python
+from openai import OpenAI
+import json
+
+client = OpenAI()
+
+tools = [
+    {"type": "function", "function": {
+        "name": "search_web",
+        "description": "Search the web for current information",
+        "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+    }},
+    {"type": "function", "function": {
+        "name": "calculate",
+        "description": "Evaluate a math expression",
+        "parameters": {"type": "object", "properties": {"expression": {"type": "string"}}, "required": ["expression"]},
+    }},
+]
+
+def search_web(query):
+    return "The current price of gold is $2,650/oz."  # pretend search
+
+def calculate(expression):
+    return eval(expression)  # toy example only — never eval untrusted input in production
+
+TOOLBOX = {"search_web": search_web, "calculate": calculate}
+
+messages = [{"role": "user", "content": "If gold is at its current price, what's the cost of 3.5 oz?"}]
+response = client.chat.completions.create(model="gpt-4o-mini", messages=messages, tools=tools)
+msg = response.choices[0].message
+messages.append(msg)
+
+for call in msg.tool_calls:
+    fn = TOOLBOX[call.function.name]
+    args = json.loads(call.function.arguments)
+    result = fn(**args)
+    messages.append({"role": "tool", "tool_call_id": call.id, "content": str(result)})
+
+final = client.chat.completions.create(model="gpt-4o-mini", messages=messages, tools=tools)
+print(final.choices[0].message.content)
+```
+
+Here the model first calls `search_web` to learn the price, *then* calls `calculate`
+to do the multiplication — deciding the sequence itself. That chaining of tool calls is
+what separates "tool calling" as a practice from a single function call.
+
+### The mental model: think, act, observe, repeat
+
+This pattern — the model thinks about what it needs, picks a tool, sees the result,
+and decides what to do next — is called **ReAct** (Reason + Act), and it underlies
+almost every tool-using AI system you'll build or use.
+
+### Try it yourself
+
+You're building an assistant with two tools: `get_stock_price(ticker)` and
+`convert_currency(amount, from_currency, to_currency)`. A user asks: "What's Apple's
+stock price in euros?" Describe, in plain English, the sequence of tool calls the
+model should make.
+
+<details>
+<summary>Solution</summary>
+
+1. Call `get_stock_price(ticker="AAPL")` to get the price in USD.
+2. Call `convert_currency(amount=<price>, from_currency="USD", to_currency="EUR")`
+   using the result from step 1.
+3. Respond to the user with the converted price.
+
+The key insight: the second tool call *depends on the result* of the first — the model
+has to actually read the first tool's output before it can construct the second call's
+arguments correctly.
+
+</details>

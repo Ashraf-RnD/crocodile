@@ -1,0 +1,86 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "LSTM"
+level: expert
+phaseSlug: "phase-04-deep-learning"
+phaseName: "Deep Learning"
+topicSlug: "lstm"
+estReadTime: 12
+resources:
+  - type: article
+    title: "Long Short-Term Memory (Hochreiter & Schmidhuber, original paper)"
+    url: "https://www.bioinf.jku.at/publications/older/2604.pdf"
+  - type: article
+    title: "LSTM: A Search Space Odyssey (empirical gate ablation study)"
+    url: "https://arxiv.org/abs/1503.04069"
+---
+
+## The gate equations and why the cell state solves vanishing gradients
+
+At each step, an LSTM computes:
+
+```
+f_t = sigmoid(W_f · [h_{t-1}, x_t] + b_f)     # forget gate
+i_t = sigmoid(W_i · [h_{t-1}, x_t] + b_i)     # input gate
+c~_t = tanh(W_c · [h_{t-1}, x_t] + b_c)       # candidate cell content
+c_t = f_t * c_{t-1} + i_t * c~_t               # cell state update — additive
+o_t = sigmoid(W_o · [h_{t-1}, x_t] + b_o)     # output gate
+h_t = o_t * tanh(c_t)
+```
+
+The critical line is `c_t = f_t * c_{t-1} + i_t * c~_t`: the cell state update is
+**additive**, not a repeated matrix multiplication like a vanilla RNN's hidden
+state. When you backpropagate through this, `dc_t/dc_{t-1} = f_t` — a value the
+network can learn to keep close to 1 (by learning to open the forget gate), letting
+gradients flow across many time steps with minimal decay. This is the actual
+mechanism, not a heuristic: the additive path around the multiplicative recurrence
+gives LSTMs an approximately unimpeded gradient highway that vanilla RNNs lack by
+construction.
+
+## Peephole connections and other structural variants
+
+The original LSTM's gates only see `h_{t-1}` and `x_t`, not the cell state itself.
+**Peephole LSTMs** let gates also read `c_{t-1}` directly, theoretically enabling
+more precise timing decisions (useful for tasks sensitive to exact counting/timing).
+In practice, the large-scale empirical study "LSTM: A Search Space Odyssey" found
+peepholes provide negligible benefit across most tasks — one of several LSTM
+variants (coupled forget/input gates, full gate recurrence) that theory suggested
+should help but that empirical ablation showed largely don't matter versus the
+standard formulation, informing why vanilla LSTM/GRU remain the practical defaults.
+
+## Parameter and compute cost vs. GRU
+
+An LSTM has 4 gate/candidate computations per step (forget, input, candidate,
+output), each a full `[hidden+input] x hidden` weight matrix — `4 * (hidden_dim *
+(input_dim + hidden_dim) + hidden_dim)` parameters per layer. This is the direct
+reason GRUs (3 gates, no separate cell state) were proposed: comparable modeling
+capacity with roughly 25% fewer parameters and faster per-step compute, which
+matters when running many recurrent steps at scale or on constrained hardware.
+
+## Failure modes at long range despite the improvement
+
+LSTMs mitigate but do not eliminate vanishing gradients — the forget gate must
+actively learn to stay near 1 across the relevant span, which itself requires
+gradient signal that can vanish before that learning happens, especially early in
+training or for very long dependencies (hundreds to thousands of steps). This is
+why attention mechanisms, which give a direct O(1) gradient path between any two
+positions regardless of distance, definitively outperform LSTMs on tasks requiring
+genuinely long-range dependency modeling — the LSTM's improvement over vanilla RNNs
+is real but bounded, not a complete solution to long-range credit assignment.
+
+## Comparing recurrent cell designs
+
+| Design | Gates | Cell state | Params (relative) | Gradient path quality |
+|---|---|---|---|---|
+| Vanilla RNN | None | None (hidden state only) | 1x (baseline) | Vanishes/explodes exponentially |
+| LSTM | Forget, input, output | Separate additive cell state | ~4x baseline | Strong for moderate range, degrades at extreme length |
+| GRU | Reset, update | None (merged into hidden state) | ~3x baseline | Comparable to LSTM in practice, task-dependent |
+| Transformer attention | N/A (no gating) | N/A (no recurrence) | Depends on model width | Direct O(1) path regardless of distance |
+
+## Production engineering note
+
+`nn.LSTM`'s cuDNN-backed implementation on GPU is heavily fused and vastly faster
+than a hand-written Python loop over time steps — always prefer the built-in module
+over a manual per-step implementation unless you need a genuinely custom cell,
+since the performance gap (often 10x+) comes from kernel fusion, not algorithmic
+differences.

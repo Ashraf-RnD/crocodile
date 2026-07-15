@@ -1,0 +1,110 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "spaCy"
+level: expert
+phaseSlug: "phase-05-natural-language-processing"
+phaseName: "Natural Language Processing"
+topicSlug: "spacy"
+estReadTime: 12
+resources:
+  - type: docs
+    title: "spaCy — Training pipelines and models"
+    url: "https://spacy.io/usage/training"
+  - type: docs
+    title: "spaCy — Embeddings, Transformers and transfer learning"
+    url: "https://spacy.io/usage/embeddings-transformers"
+---
+
+## spaCy's design philosophy: opinionated, production-first
+
+Unlike NLTK (a research/teaching toolkit exposing many interchangeable algorithms) or
+raw Hugging Face Transformers (maximally flexible, minimal opinions), spaCy is
+deliberately opinionated: one well-tuned default pipeline per task, optimized
+Cython/C internals, and an API designed around production throughput and
+reproducibility rather than experimental flexibility. This is a genuine trade-off,
+not a limitation to work around — spaCy trades some research flexibility for
+predictable performance and consistent behavior across versions, which is exactly the
+property production NLP systems need and academic benchmarking flexibility often
+doesn't require.
+
+## `en_core_web_sm` vs `_md` vs `_lg` vs `_trf`: not just size
+
+spaCy ships English pipelines at four size tiers, and the differences aren't just
+model size:
+
+| Pipeline | Word vectors | Backbone | Best for |
+|---|---|---|---|
+| `en_core_web_sm` | None (uses hash-based tok2vec features) | Small CNN | Low-latency, resource-constrained deployment |
+| `en_core_web_md` / `_lg` | Static word vectors (300-dim) | CNN + vectors | Similarity queries (`token.similarity()`), moderate accuracy needs |
+| `en_core_web_trf` | Contextual (transformer-backed) | RoBERTa-based | Highest accuracy, but GPU-recommended for practical throughput |
+
+Critically, `token.similarity()` on `en_core_web_sm` produces near-meaningless
+results because that pipeline has no real word vectors at all (it falls back to a
+context-independent hashed representation) — a frequent source of confusing bug
+reports where similarity scores look almost random. Choosing the wrong pipeline tier
+for a task that needs semantic similarity is a common, avoidable production mistake.
+
+## Training a custom NER model on domain-specific entities
+
+spaCy's off-the-shelf NER models are trained on general-domain text (news, web) and
+predictably underperform on domain-specific entities (drug names, legal clause types,
+part numbers) they never saw during pretraining. Fine-tuning spaCy's NER component
+on labeled domain data is the standard fix:
+
+```python
+# config.cfg generated via `python -m spacy init config`, then:
+# python -m spacy train config.cfg --output ./output \
+#     --paths.train ./train.spacy --paths.dev ./dev.spacy
+
+import spacy
+from spacy.tokens import DocBin
+
+nlp = spacy.blank("en")
+db = DocBin()
+TRAIN_DATA = [
+    ("Patient prescribed 10mg Lisinopril daily.",
+     {"entities": [(20, 30, "DRUG"), (30, 33, "DOSAGE")]}),
+]
+for text, annot in TRAIN_DATA:
+    doc = nlp.make_doc(text)
+    ents = [doc.char_span(s, e, label=l) for s, e, l in annot["entities"]]
+    doc.ents = [e for e in ents if e is not None]
+    db.add(doc)
+db.to_disk("./train.spacy")
+```
+
+spaCy's training config system (`config.cfg`) externalizes hyperparameters,
+architecture choices, and data paths into a declarative file specifically so training
+runs are reproducible and diffable in version control — an explicit design response
+to the reproducibility problems common in ad-hoc training scripts.
+
+## Transformer integration: `spacy-transformers`
+
+spaCy doesn't reject transformer models — `spacy-transformers` wires a Hugging Face
+transformer directly in as the pipeline's shared backbone (`transformer` component),
+with the tagger/parser/NER components reading from its contextual output instead of
+spaCy's own CNN encoder:
+
+```python
+import spacy
+nlp = spacy.load("en_core_web_trf")  # RoBERTa-backed pipeline
+doc = nlp("The patient's condition improved significantly.")
+```
+
+This gets transformer-level accuracy while retaining spaCy's structured `Doc` API,
+rule-based matching, and training tooling — a deliberate "best of both" integration
+rather than a wholesale replacement, useful when you need both transformer accuracy
+and spaCy's mature pipeline/tooling ecosystem (serialization, `Matcher`, custom
+components) in the same system.
+
+## Performance engineering: Cython internals and the GIL
+
+spaCy's core data structures (`Doc`, `Token`, `Vocab`) are implemented in Cython with
+C-level memory layouts specifically so that batch processing (`nlp.pipe`) can release
+the Python GIL during the compute-heavy parts of tokenization and tagging — this is
+why `n_process` multiprocessing in `nlp.pipe` achieves close to linear scaling on
+CPU-only workloads, unlike a naive pure-Python NLP pipeline that would be GIL-bound.
+Understanding this is what separates a spaCy deployment processing a few documents
+per second from one processing thousands per second on the same hardware — the
+difference is almost entirely in whether the pipeline was configured to exploit
+batched, multi-process execution or run in a naive per-document loop.

@@ -1,0 +1,111 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "DPO"
+level: expert
+phaseSlug: "phase-10-fine-tuning"
+phaseName: "Fine-tuning"
+topicSlug: "dpo"
+estReadTime: 13
+resources:
+  - type: docs
+    title: "TRL — DPO loss variants (IPO, KTO, ORPO) implementation notes"
+    url: "https://huggingface.co/docs/trl/main/en/dpo_trainer#loss-functions"
+  - type: article
+    title: "Is DPO Superior to PPO for LLM Alignment? A Comprehensive Study"
+    url: "https://arxiv.org/abs/2404.10719"
+---
+
+## Note: this lesson is about production usage, not the derivation
+
+The full mathematical derivation of DPO — how it reframes the RLHF objective as a
+closed-form supervised loss by exploiting the analytical solution to the KL-constrained
+reward maximization problem — is covered in the Research Literacy phase's paper-analysis
+lesson on DPO. This lesson focuses on the practical engineering consequences of that
+math: what breaks in production, which loss variant to reach for, and how DPO actually
+compares against RLHF-with-PPO when both are run at scale.
+
+## DPO implicitly assumes a static, offline preference distribution
+
+Because DPO's loss is computed entirely against a fixed dataset of `(chosen, rejected)`
+pairs, it has no mechanism to query for feedback on responses the policy generates
+*during* training — unlike RLHF-with-PPO, where the reward model can score any
+policy-generated output on the fly, including outputs far from the original preference
+dataset's distribution. In practice this means DPO's effectiveness is bounded by how
+well the fixed dataset covers the response space the policy will actually explore
+during training; if the policy drifts into a region the dataset never characterized,
+DPO has no signal there at all. This is the central practical trade-off versus RLHF,
+not merely an implementation detail — it's why some large-scale comparisons (e.g. the
+2024 "Is DPO Superior to PPO" study) find PPO retaining an edge specifically on tasks
+requiring more open-ended exploration, while DPO matches or exceeds PPO on tasks well
+covered by the training distribution.
+
+## Reference-model-free formulation and its costs
+
+Standard DPO requires a frozen reference model to compute the implicit KL term. Several
+variants remove this requirement:
+
+- **ORPO** folds an odds-ratio-based penalty directly into the SFT loss, eliminating
+  the separate reference model and even the separate DPO training stage — SFT and
+  preference alignment happen in one pass. The trade-off: less explicit control over
+  how much divergence from the base model's distribution is tolerated, since there's no
+  dedicated coefficient (like DPO's `beta`) governing it independently of the SFT loss
+  weighting.
+- **SimPO** replaces the reference-model-relative reward with a length-normalized
+  average log-probability, removing the reference model entirely and adding a target
+  reward margin. This directly addresses a known DPO failure mode — **length bias**,
+  where DPO's implicit reward can be inflated simply by generating longer responses,
+  since log-probability sums (not averages) scale with sequence length.
+
+```python
+from trl import DPOConfig
+
+# Switching loss functions in TRL is a one-line config change
+config_dpo = DPOConfig(loss_type="sigmoid")   # standard DPO
+config_ipo = DPOConfig(loss_type="ipo")       # IPO — regularizes against overfitting to a fixed margin
+config_kto = DPOConfig(loss_type="kto_pair")  # KTO — works with unpaired binary good/bad labels
+```
+
+## IPO: addressing DPO's overfitting-to-preference-confidence failure mode
+
+DPO's loss can be driven to near-zero simply by pushing the log-probability gap between
+chosen and rejected responses arbitrarily large, even past the point where doing so
+actually reflects meaningful preference — particularly on deterministic or
+near-deterministic preference pairs (little annotator disagreement), DPO can overfit
+and degrade general output diversity/quality as a side effect of over-optimizing the
+margin. **IPO (Identity Preference Optimization)** replaces DPO's loss with one that
+targets a *fixed, bounded* preference margin rather than an unbounded one, directly
+regularizing against this overfitting mode. This matters operationally: teams observing
+DPO training that keeps "improving" on the training loss while degrading on held-out
+generation quality should treat IPO as a first thing to try, not just a lower learning
+rate.
+
+## KTO: when you only have unary feedback, not pairs
+
+Real-world feedback is often not naturally paired — you have thumbs-up/thumbs-down
+signals on individual responses, not clean `A vs B` comparisons. Constructing artificial
+pairs from unary data (e.g. randomly pairing a thumbs-up response with an unrelated
+thumbs-down one) discards information and introduces noise. **KTO (Kahneman-Tversky
+Optimization)** reformulates the objective to work directly on unpaired binary-labeled
+data, grounded in prospect theory's asymmetric treatment of gains and losses. This is a
+meaningful practical unlock for teams whose production feedback signal is naturally
+unary (app-level thumbs up/down, deployment-time accept/reject) rather than
+comparison-based.
+
+## Trade-off summary
+
+| Method | Reference model needed | Handles unpaired feedback | Length-bias resistant | Typical use case |
+|---|---|---|---|---|
+| DPO (sigmoid) | Yes | No | No (known weakness) | Default starting point with clean paired data |
+| IPO | Yes | No | Partial | DPO training that overfits/degrades on near-deterministic pairs |
+| SimPO | No | No | Yes (length-normalized) | Want to drop the reference model and fix length bias |
+| KTO | Yes | Yes | Partial | Feedback is naturally unary (thumbs up/down), not paired |
+| ORPO | No | No | Partial | Want a single combined SFT+preference stage |
+
+## The practical decision in production
+
+Start with standard DPO on clean paired preference data — it's the best-supported,
+most-understood option across tooling (TRL, Axolotl, Unsloth all default to it). Switch
+to SimPO or ORPO specifically to cut reference-model memory overhead at scale, to IPO if
+training loss and held-out quality are diverging, and to KTO only if your actual
+feedback data is fundamentally unpaired and reformatting it into pairs would be lossy
+or artificial.

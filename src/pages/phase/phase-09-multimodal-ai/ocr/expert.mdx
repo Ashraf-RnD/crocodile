@@ -1,0 +1,90 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "OCR"
+level: expert
+phaseSlug: "phase-09-multimodal-ai"
+phaseName: "Multimodal AI"
+topicSlug: "ocr"
+estReadTime: 10
+resources:
+  - type: article
+    title: "TrOCR: Transformer-based OCR (paper)"
+    url: "https://arxiv.org/abs/2109.10282"
+  - type: docs
+    title: "Amazon Textract — how it works"
+    url: "https://docs.aws.amazon.com/textract/latest/dg/how-it-works.html"
+---
+
+## Why "just use Tesseract" breaks down in practice
+
+Tesseract is a character-classification pipeline built around a segmentation assumption:
+find connected components that look like glyphs, group them into lines, classify each
+one independently. That assumption holds for clean, horizontal, printed Latin-script
+text and falls apart fast outside it:
+
+- **Curved or rotated text** (product labels, signage) — Tesseract's line-finding step
+  assumes roughly horizontal baselines.
+- **Dense tables** — Tesseract has no real notion of cell structure; it reads
+  left-to-right, top-to-bottom and interleaves columns unless you pre-crop each cell.
+- **Handwriting** — Tesseract's traditional engine (and even its LSTM mode) is trained
+  overwhelmingly on printed fonts.
+- **Low-resource scripts** — accuracy is only as good as the trained language model
+  available for that script.
+
+This is why nearly every serious production OCR system today is built on **deep
+learning detection + recognition**, not classical segmentation — models like PaddleOCR's
+DB (Differentiable Binarization) detector, or transformer-based recognizers like
+Microsoft's TrOCR, treat text detection as an object-detection problem (find arbitrary
+quadrilaterals of text) rather than assuming clean horizontal lines.
+
+## Engine comparison
+
+| Engine | Detection approach | Handles curved/rotated text | Handwriting | Self-hosted | Notes |
+|---|---|---|---|---|---|
+| Tesseract | Connected components + LSTM | Poor | Poor | Yes, free | Best for clean scanned printed docs |
+| PaddleOCR | DB detector + CRNN/SVTR recognizer | Good | Limited | Yes, free | Strong multilingual + layout support |
+| TrOCR | Transformer encoder-decoder | Good | Good | Yes, needs GPU | Best handwriting accuracy of the open models |
+| Google Cloud Vision / AWS Textract | Proprietary deep models | Excellent | Good | No, API only | Best table/layout extraction, per-page cost |
+| GPT-4o / Gemini vision | Multimodal LLM | Excellent | Good | No, API only | Strong at *reasoning about* extracted text, weaker at exact character fidelity on dense docs |
+
+## The precision trap: OCR that reads confidently wrong
+
+A subtle production failure mode: OCR engines don't fail loudly. A `5` misread as an `S`,
+or a `0` as an `O`, comes back as a normal-looking, high-confidence string — no
+exception, no warning. This is why financial and legal OCR pipelines add **checksum and
+schema validation** as a second line of defense (e.g. validating an extracted IBAN's
+check digits, or a total against a sum-of-line-items check) rather than trusting
+per-character confidence scores alone.
+
+## LLM-based extraction is displacing OCR+regex pipelines
+
+The older pattern — OCR into raw text, then regex/rules to pull structured fields — is
+increasingly being replaced by multimodal LLMs that take the image directly and return
+structured JSON, skipping the intermediate text-blob step entirely:
+
+```python
+response = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Extract invoice_number, total, and due_date as JSON."},
+            {"type": "image_url", "image_url": {"url": image_url}},
+        ],
+    }],
+)
+```
+
+This trades OCR's near-zero marginal cost and full auditability (you can inspect exactly
+what character was read where) for the LLM's much stronger layout reasoning — it's
+common now to see hybrid pipelines: classical OCR for the raw text + bounding boxes,
+fed as context into an LLM call that does the actual field extraction and validation.
+
+## Cost and latency at scale
+
+Self-hosted Tesseract/PaddleOCR costs roughly the compute to run inference — cents per
+thousand pages on CPU. Cloud OCR APIs (Textract, Cloud Vision) charge per page
+(roughly $1-1.50 per 1,000 pages) but offload the accuracy engineering entirely. At
+high volume (millions of documents/month), the self-hosted cost advantage is large
+enough that most companies eventually build in-house pipelines — but only after cloud
+APIs prove out that the *product* is worth building.

@@ -1,0 +1,88 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Positional Encoding"
+level: beginner
+phaseSlug: "phase-06-transformers"
+phaseName: "Transformers"
+topicSlug: "positional-encoding"
+estReadTime: 6
+resources:
+  - type: article
+    title: "Jay Alammar — The Illustrated Transformer"
+    url: "https://jalammar.github.io/illustrated-transformer/"
+  - type: docs
+    title: "PyTorch tutorial — Positional Encoding module"
+    url: "https://pytorch.org/tutorials/beginner/transformer_tutorial.html"
+---
+
+## Why word order needs to be added back in
+
+Self-attention compares every word to every other word using dot products — it has
+no built-in sense of "this word came first." If you fed it "dog bites man" and
+"man bites dog" with no extra information, attention alone would treat them
+identically, since it's just comparing the *set* of words to each other, not their
+order.
+
+But word order obviously matters! So the Transformer adds a **positional encoding**
+— a vector that encodes "I am at position 1," "I am at position 2," etc. — directly
+into each word's embedding before it enters the attention layers. This way, the
+model has access to *both* the word's meaning and its position, all mixed into one
+vector.
+
+### The sinusoidal trick
+
+The original Transformer paper uses sine and cosine waves of different frequencies
+to build a unique "position fingerprint" for every position:
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+def positional_encoding(seq_len, d_model):
+    position = np.arange(seq_len)[:, np.newaxis]
+    div_term = np.exp(np.arange(0, d_model, 2) * -(np.log(10000.0) / d_model))
+    pe = np.zeros((seq_len, d_model))
+    pe[:, 0::2] = np.sin(position * div_term)
+    pe[:, 1::2] = np.cos(position * div_term)
+    return pe
+
+pe = positional_encoding(seq_len=50, d_model=16)
+print(pe.shape)  # (50, 16) — one 16-dim "position fingerprint" per position
+
+# Each position gets a unique pattern of sine/cosine values,
+# and nearby positions have similar (but not identical) patterns.
+plt.imshow(pe, cmap="viridis")
+plt.xlabel("dimension")
+plt.ylabel("position")
+plt.savefig("positional_encoding.png")
+```
+
+Every position from 0 to 49 gets a distinct 16-dimensional pattern. This pattern is
+simply **added** to the word embedding at that position:
+
+```python
+word_embedding = np.random.randn(50, 16)   # pretend embeddings for 50 words
+final_input = word_embedding + pe          # position info is now baked in
+```
+
+That's it — no learned parameters needed for this version, just fixed math based on
+position.
+
+## Try it yourself
+
+Why do you think the paper uses many different sine/cosine *frequencies* (not just
+one) to build each position's fingerprint?
+
+<details>
+<summary>Solution</summary>
+
+A single sine wave repeats itself (positions 0 and, say, position 63 could look
+identical to a slow-frequency wave), which would make far-apart positions
+indistinguishable. By combining many different frequencies — some fast, some slow —
+each position ends up with a unique combination across all dimensions, similar to how
+a clock with hour, minute, and second hands can represent far more distinct moments
+than a single hand alone. This also gives nearby positions naturally similar
+encodings (helpful for the model to learn relative distance) while still keeping
+every absolute position unique.
+
+</details>

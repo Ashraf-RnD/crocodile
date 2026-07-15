@@ -1,0 +1,76 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Quantization"
+level: beginner
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "quantization"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "Hugging Face — Quantization Overview"
+    url: "https://huggingface.co/docs/transformers/quantization/overview"
+---
+
+## Rounding numbers to save space
+
+A model's weights are just millions (or billions) of numbers. By default, each one is
+stored as a 32-bit float (FP32) — think of it like writing every measurement to 8
+decimal places: `0.34827193`. That's precise, but most of that precision doesn't
+actually change the model's behavior. **Quantization** rounds those numbers to a
+coarser grid — fewer bits per number — the same way you'd round `0.34827193` to `0.35`
+for a shopping list. You lose a tiny bit of precision, but the number takes far less
+space to write down, and arithmetic on it gets faster too.
+
+Go from 32 bits down to 16, 8, or even 4 bits per weight, and a model that needed 28GB
+of memory can shrink to 7GB or less — often with barely-noticeable quality loss,
+because most weights didn't need that much precision to begin with.
+
+## Why this matters in practice
+
+A 7-billion-parameter model at full FP32 precision needs roughly 28GB just to hold the
+weights — more than most consumer GPUs have. Quantized to 4-bit, the same model fits
+in about 4-5GB, small enough to run on a laptop GPU or even squeeze onto a phone. This
+is *the* reason you can run capable LLMs locally at all.
+
+## Try it in code
+
+The `bitsandbytes` library makes 4-bit loading a one-line change when loading a model
+with Hugging Face `transformers`:
+
+```python
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+model_name = "mistralai/Mistral-7B-Instruct-v0.2"
+
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForCausalLM.from_pretrained(
+    model_name,
+    load_in_4bit=True,       # quantize weights to 4-bit on load
+    device_map="auto",
+)
+
+inputs = tokenizer("Explain quantization in one sentence:", return_tensors="pt").to(model.device)
+output = model.generate(**inputs, max_new_tokens=40)
+print(tokenizer.decode(output[0], skip_special_tokens=True))
+```
+
+Nothing else about your code changes — same `generate()` call, same tokenizer — but
+the model now occupies roughly a quarter of the GPU memory it would at full precision.
+
+## Try it yourself
+
+A model has 7 billion parameters. At FP32 (4 bytes per parameter), estimate its
+memory footprint. Now estimate it again at INT8 (1 byte per parameter) and INT4 (0.5
+bytes per parameter).
+
+<details>
+<summary>Solution</summary>
+
+- FP32: 7B × 4 bytes ≈ 28GB
+- INT8: 7B × 1 byte ≈ 7GB
+- INT4: 7B × 0.5 bytes ≈ 3.5GB
+
+Each step down roughly halves (or quarters) the memory, which is why quantization is
+often the single easiest lever for making a large model deployable at all.
+</details>

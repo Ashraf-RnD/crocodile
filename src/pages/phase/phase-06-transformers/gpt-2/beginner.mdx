@@ -1,0 +1,86 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "GPT-2"
+level: beginner
+phaseSlug: "phase-06-transformers"
+phaseName: "Transformers"
+topicSlug: "gpt-2"
+estReadTime: 6
+resources:
+  - type: article
+    title: "Language Models are Unsupervised Multitask Learners (GPT-2 paper)"
+    url: "https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf"
+  - type: article
+    title: "OpenAI — Better Language Models and Their Implications"
+    url: "https://openai.com/index/better-language-models/"
+---
+
+## The paper that asked: what if we just made it bigger and didn't fine-tune?
+
+"Language Models are Unsupervised Multitask Learners" (Radford et al., 2019) is the
+paper behind GPT-2. Its central question was surprisingly bold: what if a language
+model, trained on nothing but "predict the next word" over a huge, diverse chunk of
+the internet, could perform many different tasks — translation, summarization,
+question answering — **without ever being specifically trained on any of them**?
+
+### The problem it was responding to
+
+By 2019, the standard recipe (including the original GPT-1 and BERT) was:
+pretrain a language model, then **fine-tune** it on labeled data for each specific
+task you cared about. This worked well, but it meant you needed labeled data and a
+separate fine-tuning run for every new task.
+
+The GPT-2 paper's bet: if you train a big enough model on a large enough and diverse
+enough amount of text, the model might learn to perform many tasks implicitly — just
+by having seen countless examples of those tasks occurring naturally within text
+(question-answer pairs in forums, translations pasted next to originals, summaries
+next to articles) — without anyone ever explicitly labeling that data as
+"a translation task" or "a summarization task."
+
+### The evidence: zero-shot task performance
+
+The paper's headline demonstration is **zero-shot** task performance — asking the
+model to do a task it was never fine-tuned on, simply by phrasing the task as a
+natural continuation of text:
+
+```python
+from transformers import pipeline
+
+generator = pipeline("text-generation", model="gpt2")
+
+prompt = (
+    "Translate English to French.\n"
+    "English: The cat is on the table.\n"
+    "French:"
+)
+result = generator(prompt, max_new_tokens=10)
+print(result[0]["generated_text"])
+```
+
+No task-specific fine-tuning happened here — the model is simply continuing the text
+pattern it was shown, and because it saw enough English-French pairs during
+pretraining, it has some ability to continue this pattern correctly. This is the
+seed of what later became known as "prompting."
+
+## Try it yourself
+
+The paper trained GPT-2 on a dataset called **WebText** — curated by having humans
+on Reddit vouch for link quality (only links with at least 3 karma were included).
+Why might using *curated, human-vetted* web text instead of raw, unfiltered web
+crawl data have mattered for the quality of the resulting model?
+
+<details>
+<summary>Solution</summary>
+
+Raw, unfiltered web crawl data contains an enormous amount of low-quality content —
+spam, broken text, auto-generated pages, boilerplate. Training directly on that
+would waste a large fraction of the model's capacity learning to predict noise
+rather than coherent, well-structured language. By using outbound links from
+Reddit posts with community-vetted karma as a quality filter, the GPT-2 authors
+approximated "text a human found worth sharing," producing a meaningfully cleaner
+and more diverse training corpus than raw crawl data, without needing to manually
+curate every document by hand. This kind of data curation choice — filtering for
+quality rather than just maximizing raw volume — has remained a core lever in every
+subsequent large language model's training pipeline.
+
+</details>

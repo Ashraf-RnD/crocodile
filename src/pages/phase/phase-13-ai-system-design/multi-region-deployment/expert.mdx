@@ -1,0 +1,100 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Multi-Region Deployment"
+level: expert
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "multi-region-deployment"
+estReadTime: 12
+resources:
+  - type: docs
+    title: "AWS — What is multi-region architecture?"
+    url: "https://aws.amazon.com/what-is/multi-region-architecture/"
+  - type: docs
+    title: "Google Cloud — Geography and regions"
+    url: "https://cloud.google.com/about/locations"
+---
+
+## GPU capacity economics dominate the multi-region trade-off for AI specifically
+
+For stateless web services, running full active-active capacity in every
+region is expensive but tractable — commodity compute is cheap enough that
+redundancy is a reasonable default. For GPU-backed LLM inference, the same
+default is a materially different cost decision: GPU capacity is expensive
+per-unit and typically has meaningfully lower utilization efficiency when
+duplicated across regions with different peak-traffic windows. This pushes
+toward more sophisticated capacity strategies than a typical multi-region
+web architecture needs — predictive, timezone-aware autoscaling per region,
+and deliberate overflow/spillover routing to a neighboring region during a
+local spike rather than reflexively provisioning every region for its own
+worst case. Getting this wrong in either direction is costly: over-
+provisioning burns significant GPU budget on idle capacity, under-
+provisioning reintroduces the very latency/availability problems multi-
+region deployment was meant to solve.
+
+## Data residency requirements can conflict directly with model/routing architecture
+
+Regulatory data residency (GDPR and equivalents) doesn't just constrain
+where user data is stored — depending on interpretation and the specific
+regulation, it can constrain where **inference itself** happens if prompts
+contain regulated personal data, since inference involves processing that
+data. This can force a genuinely harder architecture than typical
+multi-region web apps face: not just "replicate the database per region"
+but "the LLM inference cluster serving this user's request must itself be
+physically located within the compliant boundary" — which interacts badly
+with a common cost-saving pattern (routing overflow traffic to whichever
+region has spare capacity), since overflow routing across a compliance
+boundary may not be legally permissible even under load. Systems in
+regulated industries typically need this constraint modeled explicitly in
+the router, not bolted on as a "usually nearest region" heuristic.
+
+## Model consistency and versioning across regions
+
+Rolling out a new model version, prompt change, or fine-tune across
+multiple independent regional deployments introduces a coordination
+problem: a naive rollout can leave different regions serving materially
+different model behavior for a rollout window (or indefinitely, if a
+regional rollout silently fails). This is a correctness concern beyond
+typical multi-region web deployment's usual "eventually consistent"
+tolerance, because model behavior differences are a product-quality and
+potentially compliance issue (a regulated jurisdiction may require a
+specific approved model version to remain in use), not just a minor UX
+inconsistency. Mature systems track model/prompt version as an explicit,
+monitored property per region and treat cross-region version drift as an
+alertable condition, not an accepted side effect of independent regional
+deployments.
+
+## Cross-region failover for stateful, long-running requests
+
+Streaming LLM responses and multi-turn conversations hold meaningful
+server-side state (KV cache, in-flight generation) for the duration of a
+request or session. A regional failover event mid-generation can't cleanly
+hand off that in-flight GPU state to another region — the practical
+behavior is the in-flight generation is lost and the client has to retry
+from the current point, which needs to be an explicit, tested failure mode
+(client-side resumable state, or at minimum clean error handling) rather
+than an assumption that failover is transparent the way it might be for a
+simple stateless request.
+
+## Observability and debugging get harder, not just infrastructure
+
+A multi-region deployment multiplies the operational surface: the same
+class of bug can manifest differently per region (different GPU generation
+available, different regional data characteristics, different traffic
+patterns triggering different edge cases), and debugging requires
+correlating traces across regions rather than assuming a single unified
+view. This pushes observability infrastructure itself toward
+multi-region-aware design — centralized aggregation of per-region traces
+and metrics, with region as a first-class dimension in every dashboard and
+alert, not an afterthought added when the second region goes live.
+
+## Trade-off summary
+
+| Concern | Simple approach | Production-grade approach | Cost |
+|---|---|---|---|
+| GPU capacity per region | Full active-active capacity everywhere | Timezone-aware scaling + overflow routing | Routing/scheduling complexity to avoid over/under-provisioning |
+| Data residency | Route by nearest region only | Route by compliance requirement, override latency optimization | Some users get higher latency; router needs explicit compliance rules |
+| Overflow during spikes | Always spill to nearest region with capacity | Overflow constrained by compliance boundaries | Reduced flexibility for regulated traffic during spikes |
+| Model/prompt versioning | Roll out per-region independently, best-effort | Track version per region, alert on cross-region drift | Rollout coordination tooling and monitoring |
+| Failover mid-stream | Assume transparent failover | Explicit resumable client state or clean retry contract | Client and server both need failure-handling logic |
+| Observability | Per-region dashboards, checked separately | Centralized, region-aware aggregation | Cross-region observability infrastructure investment |

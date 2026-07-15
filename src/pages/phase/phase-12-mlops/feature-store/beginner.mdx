@@ -1,0 +1,101 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Feature Store"
+level: beginner
+phaseSlug: "phase-12-mlops"
+phaseName: "MLOps"
+topicSlug: "feature-store"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "Feast — Getting Started"
+    url: "https://docs.feast.dev/getting-started/quickstart"
+  - type: article
+    title: "What Is a Feature Store?"
+    url: "https://www.tecton.ai/blog/what-is-a-feature-store/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The training/serving mismatch problem
+
+Say you train a fraud model using a feature like "average transaction amount
+over the last 30 days," computed with a batch SQL query over historical
+data. At prediction time, in production, that same feature needs to be
+computed **instantly**, for a live request, using a completely different code
+path — and if the two computations don't match exactly, your model
+silently makes worse predictions than it did during training. This is called
+**training-serving skew**, and it's one of the most common, hardest-to-detect
+bugs in production ML.
+
+A **feature store** solves this by computing each feature's definition
+*once* and serving it from two places that are guaranteed to agree: a batch
+store for training, and a low-latency store for real-time prediction.
+
+### A simple feature definition (Feast)
+
+```python
+from feast import Entity, FeatureView, Field, FileSource
+from feast.types import Float32
+from datetime import timedelta
+
+transaction_source = FileSource(
+    path="data/transactions.parquet",
+    timestamp_field="event_timestamp",
+)
+
+user = Entity(name="user_id")
+
+user_features = FeatureView(
+    name="user_transaction_stats",
+    entities=[user],
+    ttl=timedelta(days=30),
+    schema=[Field(name="avg_transaction_amount_30d", dtype=Float32)],
+    source=transaction_source,
+)
+```
+
+### Using it for training and serving
+
+```python
+# Training: pull historical features for many users at once
+training_df = store.get_historical_features(
+    entity_df=labels_df,
+    features=["user_transaction_stats:avg_transaction_amount_30d"],
+).to_df()
+
+# Serving: fetch the same feature for one user, instantly
+features = store.get_online_features(
+    features=["user_transaction_stats:avg_transaction_amount_30d"],
+    entity_rows=[{"user_id": 1001}],
+).to_dict()
+```
+
+### The mental model
+
+<Mermaid client:visible code={`flowchart LR
+  A["Feature definition (written once)"] --> B["Batch store — training"]
+  A --> C["Online store — real-time serving"]
+  B --> D["Model training uses historical features"]
+  C --> E["Live prediction uses the same feature logic"]`} />
+
+Because both paths derive from the same feature definition, "the feature the
+model was trained on" and "the feature the model sees in production" stay
+consistent by construction, not by hoping two separate implementations agree.
+
+## Try it yourself
+
+You want to define a feature `days_since_last_login` for a `user` entity.
+What's the entity, and why does defining the feature once (rather than
+separately in your training script and your serving API) matter?
+
+<details>
+<summary>Solution</summary>
+
+The entity is `user_id`. Defining the feature once matters because if your
+training script computes `days_since_last_login` slightly differently than
+your serving API (e.g. different timezone handling, or a stale timestamp),
+the model sees different feature values in production than it learned from
+during training — a subtle bug that degrades predictions without throwing
+any error.
+
+</details>

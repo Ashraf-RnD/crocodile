@@ -1,0 +1,91 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Unsloth"
+level: beginner
+phaseSlug: "phase-10-fine-tuning"
+phaseName: "Fine-tuning"
+topicSlug: "unsloth"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "Unsloth — official documentation and quickstart"
+    url: "https://docs.unsloth.ai/"
+  - type: docs
+    title: "Unsloth — free Colab fine-tuning notebooks"
+    url: "https://docs.unsloth.ai/get-started/unsloth-notebooks"
+---
+
+## Same fine-tuning, less waiting
+
+Everything you've learned so far — LoRA, QLoRA, SFT, DPO — works, but running it with
+plain Hugging Face code on a free-tier GPU (like a Colab T4) can be painfully slow and
+memory-hungry. **Unsloth** is a library that reimplements the performance-critical
+parts of fine-tuning (the actual matrix math inside attention and the LoRA adapters)
+using faster, hand-optimized GPU kernels — without changing what you're actually
+training.
+
+The pitch is simple: same LoRA/QLoRA fine-tuning, same final model quality, but
+significantly faster and using significantly less GPU memory — commonly cited figures
+are roughly 2x faster training and 50-70% less memory versus a standard Hugging Face
+setup.
+
+### A minimal Unsloth fine-tuning script
+
+```python
+from unsloth import FastLanguageModel
+
+model, tokenizer = FastLanguageModel.from_pretrained(
+    model_name="unsloth/llama-3.1-8b-bnb-4bit",  # a pre-quantized model Unsloth optimizes for
+    max_seq_length=2048,
+    load_in_4bit=True,
+)
+
+model = FastLanguageModel.get_peft_model(
+    model,
+    r=16,
+    target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+    lora_alpha=32,
+)
+
+# From here, training looks exactly like the TRL SFTTrainer you already know
+from trl import SFTTrainer, SFTConfig
+from datasets import load_dataset
+
+dataset = load_dataset("HuggingFaceH4/no_robots", split="train")
+
+trainer = SFTTrainer(
+    model=model,
+    train_dataset=dataset,
+    args=SFTConfig(output_dir="./unsloth-sft-out", per_device_train_batch_size=2),
+)
+trainer.train()
+```
+
+Notice the code is nearly identical to what you'd write with plain `transformers` +
+`peft` + `trl` — you swap the model-loading step for Unsloth's `FastLanguageModel`, and
+the rest of the training pipeline (TRL's `SFTTrainer`) stays the same.
+
+### Why this matters for beginners specifically
+
+Unsloth's speed and memory savings are exactly what make it possible to fine-tune a
+7-8B parameter model **for free** on a Google Colab T4 GPU — hardware that would
+struggle or fail to fit the same job with an unoptimized setup. This is why nearly
+every "fine-tune your first LLM" tutorial you'll find today uses Unsloth rather than
+raw Hugging Face code.
+
+## Try it yourself
+
+You're choosing between plain Hugging Face `transformers`+`peft` and Unsloth for a
+QLoRA fine-tuning run on a free Colab GPU with limited memory. Which would you pick,
+and why?
+
+<details>
+<summary>Solution</summary>
+
+Unsloth — on constrained free-tier hardware, its memory and speed optimizations are
+often the difference between a training job that fits and completes versus one that
+runs out of memory or takes too long to finish within Colab's session limits. The
+underlying LoRA/QLoRA math and final model quality are the same either way; Unsloth
+just makes the same job run faster and leaner.
+
+</details>

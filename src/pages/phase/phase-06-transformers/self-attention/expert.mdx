@@ -1,0 +1,89 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Self-Attention"
+level: expert
+phaseSlug: "phase-06-transformers"
+phaseName: "Transformers"
+topicSlug: "self-attention"
+estReadTime: 11
+resources:
+  - type: article
+    title: "Attention Is All You Need (original paper)"
+    url: "https://arxiv.org/abs/1706.03762"
+  - type: article
+    title: "A Mathematical Framework for Transformer Circuits (Anthropic)"
+    url: "https://transformer-circuits.pub/2021/framework/index.html"
+---
+
+## Permutation equivariance and why position must be injected externally
+
+Self-attention's score function `softmax(QKᵀ/√d)V` treats the sequence as an
+unordered set — permuting the input rows permutes the output rows identically, with
+no other change. This is a genuine inductive-bias trade-off versus RNNs/CNNs, which
+have order or locality baked in structurally. The Transformer's answer is to inject
+order as *data* (positional encodings added to the input) rather than as
+*architecture*. This decision is why positional encoding schemes (absolute
+sinusoidal, learned, RoPE, ALiBi) are such an active research area — they're solving
+a problem the base self-attention operation deliberately doesn't solve itself,
+leaving the door open to redesign that piece independently of the attention
+mechanism.
+
+## Self-attention as an associative memory / retrieval operation
+
+A useful mental model, formalized in interpretability work (e.g. Anthropic's
+Transformer Circuits framework): each self-attention head implements a
+**QK circuit** (which pairs of tokens attend to each other) composed with an
+**OV circuit** (what gets written to the residual stream when they do). This
+decomposition explains observed phenomena like **induction heads** — heads that
+learn the pattern "if token A was followed by token B earlier, and A appears again,
+attend to B" — which emerge reliably during training and are believed to underlie a
+meaningful fraction of in-context learning capability in LLMs. Self-attention isn't
+just "soft lookup"; stacked across layers, it composes into surprisingly structured
+computational circuits.
+
+## Causal self-attention and the training/inference asymmetry
+
+During **training**, causal self-attention is embarrassingly parallel: the entire
+sequence is available at once, and the causal mask simply zeroes out illegal
+(future-looking) positions in one matrix operation. During **inference**
+(autoregressive generation), this parallelism disappears — each new token must be
+generated sequentially, and only the KV cache mechanism (reusing previously computed
+keys/values) prevents recomputing the entire prefix at every step. This asymmetry —
+trivially parallel training vs. inherently sequential inference — is a defining
+systems constraint of self-attention-based generation and the core reason inference
+serving infrastructure (continuous batching, speculative decoding, paged attention)
+is its own specialized engineering discipline distinct from training infrastructure.
+
+## Rank and expressivity limits
+
+A single self-attention layer's output is a convex combination (weighted average) of
+value vectors — it cannot, by itself, represent arbitrary nonlinear transformations
+of its input. The feed-forward sublayer immediately following self-attention in every
+Transformer block exists precisely to restore token-wise nonlinear capacity that
+attention's weighted-averaging structure lacks. There's also a known theoretical
+concern — **rank collapse** — where, without residual connections and layer norm,
+repeated self-attention layers push all token representations toward the same vector
+(since it's iterated averaging). Residual connections are not a minor implementation
+detail here; they're load-bearing for keeping token representations distinguishable
+across depth.
+
+## Trade-off summary
+
+| Property | Self-attention | RNN/LSTM | Convolution |
+|---|---|---|---|
+| Path length between any two tokens | O(1) | O(n) | O(n / kernel size) per layer |
+| Per-layer compute | O(n²·d) | O(n·d²) | O(n·k·d²) |
+| Parallelizable across sequence at train time | Yes | No (sequential) | Yes |
+| Inherent order sensitivity | None (needs external positional signal) | Built-in (sequential processing) | Local (via kernel window) |
+| Inference-time cost pattern | Sequential per-token, cache-dependent | Sequential per-token, O(1) state | Sequential per-token (for causal conv) |
+
+## The practical upshot
+
+Self-attention's real advantage over RNNs isn't that it's "smarter" per token — it's
+that the constant path length between any two positions makes long-range dependency
+learning an optimization non-issue (no vanishing gradient across time steps) and the
+full parallelism across the sequence dimension makes training on modern accelerators
+dramatically more efficient. The costs — quadratic compute/memory in sequence length,
+and the need to externally supply positional information — are exactly the two axes
+most transformer variant research (efficient attention, positional encoding schemes)
+has spent the last several years optimizing.

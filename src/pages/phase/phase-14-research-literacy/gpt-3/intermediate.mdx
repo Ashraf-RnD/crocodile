@@ -1,0 +1,95 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "GPT-3"
+level: intermediate
+phaseSlug: "phase-14-research-literacy"
+phaseName: "Research Literacy"
+topicSlug: "gpt-3"
+estReadTime: 10
+resources:
+  - type: article
+    title: "Language Models are Few-Shot Learners (original paper)"
+    url: "https://arxiv.org/abs/2005.14165"
+  - type: article
+    title: "Scaling Laws for Neural Language Models (Kaplan et al.)"
+    url: "https://arxiv.org/abs/2001.08361"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Architecture: a scaled-up GPT-2 decoder
+
+GPT-3 is architecturally almost identical to GPT-2 — a stack of decoder-only
+Transformer blocks with causal (left-to-right) masked self-attention, trained
+with the standard next-token prediction objective. The paper's contribution isn't
+a new architecture; it's what happens when you scale the existing one:
+175 billion parameters, 96 layers, a 12,288-dimensional hidden size, trained on
+roughly 300 billion tokens (Common Crawl, WebText2, books, Wikipedia). It also
+alternates dense and locally-banded sparse attention patterns in some layers,
+following prior work (Sparse Transformer), to keep the largest model tractable.
+
+## Zero-shot, one-shot, and few-shot prompting
+
+The paper systematically evaluates three prompting regimes, all without updating
+any weights:
+
+```
+Zero-shot:
+  Translate English to French: cheese =>
+
+One-shot:
+  Translate English to French: sea otter => loutre de mer
+  cheese =>
+
+Few-shot (k examples):
+  Translate English to French: sea otter => loutre de mer
+  Translate English to French: peppermint => menthe poivrée
+  Translate English to French: plush giraffe => girafe peluche
+  cheese =>
+```
+
+The task description and examples are just tokens in the input context — the
+model has no special "training mode" switch. Performance on nearly every
+benchmark tested improves substantially from zero-shot to few-shot, and this gap
+widens as model size increases, which is the core empirical finding of the paper.
+
+<Mermaid client:visible code={`flowchart LR
+  Prompt["Prompt: task description + k examples + new query"] --> Model["Frozen 175B-parameter model"]
+  Model --> Pred["Next-token predictions, conditioned on the whole prompt"]
+  Pred --> Out["Completion used as the answer"]`} />
+
+## In-context learning as implicit pattern matching
+
+There's no gradient update happening when you add examples to a prompt — the
+model's weights never change. What's happening instead is that the attention
+mechanism lets every token in the completion attend back over the example
+input/output pairs already in context, and the model — having seen countless
+similar patterns during pretraining — completes the pattern the same way it
+would complete any other text. This is why prompt *format* (delimiters,
+ordering, phrasing) measurably affects performance: it's genuinely a form of
+pattern completion, not a hidden fine-tuning mechanism.
+
+```python
+def build_few_shot_prompt(task_description, examples, query):
+    prompt = task_description + "\n\n"
+    for inp, out in examples:
+        prompt += f"{inp} => {out}\n"
+    prompt += f"{query} =>"
+    return prompt
+```
+
+## Scaling laws behind the result
+
+GPT-3's design followed empirical **scaling laws** (Kaplan et al., 2020) showing
+that model loss decreases smoothly and predictably as a power law in parameters,
+data, and compute — with no sign, at the scales tested, of the curve flattening
+out. GPT-3 was, at the time, the largest real-world test of pushing that curve as
+far as feasible, and few-shot capability was the qualitative payoff that emerged
+from doing so.
+
+## Costs of this approach
+
+Every inference call with a long few-shot prompt is more expensive than a short
+zero-shot one, because attention cost grows with context length and every
+example token has to be processed on every forward pass. Few-shot prompting
+trades a one-time fine-tuning cost for a recurring per-request inference cost —
+a trade-off that matters a great deal at production scale.

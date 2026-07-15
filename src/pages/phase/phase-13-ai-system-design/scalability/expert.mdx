@@ -1,0 +1,94 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Scalability"
+level: expert
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "scalability"
+estReadTime: 12
+resources:
+  - type: article
+    title: "vLLM / PagedAttention paper — Efficient Memory Management for LLM Serving"
+    url: "https://arxiv.org/abs/2309.06180"
+  - type: article
+    title: "NVIDIA — Mastering LLM Techniques: Inference Optimization"
+    url: "https://developer.nvidia.com/blog/mastering-llm-techniques-inference-optimization/"
+---
+
+## KV-cache memory is usually the true scaling ceiling
+
+For most production LLM serving, the binding constraint isn't raw FLOPs —
+it's GPU memory, specifically the KV cache that has to be held for every
+token of every in-flight request's context. This means the number of
+concurrent requests a GPU can serve is bounded by memory capacity long
+before it's bounded by compute, and the relationship isn't fixed — it
+depends on average context length, which varies by product and even by time
+of day. **PagedAttention**-style memory management (allocating KV cache in
+fixed-size blocks rather than one large contiguous region per request, and
+sharing blocks across requests with common prefixes) is the standard
+response: it reduces memory fragmentation and lets more concurrent requests
+fit in the same GPU memory, directly increasing achievable throughput
+without adding hardware.
+
+## Prefix caching changes the unit economics of scaling
+
+Many production workloads share long common prefixes across requests — a
+system prompt, a few-shot example set, a large tool/function schema
+injected into every call. Recomputing the attention state for that shared
+prefix on every request wastes both compute and the latency it costs to
+produce. Prefix/prompt caching reuses the computed KV-cache state for a
+previously-seen prefix, which can turn what looks like N independent
+expensive requests into effectively one expensive prefix computation plus N
+cheap incremental ones — a genuine capacity multiplier for prefix-heavy
+workloads (agentic tool-use loops, RAG systems with fixed instructions),
+though it requires the serving layer to route requests sharing a prefix to
+replicas that already have it cached, which is a routing/affinity problem,
+not just a cache implementation detail.
+
+## Heterogeneous fleets and the routing complexity they introduce
+
+At scale, running a single uniform GPU fleet is rarely cost-optimal — mixing
+GPU generations/types (cheaper, older GPUs for smaller models or lower-
+priority traffic; newer, more expensive GPUs for latency-critical or
+largest-model traffic) improves cost efficiency but multiplies routing
+complexity: the router now needs to reason about which replicas can serve
+which model tier, at what latency, at what cost, and load-balance across a
+genuinely heterogeneous pool rather than treating all replicas as
+interchangeable. Getting this routing layer wrong (e.g., naively spreading
+load evenly across a heterogeneous fleet) can leave the expensive fast GPUs
+underutilized while the cheap slow ones bottleneck the whole system.
+
+## Autoscaling has a physical floor that traffic-based autoscaling ignores
+
+Traditional autoscaling assumes new capacity is available in seconds.
+Loading model weights (tens to hundreds of gigabytes) onto a fresh GPU
+instance, and warming up whatever JIT-compiled kernels the serving
+framework uses, can take a meaningful fraction of a minute — sometimes
+several minutes for very large models. A reactive autoscaler that only adds
+capacity once utilization crosses a threshold will systematically lag
+demand spikes by that warm-up window, during which existing capacity is
+overloaded. Mitigations include predictive/scheduled scaling for known
+traffic patterns, maintaining a warm standby buffer of pre-loaded replicas
+(pure cost, paid to avoid the warm-up lag), and load shedding/queuing with
+honest latency signaling to buy time for capacity to catch up rather than
+degrading silently.
+
+## Multi-tenant fairness under shared capacity
+
+When many customers/users share the same GPU fleet, a naive FIFO queue lets
+one high-volume tenant starve everyone else during a demand spike. Fair
+scheduling — per-tenant quotas, weighted fair queuing, or reserved capacity
+tiers for premium customers — is a scaling requirement in its own right, not
+just a rate-limiting nicety: without it, "the system scales" is true in
+aggregate but false for any individual tenant whose traffic collided with a
+noisy neighbor's spike.
+
+## Trade-off summary
+
+| Concern | Simple approach | Scale-optimized approach | Cost |
+|---|---|---|---|
+| KV-cache memory | Fixed max-length allocation per request | Paged/block-based allocation, prefix sharing | Serving engine complexity |
+| Repeated prefixes | Recompute every request | Prefix/prompt caching with affinity-aware routing | Cache invalidation & routing complexity |
+| GPU fleet composition | Uniform GPU type | Heterogeneous fleet by model tier/priority | Routing must understand fleet topology |
+| Autoscaling reaction | Reactive, threshold-triggered | Predictive scaling + warm standby buffer | Idle capacity cost paid to avoid warm-up lag |
+| Multi-tenant load | FIFO queue for all requests | Fair scheduling / reserved tiers per tenant | Scheduling complexity, potential idle reserved capacity |

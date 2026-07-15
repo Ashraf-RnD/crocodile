@@ -1,0 +1,82 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Docker"
+level: beginner
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "docker"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "Docker Docs — Get Started"
+    url: "https://docs.docker.com/get-started/"
+---
+
+## "Works on my machine" isn't good enough
+
+You train a model, write a FastAPI app to serve it, and it runs perfectly on your
+laptop. You hand it to a teammate (or a cloud server) and it breaks — wrong Python
+version, a missing system library that `torch` secretly depends on, a different CUDA
+driver. **Docker** solves this by packaging your app, its exact dependencies, and a
+minimal OS layer into one portable unit called an **image**. Anyone who runs that
+image gets the exact same environment you tested on, everywhere: your laptop, a
+teammate's machine, or a GPU server in the cloud.
+
+A running image is called a **container** — think of the image as a recipe and the
+container as the meal made from it. You can start many containers from the same
+image, and each one is isolated from the others.
+
+## A minimal Dockerfile for a model-serving app
+
+A `Dockerfile` is a text file of instructions for building an image:
+
+```dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY app.py .
+
+EXPOSE 8000
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+This says: start from a small official Python image, install our dependencies, copy
+in our FastAPI app, and run it with `uvicorn` when the container starts.
+
+## Building and running it
+
+```bash
+docker build -t my-model-api .
+docker run -p 8000:8000 my-model-api
+```
+
+`docker build` reads the Dockerfile and produces an image tagged `my-model-api`.
+`docker run` starts a container from it, and `-p 8000:8000` maps port 8000 inside the
+container to port 8000 on your machine, so `http://localhost:8000` reaches your API.
+Every teammate who runs those two commands gets an identical environment — no more
+"which Python version do you have?" debugging.
+
+## Try it yourself
+
+You have a `requirements.txt` with `fastapi`, `uvicorn`, and `torch` in it, and an
+`app.py` that loads a model and exposes a `/predict` endpoint. Write the two commands
+you'd run to build an image called `predict-api` and start it, publishing it on port
+9000 instead of 8000.
+
+<details>
+<summary>Solution</summary>
+
+```bash
+docker build -t predict-api .
+docker run -p 9000:8000 predict-api
+```
+
+The Dockerfile's `EXPOSE 8000` and `CMD` still bind to port 8000 *inside* the
+container — you don't need to change the Dockerfile. The `-p 9000:8000` flag maps your
+host's port 9000 to the container's internal port 8000, so you'd reach the API at
+`http://localhost:9000`.
+</details>

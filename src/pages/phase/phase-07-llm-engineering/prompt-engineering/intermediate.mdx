@@ -1,0 +1,125 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Prompt Engineering"
+level: intermediate
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "prompt-engineering"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "Anthropic — Chain of Thought Prompting"
+    url: "https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/chain-of-thought"
+  - type: article
+    title: "Prompting Guide — Techniques"
+    url: "https://www.promptingguide.ai/techniques"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Few-shot prompting: showing beats telling
+
+Once a task has any nuance (tone, edge cases, an unusual output shape), listing rules
+in prose stops scaling. Instead, show the model 2-5 input/output pairs and let it infer
+the pattern:
+
+```python
+system = """You are a support ticket classifier. Classify tickets into: billing,
+technical, account, other. Respond with only the category."""
+
+few_shot_examples = [
+    {"role": "user", "content": "I was charged twice this month"},
+    {"role": "assistant", "content": "billing"},
+    {"role": "user", "content": "The app crashes when I upload a photo"},
+    {"role": "assistant", "content": "technical"},
+    {"role": "user", "content": "I can't remember my password"},
+    {"role": "assistant", "content": "account"},
+]
+
+response = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{"role": "system", "content": system}, *few_shot_examples,
+              {"role": "user", "content": "Why did my invoice go up 30%?"}],
+)
+```
+
+Few-shot examples are especially powerful for enforcing an exact output *format* — the
+model pattern-matches on the shape of your examples far more reliably than on a
+written format spec alone.
+
+## Chain-of-thought: letting the model "think" before answering
+
+For anything requiring multi-step reasoning (math, multi-condition logic, planning),
+asking the model to reason step by step before giving a final answer measurably
+improves accuracy — the model has more "compute" (tokens) to work through the problem
+instead of jumping straight to a guess.
+
+```python
+prompt = """A customer ordered 3 items at $12.50 each and used a 15% discount code.
+Shipping is a flat $5.99. What is the final total?
+
+Think through this step by step, then give the final answer on its own line prefixed
+with "Total:"."""
+```
+
+In production, you typically parse out just the final line and discard the reasoning
+trace — the reasoning improves the *answer*, even if you never show the user the
+intermediate steps. Reasoning-tuned models (OpenAI's `o`-series, Claude with extended
+thinking) do this internally without you having to ask.
+
+<Mermaid client:visible code={`flowchart LR
+  A["User question"] --> B["Model reasons step by step (hidden or visible)"]
+  B --> C["Model commits to final answer"]
+  C --> D["App extracts + parses final answer"]`} />
+
+## System prompts vs. user prompts
+
+The `system` message sets persistent behavior for the whole conversation (persona,
+tone, hard constraints); the `user` message carries the actual request. Production
+apps almost always separate these because the system prompt is written once by
+engineers and the user prompt is often built dynamically from user input or retrieved
+data — mixing them makes it harder to reason about what's fixed vs. variable, and
+easier for user input to accidentally override your instructions.
+
+```python
+messages = [
+    {"role": "system", "content": (
+        "You are a legal-document summarizer. Never give legal advice. "
+        "Always include a disclaimer at the end of your response."
+    )},
+    {"role": "user", "content": f"Summarize this contract clause: {user_uploaded_text}"},
+]
+```
+
+## Structuring long or complex prompts
+
+For prompts with multiple sections (context, instructions, examples, the actual
+query), use clear delimiters — XML-style tags or markdown headers — so the model can
+tell sections apart instead of treating everything as one undifferentiated blob:
+
+```python
+prompt = f"""
+<context>
+{retrieved_documents}
+</context>
+
+<instructions>
+Answer the user's question using only the information in <context>. If the answer
+isn't in the context, say "I don't have enough information."
+</instructions>
+
+<question>
+{user_question}
+</question>
+"""
+```
+
+This pattern — instructions + delimited context + query — is the backbone of nearly
+every production RAG (retrieval-augmented generation) prompt.
+
+## Iterating on prompts like code
+
+Treat prompts as versioned artifacts, not one-off strings: keep a small eval set of
+representative inputs and expected behaviors, and re-run it whenever you change the
+prompt or swap models. A prompt that works well on `gpt-4o` can silently regress on a
+smaller or different model — this is why prompt changes belong in code review and
+version control, not just tweaked live in a playground.

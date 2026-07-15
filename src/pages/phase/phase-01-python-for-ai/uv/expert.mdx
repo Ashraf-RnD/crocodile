@@ -1,0 +1,116 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "uv"
+level: expert
+phaseSlug: "phase-01-python-for-ai"
+phaseName: "Python for AI"
+topicSlug: "uv"
+estReadTime: 12
+resources:
+  - type: docs
+    title: "uv — Resolution: universal vs. platform-specific"
+    url: "https://docs.astral.sh/uv/concepts/resolution/"
+  - type: article
+    title: "Astral — uv architecture and design decisions"
+    url: "https://astral.sh/blog/uv-unified-python-packaging"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Why uv is actually fast: hardlinks, not copies
+
+The largest hidden cost in pip/Poetry installs isn't resolution — it's copying
+package files into every project's virtual environment from scratch. uv's global
+cache stores downloaded package files once, then **hardlinks** (or copy-on-write
+clones on supporting filesystems) them into each project's `.venv` instead of
+duplicating bytes on disk. Combined with resolving and downloading packages in
+parallel (versus pip's more serial approach), this is what produces uv's often
+10-100x speedup over pip for a cold install of a large ML dependency tree.
+
+```bash
+uv cache dir      # shows the global cache location
+uv cache prune    # remove unused entries — cache grows but is safe to prune
+```
+
+<Mermaid client:visible code={`flowchart TB
+  DL["Download package once"] --> Cache["Global cache (content-addressed)"]
+  Cache -->|hardlink, not copy| V1["Project A .venv"]
+  Cache -->|hardlink, not copy| V2["Project B .venv"]
+  Cache -->|hardlink, not copy| V3["Project C .venv"]
+  V1 -.same physical bytes on disk.-> Cache`} />
+
+## Universal resolution vs. platform-specific lock files
+
+uv's lock file resolves dependencies for *all* platforms/Python versions your
+project could run on by default (similar to Poetry), producing one `uv.lock` that's
+valid everywhere — this avoids "works on Linux CI, breaks on a teammate's Mac"
+lock-file drift, at the cost of needing metadata (or a full resolve pass) for
+platform-specific wheels you may never actually install locally. For ML projects
+specifically, this matters because CUDA-specific `torch` wheels differ by platform
+and accelerator — uv can express and resolve platform-conditional dependencies
+(`torch` for CUDA on Linux vs. CPU-only on macOS) within a single lock file using
+PEP 508 environment markers.
+
+```toml
+[project]
+dependencies = [
+    "torch>=2.2; sys_platform == 'linux'",
+]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu121", marker = "sys_platform == 'linux'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+```
+
+## Rust implementation: what it does and doesn't buy you
+
+uv reimplements PEP 440 version parsing, PEP 508 marker evaluation, and the
+resolution algorithm natively in Rust rather than shelling out to Python for these
+hot paths — this is the concrete source of its speed advantage over Poetry's
+Python-implemented SAT resolver, not just "it's newer." What it does *not* change:
+the actual Python packages installed still run on whatever CPython interpreter you
+select — uv doesn't make your training code itself run faster, only the
+environment-setup phase around it.
+
+## Maturity trade-offs to weigh honestly
+
+uv is younger than pip and Poetry, which has concrete implications: fewer years of
+edge-case bug reports and fixes, a smaller set of battle-tested community plugins,
+and faster-moving CLI surface (commands and flags have changed across versions more
+than pip's have). For teams with strict compliance/audit requirements around
+tooling maturity, or deep existing Poetry plugin investments, this is a legitimate
+reason to stay on Poetry a while longer even while acknowledging uv's speed
+advantage — the choice is not purely technical.
+
+## pip vs. Poetry vs. uv
+
+| | pip | Poetry | uv |
+|---|---|---|---|
+| Implementation | Python | Python | Rust |
+| Install speed (cold, large ML stack) | Baseline | Slower than pip (resolver overhead) | 10-100x faster than pip |
+| Lock file | No (manual) | Yes, mature | Yes, PEP 621-aligned |
+| Manages Python interpreter versions | No | No | Yes (`uv python install`) |
+| Global cross-project cache | No | Partial (pip's own cache) | Yes, hardlink-based, aggressive |
+| Inline single-file script deps (PEP 723) | No | No | Yes (`uv run script.py`) |
+| Publishing | External tool needed | Built in | Built in |
+| Maturity / plugin ecosystem | Most mature, universal | Mature, established plugins | Newest, smaller track record |
+
+**The pragmatic recommendation for new AI/ML projects in 2026**: default to uv for
+the speed and Python-version management alone, especially given how large and
+frequently-iterated ML dependency trees are — but recognize Poetry remains a
+perfectly sound choice where its plugin ecosystem or team familiarity outweighs raw
+speed, and raw pip is still what you'll use inside a Colab cell or a quick
+one-off script regardless.
+
+## Trade-off summary
+
+| Decision | Gains | Costs |
+|---|---|---|
+| Global hardlink-based cache | Huge disk/time savings across projects | Cache invalidation edge cases on unusual filesystems |
+| Universal (all-platform) lock resolution | One lock file works everywhere | Resolution must consider wheels you'll never install locally |
+| uv also manages Python versions | One tool, one workflow, reproducible interpreter | Another thing uv now owns/could break |
+| Adopting a newer, faster-moving tool | Meaningful speed and DX wins today | Less historical track record than pip/Poetry |

@@ -1,0 +1,84 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Structured Output"
+level: beginner
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "structured-output"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "OpenAI — Structured Outputs Guide"
+    url: "https://platform.openai.com/docs/guides/structured-outputs"
+  - type: docs
+    title: "Pydantic Documentation"
+    url: "https://docs.pydantic.dev/"
+---
+
+## Think of it as a form instead of an essay
+
+If you ask someone to "describe this person" you'll get a paragraph. If you hand them
+a form with fields for **Name**, **Age**, and **City**, you get something you can
+actually plug into a database. Structured output does exactly that for LLMs: instead
+of free-form text, you get back JSON that matches a schema you defined, so your code
+can read `result["age"]` directly instead of parsing a sentence.
+
+### Without structured output (fragile)
+
+```python
+response = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "Extract name, age, city from: 'Maria, 29, lives in Lisbon'"}],
+)
+print(response.choices[0].message.content)
+# "The name is Maria, she is 29 years old, and lives in Lisbon."
+# Now you'd have to parse this sentence yourself — brittle!
+```
+
+### With structured output (reliable)
+
+```python
+from pydantic import BaseModel
+
+class Person(BaseModel):
+    name: str
+    age: int
+    city: str
+
+response = client.beta.chat.completions.parse(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "Extract info from: 'Maria, 29, lives in Lisbon'"}],
+    response_format=Person,
+)
+
+person = response.choices[0].message.parsed
+print(person.name, person.age, person.city)  # Maria 29 Lisbon
+print(type(person.age))                       # <class 'int'> — not a string!
+```
+
+You define a `Person` schema once with Pydantic, and the API guarantees the response
+matches it — right types, right field names, nothing missing.
+
+### Try it yourself
+
+Define a Pydantic model called `MovieReview` with fields `title` (string), `rating`
+(integer 1-5), and `recommended` (boolean), that you could use to extract structured
+data from a movie review.
+
+<details>
+<summary>Solution</summary>
+
+```python
+from pydantic import BaseModel
+
+class MovieReview(BaseModel):
+    title: str
+    rating: int
+    recommended: bool
+```
+
+You'd then pass `response_format=MovieReview` and the model's response is guaranteed
+to have exactly these three fields with the right types — no more scraping a plain
+sentence with regex.
+
+</details>

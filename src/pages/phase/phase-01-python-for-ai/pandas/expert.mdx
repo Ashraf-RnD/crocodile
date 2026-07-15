@@ -1,0 +1,120 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Pandas"
+level: expert
+phaseSlug: "phase-01-python-for-ai"
+phaseName: "Python for AI"
+topicSlug: "pandas"
+estReadTime: 12
+resources:
+  - type: docs
+    title: "pandas — Scaling to large datasets"
+    url: "https://pandas.pydata.org/docs/user_guide/scale.html"
+  - type: article
+    title: "pandas — Enhancing performance (Cython, eval, query)"
+    url: "https://pandas.pydata.org/docs/user_guide/enhancingperf.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## `SettingWithCopyWarning` and the chained-indexing trap
+
+Pandas can't always tell whether a slice is a view or a copy of the underlying data,
+so assigning into a chained selection produces a warning — and sometimes silently
+does nothing.
+
+```python
+import pandas as pd
+
+df = pd.DataFrame({"a": [1, 2, 3], "b": [10, 20, 30]})
+
+# Chained indexing — ambiguous whether this mutates df or a temporary copy
+df[df["a"] > 1]["b"] = 99   # SettingWithCopyWarning, likely doesn't do what you want
+
+# Correct: single .loc call, unambiguous
+df.loc[df["a"] > 1, "b"] = 99
+```
+
+The rule: any time you're both selecting *and* assigning, do it in one `.loc[]`/
+`.iloc[]` call rather than chaining two `[]` accesses. This single habit eliminates
+most of pandas' most confusing bugs.
+
+## `dtype` and memory: `category` and downcasting
+
+Loading a large dataset with default dtypes wastes memory fast — `object` dtype for
+strings is especially expensive because each cell is a separate Python object.
+
+```python
+df = pd.read_csv("events.csv")
+df.memory_usage(deep=True).sum() / 1e6   # MB, deep=True includes object overhead
+
+# A low-cardinality string column (e.g. "event_type": 5 distinct values, 1M rows)
+# stored as category uses an integer code + a small lookup table instead of
+# 1M separate Python string objects
+df["event_type"] = df["event_type"].astype("category")
+
+# Downcast numeric columns to the smallest safe dtype
+df["count"] = pd.to_numeric(df["count"], downcast="integer")
+```
+
+For a column with a handful of repeated string values, `category` can cut memory by
+90%+ and also speeds up `groupby`/`merge` on that column, because comparisons become
+integer comparisons instead of string comparisons.
+
+<Mermaid client:visible code={`flowchart LR
+  Obj["object dtype: 1M separate str objects"] -->|astype category| Cat["category: int codes + small lookup table"]
+  Cat --> Mem["~90%+ less memory"]
+  Cat --> Speed["Faster groupby/merge on this column"]`} />
+
+## `.iterrows()` is (almost) always the wrong answer
+
+`.iterrows()` reconstructs a `Series` per row — with its own dtype inference — which
+is dramatically slower than vectorized alternatives at scale.
+
+```python
+# Avoid: rebuilds a Series object per row, ~100x slower on large data
+total = 0
+for _, row in df.iterrows():
+    total += row["price"] * row["quantity"]
+
+# Vectorized — operates on whole columns at once
+total = (df["price"] * df["quantity"]).sum()
+
+# When the logic truly needs per-row Python and can't vectorize,
+# itertuples() is still much faster than iterrows() (no Series overhead)
+for row in df.itertuples():
+    ...
+```
+
+## `query`/`eval`: skipping intermediate allocations
+
+Chained boolean filters (`df[(df.a > 1) & (df.b < 5)]`) allocate a temporary boolean
+array for each condition. `df.query()` parses the expression and evaluates it more
+efficiently (optionally using the `numexpr` backend), which matters on wide,
+million-row DataFrames.
+
+```python
+# Standard filtering: allocates two boolean Series plus the combined mask
+filtered = df[(df["a"] > 1) & (df["b"] < 5)]
+
+# query(): single expression, less intermediate allocation, and more readable
+filtered = df.query("a > 1 and b < 5")
+```
+
+## When pandas itself is the bottleneck
+
+Pandas is single-threaded and holds the full DataFrame in memory. Once a dataset
+exceeds available RAM or a pipeline needs multi-core execution, the standard
+escalation path is:
+
+| Tool | When to reach for it | Trade-off |
+|---|---|---|
+| pandas | Fits in memory, single machine | Simple API, single-threaded, in-memory only |
+| `pandas` + `category`/downcasting | Fits in memory with tuning | More code, same ceiling as raw pandas |
+| Polars | Fits in memory, want multi-core speed | Different (stricter, more explicit) API |
+| Dask DataFrame | Larger-than-memory, want pandas-like API | Lazy evaluation adds complexity, some pandas ops unsupported |
+| Spark / DuckDB | Distributed or SQL-native workflows | Heavier setup, different execution model |
+
+For most model-training preprocessing that fits comfortably on one machine, pandas
+with correct dtypes and vectorized operations is still the right default — reach
+for Polars or Dask only once profiling shows pandas itself, not your code, is the
+bottleneck.

@@ -1,0 +1,68 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Adam"
+level: intermediate
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "adam"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "PyTorch — torch.optim.Adam / AdamW"
+    url: "https://pytorch.org/docs/stable/generated/torch.optim.AdamW.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The full update equations
+
+Adam tracks two running averages per parameter: `m` (first moment — like momentum)
+and `v` (second moment — squared gradient magnitude), each with their own decay rate:
+
+```
+m_t = β1 * m_{t-1} + (1 - β1) * gradient
+v_t = β2 * v_{t-1} + (1 - β2) * gradient²
+
+m_hat = m_t / (1 - β1^t)     # bias correction
+v_hat = v_t / (1 - β2^t)     # bias correction
+
+weight -= learning_rate * m_hat / (sqrt(v_hat) + epsilon)
+```
+
+Defaults: `β1=0.9`, `β2=0.999`, `epsilon=1e-8` — rarely need changing.
+
+<Mermaid client:visible code={`flowchart TB
+  M["m: EMA of gradient (direction)"] --> D["divide"]
+  V["sqrt(v): EMA of gradient² (typical magnitude)"] --> D
+  D --> Step["Effective step size, per parameter"]`} />
+
+## Why bias correction exists
+
+At step 1, `m` and `v` are initialized to zero, so the first few updates are biased
+toward zero (since the EMA hasn't accumulated enough history yet). The bias-correction
+terms (`1 - β1^t`, `1 - β2^t`) counteract this specifically during early training —
+without them, Adam would take artificially tiny, overly cautious steps for the first
+several dozen iterations.
+
+## AdamW: fixing a subtle bug in weight decay
+
+Plain Adam's `weight_decay` parameter (like SGD's) adds decay *before* the adaptive
+scaling, which means it gets divided by `sqrt(v_hat)` along with the gradient —
+weights with historically large gradients get *less* effective decay, which is
+backwards from the intent of L2 regularization. **AdamW** decouples weight decay from
+the gradient-based update, applying it directly and uniformly:
+
+```python
+# AdamW is now the standard default for transformer training, not plain Adam
+optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=0.01)
+```
+
+This is why virtually every modern LLM training recipe specifies AdamW, not Adam —
+it's a small but meaningful correction, not just a naming preference.
+
+## When Adam underperforms SGD
+
+Despite its convenience, Adam can generalize slightly worse than well-tuned SGD with
+momentum on some vision tasks (image classification with CNNs/ResNets), and Adam's
+memory overhead (storing `m` and `v` per parameter — 2x the model's parameter count in
+extra state) is non-trivial at LLM scale, motivating memory-efficient variants like
+8-bit Adam and Adafactor for very large models.

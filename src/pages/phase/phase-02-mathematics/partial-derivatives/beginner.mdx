@@ -1,0 +1,70 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Partial Derivatives"
+level: beginner
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "partial-derivatives"
+estReadTime: 6
+resources:
+  - type: video
+    title: "Khan Academy — Partial derivatives introduction"
+    url: "https://www.khanacademy.org/math/multivariable-calculus/multivariable-derivatives/partial-derivative-and-gradient-articles/a/partial-derivatives-introduction"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## When a function has more than one input
+
+A neural network's loss doesn't depend on just one weight — it depends on millions of
+them at once. A **partial derivative** asks: "if I change *just this one* input, and
+hold every other input fixed, how does the output change?"
+
+```
+∂f/∂x — "the partial derivative of f with respect to x"
+```
+
+<Mermaid client:visible code={`flowchart TB
+  F["Loss depends on weight1, weight2, weight3, ..."] --> P1["∂Loss/∂weight1: hold w2, w3 fixed"]
+  F --> P2["∂Loss/∂weight2: hold w1, w3 fixed"]
+  F --> P3["∂Loss/∂weight3: hold w1, w2 fixed"]`} />
+
+## A worked example
+
+For `f(x, y) = x^2 + 3xy`:
+
+```
+∂f/∂x = 2x + 3y     (treat y as a constant)
+∂f/∂y = 3x           (treat x as a constant)
+```
+
+```python
+def numerical_partial(f, point, index, h=1e-5):
+    point_plus = list(point)
+    point_plus[index] += h
+    return (f(*point_plus) - f(*point)) / h
+
+f = lambda x, y: x**2 + 3*x*y
+numerical_partial(f, (2, 3), 0)  # ∂f/∂x at (2,3) ≈ 2(2)+3(3) = 13
+numerical_partial(f, (2, 3), 1)  # ∂f/∂y at (2,3) ≈ 3(2) = 6
+```
+
+## The gradient: all partial derivatives together
+
+The **gradient** is just the vector of every partial derivative, one per input. For a
+model with a million weights, the gradient is a million-number vector — one number
+per weight, each saying "nudge this weight this direction to reduce the loss."
+
+```python
+gradient = [numerical_partial(f, (2, 3), i) for i in range(2)]
+print(gradient)  # [13, 6]
+```
+
+## Try it yourself
+
+For `f(x, y) = x*y`, what is `∂f/∂x` at the point `(4, 5)`?
+
+<details>
+<summary>Solution</summary>
+
+`∂f/∂x = y` (treating y as constant), so at `(4, 5)`, `∂f/∂x = 5`.
+</details>

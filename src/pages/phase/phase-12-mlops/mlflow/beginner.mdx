@@ -1,0 +1,102 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "MLflow"
+level: beginner
+phaseSlug: "phase-12-mlops"
+phaseName: "MLOps"
+topicSlug: "mlflow"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "MLflow — Official Documentation"
+    url: "https://mlflow.org/docs/latest/index.html"
+  - type: video
+    title: "MLflow in 15 minutes (Databricks)"
+    url: "https://www.youtube.com/watch?v=859OxXrt_TI"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Why MLflow exists
+
+Imagine training 30 versions of a model over a week, tweaking the learning rate,
+swapping datasets, trying different feature sets. A few days later someone asks
+"which run got 94% accuracy, and what parameters did it use?" Without a system,
+the answer lives in your memory, a messy spreadsheet, or nowhere at all.
+
+**MLflow** is an open-source tool that automatically logs every training run —
+its parameters, metrics, and output files — so you can always answer that
+question. Think of it as a lab notebook that fills itself in.
+
+MLflow has four main pieces, but as a beginner you'll mostly touch two:
+
+- **Tracking** — logs parameters, metrics, and files ("artifacts") for each run
+- **Model Registry** — a versioned catalog of models ready for deployment
+
+### Logging your first run
+
+```python
+import mlflow
+
+mlflow.set_experiment("iris-classifier")
+
+with mlflow.start_run():
+    learning_rate = 0.01
+    n_estimators = 100
+
+    mlflow.log_param("learning_rate", learning_rate)
+    mlflow.log_param("n_estimators", n_estimators)
+
+    # ... train your model here ...
+    accuracy = 0.94
+
+    mlflow.log_metric("accuracy", accuracy)
+    mlflow.sklearn.log_model(model, "model")
+```
+
+Run this a few times with different values, then launch the local dashboard:
+
+```bash
+mlflow ui
+```
+
+Open `http://localhost:5000` and you'll see every run listed side by side —
+parameters, metrics, and a way to sort by accuracy to find your best one.
+
+### The mental model
+
+<Mermaid client:visible code={`flowchart LR
+  A["Your training script"] --> B["mlflow.start_run()"]
+  B --> C["log_param() / log_metric()"]
+  C --> D["Run saved to tracking server"]
+  D --> E["MLflow UI — compare all runs"]`} />
+
+Every `start_run()` creates one row in the UI. You never have to build this
+comparison table yourself — MLflow does it automatically the moment you log.
+
+## Try it yourself
+
+You're training a model with three attempts and want to know which had the
+best accuracy. Write the MLflow logging code for one run with `epochs=10`,
+`batch_size=32`, and a final `accuracy=0.87`.
+
+<details>
+<summary>Solution</summary>
+
+```python
+import mlflow
+
+mlflow.set_experiment("my-experiment")
+
+with mlflow.start_run():
+    mlflow.log_param("epochs", 10)
+    mlflow.log_param("batch_size", 32)
+
+    # ... training happens here ...
+
+    mlflow.log_metric("accuracy", 0.87)
+```
+
+Run `mlflow ui` afterward and the run appears automatically — no manual
+spreadsheet needed.
+
+</details>

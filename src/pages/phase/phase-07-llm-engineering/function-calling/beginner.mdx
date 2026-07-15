@@ -1,0 +1,122 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Function Calling"
+level: beginner
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "function-calling"
+estReadTime: 7
+resources:
+  - type: docs
+    title: "OpenAI — Function Calling Guide"
+    url: "https://platform.openai.com/docs/guides/function-calling"
+  - type: docs
+    title: "Anthropic — Tool Use"
+    url: "https://docs.anthropic.com/en/docs/build-with-claude/tool-use"
+---
+
+## Think of it as giving the model a menu of buttons it can press
+
+An LLM can't check today's weather, look up a database, or do exact arithmetic on its
+own — it only produces text. **Function calling** lets you describe a set of functions
+(name, description, parameters) to the model; instead of guessing an answer, the model
+can respond with "call `get_weather(city='Paris')`" and let *your code* actually run
+it and hand the result back.
+
+### A minimal example
+
+```python
+from openai import OpenAI
+client = OpenAI()
+
+tools = [{
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "Get the current weather for a city",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "city": {"type": "string", "description": "City name, e.g. 'Paris'"}
+            },
+            "required": ["city"],
+        },
+    },
+}]
+
+response = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "What's the weather in Paris right now?"}],
+    tools=tools,
+)
+
+call = response.choices[0].message.tool_calls[0]
+print(call.function.name)       # "get_weather"
+print(call.function.arguments)  # '{"city": "Paris"}'
+```
+
+Notice the model never actually fetches the weather — it just decides *that* it should
+call `get_weather` and *with what arguments*. Your code is responsible for running the
+real function and sending the result back.
+
+### The full round trip
+
+<details>
+<summary>See the complete loop, including sending the result back</summary>
+
+```python
+import json
+
+def get_weather(city):
+    return {"city": city, "temp_c": 18, "condition": "cloudy"}  # pretend API call
+
+messages = [{"role": "user", "content": "What's the weather in Paris right now?"}]
+response = client.chat.completions.create(model="gpt-4o-mini", messages=messages, tools=tools)
+msg = response.choices[0].message
+messages.append(msg)
+
+if msg.tool_calls:
+    for call in msg.tool_calls:
+        args = json.loads(call.function.arguments)
+        result = get_weather(**args)
+        messages.append({
+            "role": "tool",
+            "tool_call_id": call.id,
+            "content": json.dumps(result),
+        })
+
+final = client.chat.completions.create(model="gpt-4o-mini", messages=messages, tools=tools)
+print(final.choices[0].message.content)
+# "It's currently 18°C and cloudy in Paris."
+```
+
+</details>
+
+### Try it yourself
+
+Write a function schema for `convert_currency(amount, from_currency, to_currency)` that
+the model could call to convert money between currencies.
+
+<details>
+<summary>Solution</summary>
+
+```python
+tools = [{
+    "type": "function",
+    "function": {
+        "name": "convert_currency",
+        "description": "Convert an amount of money from one currency to another",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "amount": {"type": "number"},
+                "from_currency": {"type": "string", "description": "3-letter currency code, e.g. USD"},
+                "to_currency": {"type": "string", "description": "3-letter currency code, e.g. EUR"},
+            },
+            "required": ["amount", "from_currency", "to_currency"],
+        },
+    },
+}]
+```
+
+</details>

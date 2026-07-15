@@ -1,0 +1,101 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Multi-Agent Platform"
+level: expert
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "multi-agent-platform"
+estReadTime: 12
+resources:
+  - type: article
+    title: "Anthropic — How we built our multi-agent research system"
+    url: "https://www.anthropic.com/engineering/multi-agent-research-system"
+  - type: article
+    title: "Anthropic — Building effective agents"
+    url: "https://www.anthropic.com/research/building-effective-agents"
+---
+
+## A note on sourcing
+
+Anthropic has published real engineering detail on building a multi-agent
+research system, which grounds several of the problems below; specifics for
+other production multi-agent platforms are reasoned from that post, general
+distributed-systems principles, and the hard constraints any system
+coordinating multiple LLM agents must satisfy.
+
+## Problem 1: token cost explodes faster than task complexity
+
+Anthropic's own published account of their multi-agent research system notes
+that multi-agent setups can consume roughly 15x the tokens of a single-agent
+chat interaction for a comparable task — the orchestrator's planning calls,
+each worker's exploration (including false starts and retries), and
+synthesis all add up independently. This means multi-agent architectures are
+only worth their cost on tasks where the quality improvement (better
+research coverage, parallelized exploration, specialization) clearly outweighs
+a double-digit multiplier on token spend — using this pattern for tasks a
+single well-prompted agent handles adequately is a straightforward waste of
+money, not just an inefficiency.
+
+## Problem 2: coordination failures compound, they don't average out
+
+A single agent that's wrong 10% of the time on subtasks is a known,
+bounded error rate. A pipeline of five sequential or interacting agents,
+each with independent failure modes, doesn't just add error rates — a
+downstream agent can act confidently on an upstream agent's *silently* wrong
+output (a research agent slightly misinterprets a source; the writing agent
+builds a whole paragraph on that misinterpretation with no way to know it's
+wrong). This is qualitatively different from single-agent failure: errors
+can compound and amplify through the pipeline rather than being independent
+draws. Mitigations include explicit verification/critic agents whose only
+job is checking other agents' outputs against source material, and
+designing the orchestrator to treat worker outputs as claims to be
+cross-checked rather than ground truth to build on directly.
+
+## Problem 3: non-determinism makes debugging and evaluation much harder
+
+A single LLM call is already non-deterministic across runs; a multi-agent
+system compounds this — the orchestrator's plan, which workers get spawned,
+what order they complete in, and what partial state each one sees when it
+runs can all vary between identical-looking runs of the same task,
+especially under real concurrency. This makes reproducing a bad outcome for
+debugging significantly harder than for a single-agent system, and it means
+evaluation needs to measure distributions of outcomes across many runs
+rather than trusting any single run as representative — a heavier evaluation
+burden than most single-agent product teams are set up for.
+
+## Problem 4: shared state is a concurrency problem, not just a data problem
+
+When multiple worker agents read and write a shared scratchpad/memory store
+concurrently, this is a real concurrency control problem: two workers can
+race to update overlapping findings, one worker can act on stale state
+another worker has since superseded, and the orchestrator can synthesize a
+final answer from a torn/inconsistent snapshot of shared state if reads
+aren't coordinated with in-flight writes. Practical systems generally avoid
+fine-grained shared mutable state between agents specifically to sidestep
+this class of bug — preferring each worker to return a self-contained result
+that the orchestrator alone merges, rather than agents mutating shared state
+directly.
+
+## Problem 5: runaway agents and cost/blast-radius containment
+
+An orchestrator that dynamically replans based on intermediate results can,
+in principle, loop indefinitely — spawning more workers, more rounds, more
+exploration, without converging. Necessary guardrails include hard caps on
+total rounds, total worker fan-out, and total token/dollar spend per task,
+enforced independently of the orchestrator's own judgment (since a
+misbehaving orchestrator can't be trusted to correctly decide it should
+stop). For agents with tool access (code execution, external API calls),
+this also means bounding the blast radius of what any single worker can do —
+sandboxing, per-tool rate limits, and scoped credentials per agent rather
+than one shared set of capabilities across the whole system.
+
+## Trade-off summary
+
+| Concern | Single-agent approach | Multi-agent approach | Cost |
+|---|---|---|---|
+| Task complexity fit | Best for focused, bounded tasks | Best for tasks that decompose into independent subtasks | Coordination overhead not worth it for simple tasks |
+| Token/cost | Baseline | Can be an order of magnitude higher for comparable task | Must be justified by quality/parallelism gains |
+| Error behavior | Bounded, independent failure rate | Errors can compound silently across agents | Needs explicit cross-checking/critic agents |
+| Debuggability | Single trace to inspect | Concurrent, non-deterministic multi-agent traces | Heavier evaluation & tracing infrastructure |
+| Shared state | N/A | Concurrency hazard if agents mutate shared state directly | Prefer merge-by-orchestrator over direct shared writes |
+| Runaway risk | Bounded by single context/turn limits | Can loop/fan-out indefinitely without hard caps | Explicit round/spend/tool-call limits required |

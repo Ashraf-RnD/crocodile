@@ -1,0 +1,106 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Text Cleaning"
+level: intermediate
+phaseSlug: "phase-05-natural-language-processing"
+phaseName: "Natural Language Processing"
+topicSlug: "text-cleaning"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "spaCy — Tokenization and lemmatization"
+    url: "https://spacy.io/usage/linguistic-features#tokenization"
+  - type: article
+    title: "Unicode Standard — Normalization Forms (NFC/NFKC)"
+    url: "https://unicode.org/reports/tr15/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## A production cleaning pipeline
+
+Real pipelines chain several distinct stages, each targeting a specific noise source.
+Order matters — for example, you should strip HTML before collapsing whitespace, not
+after, or you'll leave stray tag fragments.
+
+<Mermaid client:visible code={`flowchart LR
+  A[Raw text] --> B[Unicode normalize]
+  B --> C[Strip HTML / markup]
+  C --> D[Strip URLs, emails, mentions]
+  D --> E[Lemmatize / normalize tokens]
+  E --> F[Remove stopwords - optional]
+  F --> G[Clean text ready for tokenizer]`} />
+
+```python
+import re
+import unicodedata
+import spacy
+
+nlp = spacy.load("en_core_web_sm")
+
+def normalize_unicode(text):
+    # NFKC folds visually-identical characters (full-width, ligatures) to a
+    # canonical form -- important for text scraped from varied sources
+    return unicodedata.normalize("NFKC", text)
+
+def strip_markup(text):
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"http\S+|www\.\S+", " ", text)
+    text = re.sub(r"@\w+", " ", text)          # mentions
+    text = re.sub(r"#(\w+)", r"\1", text)      # keep hashtag word, drop '#'
+    return text
+
+def lemmatize(text, remove_stopwords=False):
+    doc = nlp(text)
+    tokens = [
+        t.lemma_.lower() for t in doc
+        if not t.is_punct and not t.is_space
+        and (not remove_stopwords or not t.is_stop)
+    ]
+    return " ".join(tokens)
+
+text = "Running quickly, the researchers've published <b>3</b> NEW papers! #NLP"
+text = normalize_unicode(text)
+text = strip_markup(text)
+print(lemmatize(text))
+# "run quickly the researcher have publish 3 new paper"
+```
+
+## Lemmatization vs. stemming
+
+Both reduce words to a base form, but with very different quality/speed trade-offs:
+
+```python
+# Stemming (rule-based, fast, crude) — e.g. NLTK's PorterStemmer
+"running" -> "run"        # fine
+"studies" -> "studi"      # not even a real word
+
+# Lemmatization (dictionary + POS-aware, slower, accurate) — spaCy
+"running" -> "run"
+"studies" -> "study"      # correct
+"better"  -> "good"       # requires knowing 'better' is a comparative adjective
+```
+
+Lemmatization needs part-of-speech context to work correctly (`"leaves"` lemmatizes
+differently as a noun — "leaf" — vs. a verb — "leave"), which is exactly why spaCy
+runs a full pipeline (tokenizer → tagger → lemmatizer) rather than a simple lookup
+table. Stemming is still used where raw throughput matters more than precision, e.g.
+building an inverted search index over millions of documents.
+
+## Cleaning is task-dependent, not universal
+
+There is no single "correct" cleaning pipeline — it depends entirely on what the text
+will be used for:
+
+- **Sentiment analysis**: keep emojis, exclamation marks, and capitalization — they
+  carry signal ("AMAZING!!! 😍" vs "amazing")
+- **Search/retrieval indexing**: aggressive normalization (lowercase, remove
+  punctuation, stem) improves recall by matching more variants
+- **Named entity recognition**: preserve capitalization and punctuation entirely —
+  they're primary signals the model relies on
+- **Fine-tuning a modern LLM**: often minimal cleaning at all — these models were
+  pretrained on raw, messy web text, and over-cleaning can actually create a
+  distribution mismatch with what the model has seen before
+
+Always inspect a cleaning function against real samples from your dataset before
+trusting it at scale — silent over-cleaning (stripping meaningful punctuation) is far
+more common, and far harder to detect, than under-cleaning.

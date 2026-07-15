@@ -1,0 +1,70 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "ElevenLabs"
+level: expert
+phaseSlug: "phase-09-multimodal-ai"
+phaseName: "Multimodal AI"
+topicSlug: "elevenlabs"
+estReadTime: 11
+resources:
+  - type: docs
+    title: "ElevenLabs — Responsible AI & voice verification"
+    url: "https://elevenlabs.io/safety"
+  - type: docs
+    title: "ElevenLabs — Models overview (latency vs quality)"
+    url: "https://elevenlabs.io/docs/models"
+---
+
+## The cost/quality/latency triangle vs self-hosted TTS
+
+| Option | Voice quality | Latency | Cost model | Self-hosted |
+|---|---|---|---|---|
+| ElevenLabs | Very high, most natural prosody | Low (flash models) | Per-character API pricing | No |
+| Kokoro / XTTS / Bark (open) | Good, improving fast | Depends on hardware | Compute only | Yes |
+| Cloud TTS (Google/Azure/AWS) | Good, less expressive | Low | Per-character API pricing | No |
+
+ElevenLabs' quality edge comes largely from prosody modeling — pacing, emphasis, and
+emotional inflection that make output sound less "read aloud" and more "spoken
+naturally." That gap has narrowed against the best open models but hasn't closed,
+which is why high-visibility production voice products (narration, branded voice
+assistants) still lean toward it despite the higher per-character cost compared to
+self-hosting.
+
+## Latency budget for a real-time voice agent
+
+A voice agent's perceived responsiveness is the sum of every stage in the pipeline,
+and TTS is only one link:
+
+```
+user stops speaking → VAD detects end of turn (~100-300ms)
+→ ASR transcribes (~100-300ms, or streaming/incremental)
+→ LLM generates first tokens (~200-500ms to first token)
+→ TTS synthesizes first audio chunk (~100-300ms with streaming models)
+→ audio playback starts
+```
+
+Total time-to-first-audio in a well-optimized pipeline is often 700ms-1.5s — every
+stage needs to stream rather than wait for completion, which is why `eleven_flash_v2_5`
+(optimized specifically for time-to-first-byte) exists as a distinct product tier from
+ElevenLabs' higher-fidelity default models: production voice agents will trade audio
+quality for latency far more aggressively than an audiobook pipeline would.
+
+## Consent, cloning, and watermarking
+
+Voice cloning raises real misuse risk — impersonation, fraud (voice-based scams
+targeting family members), and unauthorized commercial use of a person's likeness.
+ElevenLabs requires consent verification for cloning at higher tiers, and ships
+**AI-generated audio watermarking** (imperceptible signal embedded in output audio
+that identifies it as AI-generated) specifically to support detection tooling —
+production systems handling cloned or synthetic voices at any scale should treat
+consent verification and detectability as a compliance requirement, not an optional
+feature, given the fraud and deepfake landscape this technology sits in.
+
+## When self-hosting wins despite lower quality
+
+At very high volume (millions of characters/day), the per-character API cost of a
+hosted service can exceed the fully-loaded cost of running an open-source model like
+Kokoro or XTTS on owned/rented GPU capacity — and self-hosting also removes any
+dependency on a third party for data residency-sensitive use cases (healthcare,
+government). The trade is explicit: lower voice quality and more engineering
+ownership, in exchange for cost control and data control at scale.

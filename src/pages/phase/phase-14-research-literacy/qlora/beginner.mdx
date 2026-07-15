@@ -1,0 +1,80 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "QLoRA"
+level: beginner
+phaseSlug: "phase-14-research-literacy"
+phaseName: "Research Literacy"
+topicSlug: "qlora"
+estReadTime: 7
+resources:
+  - type: article
+    title: "QLoRA: Efficient Finetuning of Quantized LLMs (original paper)"
+    url: "https://arxiv.org/abs/2305.14314"
+  - type: docs
+    title: "Hugging Face — bitsandbytes 4-bit quantization"
+    url: "https://huggingface.co/docs/transformers/quantization/bitsandbytes"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The problem before this paper
+
+_Note: this lesson analyzes the QLoRA **paper** — its technical contribution
+and legacy. For a practical how-to guide, see the QLoRA lesson under Phase 10:
+Fine-tuning._
+
+LoRA (covered in its own lesson in this phase) had already made fine-tuning far
+cheaper by freezing the pretrained model and training only small low-rank
+adapter matrices. But there was still a catch: LoRA's frozen base model still
+had to be loaded into GPU memory in a reasonably high precision (typically
+16-bit) to fine-tune with it. For a 65-billion-parameter model, that's roughly
+130GB just to hold the weights — far beyond what a single consumer or
+even most single-server GPUs can hold. LoRA made *training* cheap; it hadn't
+made *loading the model in the first place* cheap.
+
+## The core idea, in plain language
+
+QLoRA's answer: shrink the frozen base model itself by storing its weights in
+**4-bit precision** instead of 16-bit — roughly a 4x memory reduction — while
+still training LoRA's small adapter matrices in higher precision on top of it.
+The frozen, quantized weights are only briefly "unpacked" back to a usable
+precision during each computation and then discarded, so the memory savings
+persist throughout training.
+
+A useful analogy: imagine you need to reference a massive reference book while
+writing your own notes in the margins. Instead of keeping the full,
+high-resolution book on your desk (16-bit weights, huge memory footprint), you
+keep a heavily compressed, low-resolution photocopy that's still legible enough
+to read from (4-bit weights) — and you write your actual notes (the LoRA
+adapter) on normal, full-quality paper. The compressed photocopy takes up a
+fraction of the space, and because you're not editing it, some loss of fidelity
+in how it's stored is an acceptable trade.
+
+<Mermaid client:visible code={`flowchart LR
+  A["LoRA: 16-bit frozen base + small trainable adapters"] --> B["~130GB for a 65B model — needs multiple GPUs"]
+  C["QLoRA: 4-bit frozen base + small trainable adapters"] --> D["~35-40GB for a 65B model — fits on one GPU"]`} />
+
+## Why it mattered
+
+QLoRA's headline result was fine-tuning a 65-billion-parameter model on a
+**single 48GB GPU** while matching the performance of full 16-bit fine-tuning
+on benchmark tasks — something previously requiring a multi-GPU server. That
+made fine-tuning genuinely large open-weight models accessible to individual
+researchers and small teams, not just organizations with large compute
+budgets, and it's a major reason the open-source LLM fine-tuning ecosystem
+exploded in scale during 2023.
+
+## Try it yourself
+
+Can you explain the core idea of this paper in one sentence to a non-technical
+friend?
+
+<details>
+<summary>Solution</summary>
+
+Something like: "This method compresses the huge, unchanging part of an AI
+model down to a much smaller size so it fits on ordinary hardware, while still
+training a small set of adjustment numbers on top at full quality — letting you
+fine-tune models that used to require a room full of expensive computers on a
+single high-end gaming GPU instead."
+
+</details>

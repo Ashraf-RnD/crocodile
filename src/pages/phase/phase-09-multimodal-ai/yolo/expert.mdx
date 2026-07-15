@@ -1,0 +1,69 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "YOLO"
+level: expert
+phaseSlug: "phase-09-multimodal-ai"
+phaseName: "Multimodal AI"
+topicSlug: "yolo"
+estReadTime: 10
+resources:
+  - type: article
+    title: "End-to-End Object Detection with Transformers (DETR paper)"
+    url: "https://arxiv.org/abs/2005.12872"
+  - type: docs
+    title: "Ultralytics — Model export (TensorRT, ONNX, INT8)"
+    url: "https://docs.ultralytics.com/modes/export/"
+---
+
+## One-stage vs two-stage vs transformer detectors
+
+| Approach | Example | Speed | Accuracy (small objects) | Typical use |
+|---|---|---|---|---|
+| One-stage, anchor-free | YOLOv8/v11 | Very fast (real-time) | Good | Real-time video, edge devices |
+| Two-stage | Faster R-CNN | Slower | Best on small/overlapping objects | Offline high-accuracy analysis |
+| Transformer (set prediction) | DETR / RT-DETR | Moderate | Good, no NMS needed | Research, increasingly production |
+
+YOLO's speed advantage comes directly from being single-pass and anchor-free: it skips
+the two-stage "propose regions, then classify each region" pipeline of Faster R-CNN
+entirely, and skips NMS-sensitive anchor matching by predicting boxes directly. The
+trade-off shows up on **small, densely packed objects** (a crowd of distant people, a
+shelf of small products) where two-stage detectors' region-proposal step still tends to
+edge out YOLO's accuracy, though the gap has narrowed significantly through YOLOv8-v11.
+
+## Why NMS is a production liability, not just a detail
+
+Non-Maximum Suppression relies on a fixed IoU (intersection-over-union) threshold to
+decide which overlapping boxes are "the same object." This breaks down predictably:
+
+- **Dense scenes** (overlapping people in a crowd) — legitimate separate detections get
+  suppressed as duplicates.
+- **Class-specific tuning** — a threshold tuned for cars (large, well-separated) often
+  over-suppresses smaller, closer objects like faces.
+
+This is exactly why transformer-based detectors like DETR/RT-DETR frame detection as a
+direct **set prediction** problem (bipartite matching during training) — eliminating
+NMS entirely removes this failure mode, at the cost of more complex, slower training.
+
+## Deployment: quantization and TensorRT
+
+A YOLO model trained in float32 PyTorch is rarely what ships to production, especially
+on edge devices (cameras, drones, embedded boards). The standard path:
+
+```python
+model.export(format="engine", half=True, int8=False)  # TensorRT FP16 export
+```
+
+FP16 (half precision) typically costs negligible accuracy for a 2x+ inference speedup
+on NVIDIA GPUs. INT8 quantization goes further (roughly 4x speedup over FP32) but
+requires a calibration dataset and does cost measurable accuracy — teams pick INT8 only
+when latency/power budgets are truly tight (embedded/mobile), not by default.
+
+## Confidence threshold is a business decision, not a hyperparameter
+
+The default `conf=0.25` in Ultralytics is a starting point, not a correct answer. A
+security system flagging intruders should bias toward a lower threshold (catch more,
+tolerate false positives triggering a human review) — a manufacturing defect detector
+gating physical part rejection should bias much higher (a false positive throws away a
+good part; a false negative ships a defect). This threshold is usually the single
+highest-leverage tuning knob in a YOLO deployment, and it should be set by looking at
+a precision-recall curve on validation data, not left at the library default.

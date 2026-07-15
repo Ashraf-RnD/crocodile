@@ -1,0 +1,103 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "uv"
+level: intermediate
+phaseSlug: "phase-01-python-for-ai"
+phaseName: "Python for AI"
+topicSlug: "uv"
+estReadTime: 8
+resources:
+  - type: docs
+    title: "uv — Locking and syncing"
+    url: "https://docs.astral.sh/uv/concepts/projects/sync/"
+  - type: docs
+    title: "uv — Using uv with scripts (inline dependencies)"
+    url: "https://docs.astral.sh/uv/guides/scripts/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## `uv.lock`: fast *and* reproducible
+
+Like Poetry's `poetry.lock`, `uv.lock` pins the exact resolved version of every
+direct and transitive dependency. The difference is generation speed — uv's
+resolver is written in Rust, runs resolution steps in parallel, and uses a global,
+content-addressed cache shared across *all* your projects, so a package downloaded
+once for one project is reused instantly by another.
+
+```bash
+uv add torch transformers accelerate
+uv lock                    # re-resolve and rewrite uv.lock explicitly
+uv sync                    # install exactly what's in uv.lock, remove anything extra
+uv sync --frozen           # install from the lock file without re-resolving at all — fastest, for CI
+```
+
+`uv sync --frozen` is what a CI pipeline or Docker build should use: it trusts the
+committed lock file completely and skips resolution entirely, which is both the
+fastest and the most reproducible option — no risk of the resolver picking a
+slightly different version than what was tested.
+
+<Mermaid client:visible code={`flowchart LR
+  Cache["Global content-addressed cache (~/.cache/uv)"] -->|shared across projects| P1["Project A install"]
+  Cache -->|shared across projects| P2["Project B install"]
+  P1 -->|"same numpy version needed"| Cache
+  P2 -->|"reuses cached files, no re-download"| Cache`} />
+
+## Dependency groups (like Poetry's, standardized differently)
+
+uv supports the same "dev vs. runtime" separation, using the PEP 735-aligned
+dependency-groups mechanism rather than Poetry's own syntax.
+
+```toml
+[project]
+name = "my-project"
+dependencies = ["torch>=2.2", "pandas>=2.2"]
+
+[dependency-groups]
+dev = ["pytest>=8.0", "ruff>=0.4"]
+notebooks = ["jupyterlab>=4.1"]
+```
+
+```bash
+uv sync                       # main + default groups
+uv sync --no-dev              # skip the dev group — production install
+uv sync --group notebooks     # include a specific extra group
+```
+
+## Running one-off scripts with inline dependencies
+
+uv can run a standalone script and manage its dependencies without a full project —
+useful for a quick data-processing script or experiment that doesn't warrant a
+whole `pyproject.toml`.
+
+```python
+# script.py
+# /// script
+# dependencies = ["requests", "pandas"]
+# ///
+import requests
+import pandas as pd
+
+print(pd.__version__)
+```
+
+```bash
+uv run script.py   # reads the inline metadata, creates an ephemeral env, runs it
+```
+
+This inline-dependency format (`# /// script`) is itself a PEP 723 standard, not a
+uv-specific invention — uv is just the first tool to make it genuinely convenient.
+
+## Migrating an existing pip/Poetry project
+
+```bash
+# From a requirements.txt project
+uv init --no-readme
+uv add -r requirements.txt
+
+# uv can also read/convert a Poetry-style pyproject.toml in many cases directly
+uv sync   # will attempt to resolve and lock based on existing [project] deps
+```
+
+In practice, most teams migrate incrementally: start using `uv pip install` as a
+faster drop-in, then move to `uv init`/`uv add` once comfortable with the full
+project workflow.

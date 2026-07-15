@@ -1,0 +1,64 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Derivatives"
+level: beginner
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "derivatives"
+estReadTime: 6
+resources:
+  - type: video
+    title: "3Blue1Brown — The paradox of the derivative"
+    url: "https://www.youtube.com/watch?v=9vKqVkMQHKk"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## A derivative is a rate of change
+
+The derivative of a function tells you how fast its output changes as its input
+changes — the slope of the curve at a point. If loss is a function of a weight, the
+derivative tells you: "if I nudge this weight up slightly, does the loss go up or
+down, and by how much?"
+
+<Mermaid client:visible code={`flowchart LR
+  W["Weight value"] --> F["Loss function"]
+  F --> D["Derivative: slope at this point"]
+  D --> Pos["Positive slope: loss increases as weight increases"]
+  D --> Neg["Negative slope: loss decreases as weight increases"]`} />
+
+## The formal definition, intuitively
+
+```
+f'(x) = (f(x + h) - f(x)) / h,   as h approaches 0
+```
+
+This is just "rise over run" for a tiny step `h`. In code, you can approximate it
+directly:
+
+```python
+def numerical_derivative(f, x, h=1e-5):
+    return (f(x + h) - f(x)) / h
+
+f = lambda x: x ** 2
+numerical_derivative(f, 3)  # ~6.0 — matches the true derivative of x^2, which is 2x
+```
+
+## Why this matters: the derivative tells you which way to move
+
+If the derivative of the loss with respect to a weight is **positive**, decreasing
+that weight will decrease the loss. If it's **negative**, increasing the weight will
+decrease the loss. This one idea — "move opposite the derivative to reduce loss" — is
+the entire basis of how neural networks learn (gradient descent, covered later in this
+phase).
+
+## Try it yourself
+
+For `f(x) = x^2`, the true derivative is `f'(x) = 2x`. At `x = 5`, should you increase
+or decrease `x` to make `f(x)` smaller?
+
+<details>
+<summary>Solution</summary>
+
+`f'(5) = 10`, a positive slope — so decreasing `x` decreases `f(x)`. Indeed,
+`f(5) = 25` but `f(4) = 16` — smaller, confirming the direction.
+</details>

@@ -1,0 +1,107 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Accuracy"
+level: beginner
+phaseSlug: "phase-03-machine-learning"
+phaseName: "Machine Learning"
+topicSlug: "accuracy"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "scikit-learn: accuracy_score"
+    url: "https://scikit-learn.org/stable/modules/generated/sklearn.metrics.accuracy_score.html"
+  - type: video
+    title: "StatQuest: Machine Learning Fundamentals - Accuracy"
+    url: "https://www.youtube.com/watch?v=Kdsp6soqA7o"
+---
+
+## Accuracy is a graded quiz
+
+Imagine a quiz with 20 questions. You get 18 right and 2 wrong. Your score is
+18/20 = 90%. That's it — that's accuracy. In classification, each prediction
+your model makes is one "question." Accuracy is simply:
+
+```
+accuracy = number of correct predictions / total number of predictions
+```
+
+It doesn't matter what type of mistake you made (mixing up question 3 vs
+question 17) — accuracy just counts right vs. wrong across the whole quiz.
+
+## Computing it manually
+
+```python
+y_true = [1, 0, 1, 1, 0, 1, 0, 0]
+y_pred = [1, 0, 1, 0, 0, 1, 1, 0]
+
+correct = sum(t == p for t, p in zip(y_true, y_pred))
+total = len(y_true)
+accuracy = correct / total
+
+print(correct, total, accuracy)
+# 6 8 0.75
+```
+
+Six out of eight predictions matched the true label, so accuracy is 0.75, or
+75%.
+
+## Using scikit-learn
+
+You rarely compute this by hand in practice — scikit-learn has a built-in
+function that does exactly the same division:
+
+```python
+from sklearn.metrics import accuracy_score
+
+y_true = [1, 0, 1, 1, 0, 1, 0, 0]
+y_pred = [1, 0, 1, 0, 0, 1, 1, 0]
+
+print(accuracy_score(y_true, y_pred))
+# 0.75
+```
+
+Fitted classifiers also expose a `.score()` method that computes accuracy for
+you against a given dataset:
+
+```python
+from sklearn.linear_model import LogisticRegression
+from sklearn.datasets import load_iris
+from sklearn.model_selection import train_test_split
+
+X, y = load_iris(return_X_y=True)
+X_train, X_test, y_train, y_test = train_test_split(X, y, random_state=0)
+
+model = LogisticRegression(max_iter=200).fit(X_train, y_train)
+print(model.score(X_test, y_test))
+# e.g. 0.97
+```
+
+## Try it yourself
+
+Given `y_true = [1, 1, 0, 1, 0, 0, 1, 0, 1, 1]` and
+`y_pred = [1, 0, 0, 1, 0, 1, 1, 0, 1, 0]`, compute the accuracy both manually
+and with `accuracy_score`. Do the two numbers match?
+
+<details>
+<summary>Solution</summary>
+
+```python
+from sklearn.metrics import accuracy_score
+
+y_true = [1, 1, 0, 1, 0, 0, 1, 0, 1, 1]
+y_pred = [1, 0, 0, 1, 0, 1, 1, 0, 1, 0]
+
+# Manual
+correct = sum(t == p for t, p in zip(y_true, y_pred))
+manual_accuracy = correct / len(y_true)
+
+# sklearn
+sk_accuracy = accuracy_score(y_true, y_pred)
+
+print(manual_accuracy, sk_accuracy)
+# 0.7 0.7
+```
+
+Both methods agree: 7 out of 10 predictions are correct, so accuracy is 0.7.
+
+</details>

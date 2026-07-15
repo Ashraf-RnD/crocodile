@@ -1,0 +1,107 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Retrieval"
+level: expert
+phaseSlug: "phase-08-retrieval-augmented-generation"
+phaseName: "Retrieval-Augmented Generation"
+topicSlug: "retrieval"
+estReadTime: 13
+resources:
+  - type: article
+    title: "Lost in the Middle: How Language Models Use Long Contexts"
+    url: "https://arxiv.org/abs/2307.03172"
+  - type: article
+    title: "Anthropic — Contextual Retrieval"
+    url: "https://www.anthropic.com/news/contextual-retrieval"
+---
+
+## Retrieval quality is a recall/precision trade-off under a hard latency budget
+
+Every retrieval design decision — index type, `k`, filtering strategy, number of
+pipeline stages — trades off against the other two axes of the same triangle: recall
+(did we find the relevant chunk at all), precision (how much irrelevant noise came
+with it), and latency (how long the user waits). Optimizing any one in isolation is
+easy; optimizing all three together, at corpus scale, under production traffic, is the
+actual job. A retrieval system that's 99% recall at k=200 with a 4-second query is
+often a worse product decision than 92% recall at k=20 in 150ms, depending entirely on
+what the downstream LLM step and user experience can tolerate.
+
+## Why more retrieved context isn't free, even with huge context windows
+
+It's tempting, given million-token context windows, to just retrieve generously and
+let the LLM sort it out. Two effects push back against this:
+
+1. **"Lost in the middle"** — LLMs reliably attend more strongly to information near
+   the start and end of a long context than in the middle, so a relevant chunk buried
+   at position 40 of 50 can be effectively ignored even though it's technically "in
+   context." Retrieval precision (fewer, better-ranked chunks) often beats retrieval
+   recall (more chunks, hoping the right one is somewhere in there) for actual answer
+   quality.
+2. **Cost and latency scale with tokens sent**, and irrelevant context can actively
+   *decrease* answer accuracy, not just waste money — a well-documented failure mode
+   where an LLM given a distractor passage produces a wrong answer it would not have
+   given with less, cleaner context.
+
+This is the direct justification for reranking and tight, precision-oriented top-k
+selection over "just retrieve more and let the model figure it out."
+
+## Retrieval failure modes and their root causes
+
+| Failure mode | Symptom | Root cause | Mitigation |
+|---|---|---|---|
+| Embedding mismatch | Relevant chunk never appears in top-k, even at high k | Query phrasing differs semantically from passage phrasing (e.g. question vs. declarative statement) | HyDE, query expansion, fine-tuned embeddings |
+| Lexical gap | Exact term/code/ID/acronym retrieval fails | Dense embeddings blur rare or exact tokens; semantic similarity ≠ exact match | Hybrid search (BM25 + dense) |
+| Context dilution | Chunk is relevant but its embedding is dominated by unrelated content in the same chunk | Chunk too large or topically mixed | Better chunking, contextual retrieval |
+| Over-retrieval noise | Right chunk is in top-k but ranked low, buried by near-duplicates | No reranking stage; embedding similarity ordering is coarse | Cross-encoder reranking |
+| Stale index | Retrieved chunk is factually outdated | No re-indexing pipeline on document updates | Incremental indexing, TTLs, versioned collections |
+| Access-control leakage | Retrieval returns content the user shouldn't see | Vector search has no inherent ACL awareness | Enforce filters at query time, not post-filter |
+
+## Multi-hop and agentic retrieval
+
+Single-shot retrieval assumes one query is enough to gather the needed context. Many
+real questions require **multiple retrieval rounds** — "compare our Q3 revenue to
+last year's Q3" needs two separate lookups, not one similarity search. Agentic RAG
+patterns let the LLM decide, iteratively, what to retrieve next based on what it's
+already seen:
+
+```python
+def agentic_retrieve(question, max_hops=3):
+    context = []
+    query = question
+    for _ in range(max_hops):
+        hits = retrieve(query, top_k=5)
+        context.extend(hits)
+        decision = llm.invoke(
+            f"Question: {question}\nRetrieved so far: {context}\n"
+            "Do you have enough information to answer? If not, what should be "
+            "searched next? Respond with either ANSWER or a new search query."
+        )
+        if decision.startswith("ANSWER"):
+            break
+        query = decision  # feed the LLM's follow-up query back into retrieval
+    return context
+```
+
+This materially improves answers to compositional questions at the cost of multiple
+sequential LLM + retrieval round trips per query — a latency and cost multiplier that
+needs to be weighed against how often your real query distribution actually needs
+multi-hop reasoning versus paying that tax on every request.
+
+## Evaluating retrieval independently of generation
+
+A common mistake is only evaluating RAG end-to-end (final answer correctness), which
+conflates retrieval failures with generation failures and makes debugging slow.
+Retrieval should be evaluated on its own with standard IR metrics against a labeled
+set of (query, relevant-document-ids) pairs:
+
+- **Recall@k** — of the truly relevant documents, what fraction appear in the top-k?
+- **MRR (Mean Reciprocal Rank)** — how high does the first relevant result rank, on
+  average?
+- **nDCG** — rewards relevant results ranked higher, penalizes relevant results
+  ranked lower, accounting for graded (not just binary) relevance.
+
+Tracking these separately from end-to-end answer accuracy is what lets you tell
+"retrieval found the right chunk but the LLM ignored it" apart from "retrieval never
+found the right chunk in the first place" — two completely different fixes (prompt/
+reranking tuning vs. indexing/embedding tuning) that look identical from end-to-end
+answer accuracy alone.

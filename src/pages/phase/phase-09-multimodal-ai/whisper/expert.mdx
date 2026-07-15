@@ -1,0 +1,78 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Whisper"
+level: expert
+phaseSlug: "phase-09-multimodal-ai"
+phaseName: "Multimodal AI"
+topicSlug: "whisper"
+estReadTime: 11
+resources:
+  - type: docs
+    title: "pyannote.audio — speaker diarization"
+    url: "https://github.com/pyannote/pyannote-audio"
+  - type: docs
+    title: "whisper.cpp — CPU/edge inference"
+    url: "https://github.com/ggml-org/whisper.cpp"
+---
+
+## Model size is a WER/latency/cost triangle
+
+| Model | Params | Relative speed | English WER (approx) | Multilingual quality |
+|---|---|---|---|---|
+| tiny | 39M | ~32x realtime (GPU) | Highest error | Weak |
+| base | 74M | ~16x realtime | Moderate error | Moderate |
+| small | 244M | ~6x realtime | Lower error | Good |
+| medium | 769M | ~2x realtime | Low error | Strong |
+| large-v3 | 1.5B | ~1x realtime | Lowest error | Strongest |
+
+Most production systems don't default to `large-v3` — the accuracy gain from `medium`
+to `large-v3` is often a few percentage points of Word Error Rate, while the compute
+cost roughly doubles. The right choice depends entirely on the downstream use: a
+voice assistant needs `small`/`base`-tier latency; a legal transcription service where
+every word matters justifies `large-v3` even at higher cost.
+
+## The hallucination failure mode
+
+Whisper's most cited production failure isn't misheard words — it's **hallucinated
+text during silence or non-speech audio** (background music, breathing, room tone).
+Because Whisper is trained as a language model over audio, when there's no real signal
+to condition on, it sometimes falls back on plausible-sounding but entirely fabricated
+phrases (repeated stock phrases like "Thank you for watching" have been documented
+appearing in silent audio). This is precisely why VAD pre-filtering isn't just a speed
+optimization in production — it's a correctness safeguard, removing the silent
+stretches where hallucination is most likely to occur.
+
+## Diarization: Whisper doesn't know who's speaking
+
+Whisper transcribes *what* was said, not *who* said it — it has no built-in speaker
+identity. Production meeting-transcription tools bolt on a separate **diarization**
+model (e.g. pyannote.audio) that segments audio by speaker turn, then merge the two
+outputs by timestamp:
+
+```python
+from pyannote.audio import Pipeline
+
+diarization = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1")
+diar_result = diarization("meeting.mp3")
+
+# merge diar_result speaker turns with Whisper's timestamped segments
+# by overlapping time ranges
+```
+
+This two-model combination (ASR + diarization) is standard architecture for any
+"who said what" transcription product — there's no single open model that reliably
+does both well in one pass.
+
+## Engine comparison for production deployment
+
+| Option | Self-hosted | Latency | Cost model | Notes |
+|---|---|---|---|---|
+| openai-whisper (reference) | Yes | Slowest | Compute only | Simplest to get running, not optimized |
+| faster-whisper | Yes | Fast | Compute only | CTranslate2 backend, standard production choice |
+| whisper.cpp | Yes | Fast, CPU-friendly | Compute only | Good for on-device/edge (mobile, embedded) |
+| Deepgram / AssemblyAI | No | Very fast, streaming-native | Per-minute API | Best for real-time streaming, no infra to manage |
+
+Self-hosting wins on cost at volume and on data residency (audio never leaves your
+infrastructure — a real requirement for healthcare/legal use cases); hosted APIs win
+on true low-latency streaming, which is a genuinely hard engineering problem to
+replicate with self-hosted Whisper variants.

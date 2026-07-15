@@ -1,0 +1,94 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Positional Encoding"
+level: expert
+phaseSlug: "phase-06-transformers"
+phaseName: "Transformers"
+topicSlug: "positional-encoding"
+estReadTime: 12
+resources:
+  - type: article
+    title: "RoFormer: Enhanced Transformer with Rotary Position Embedding"
+    url: "https://arxiv.org/abs/2104.09864"
+  - type: article
+    title: "Train Short, Test Long: Attention with Linear Biases (ALiBi)"
+    url: "https://arxiv.org/abs/2108.12409"
+---
+
+## The extrapolation problem, precisely
+
+A model trained exclusively on sequences up to length `L` has, by definition, never
+seen positional signals beyond `L` during gradient updates. What happens when you
+feed it a longer sequence at inference time depends entirely on which positional
+scheme was used:
+
+- **Learned absolute embeddings** (BERT, GPT-2 style): fail outright past `L` — there
+  is no embedding row for position `L+1`. The model must be architecturally
+  truncated or the embedding table extended and fine-tuned.
+- **Fixed sinusoidal** (original Transformer): mathematically defined for any
+  position, so it doesn't *break*, but empirically models still degrade sharply past
+  the trained length — the model never learned to use the unfamiliar frequency
+  combinations correctly.
+- **RoPE**: also defined for any position by construction, and empirically degrades
+  more gracefully than sinusoidal/learned schemes, but still meaningfully degrades
+  past trained length without additional intervention.
+- **ALiBi**: instead of encoding position at all, adds a fixed, non-learned linear
+  penalty to attention scores proportional to the distance between query and key —
+  closer tokens are favored, farther tokens are penalized more, with no positional
+  vectors involved whatsoever. ALiBi was specifically designed for "train short, test
+  long" extrapolation and shows measurably better length generalization than
+  sinusoidal or rotary encodings in the original paper's benchmarks.
+
+## Context extension techniques built on RoPE
+
+Because RoPE's rotation is parameterized by a base frequency (`theta`, typically
+10000), practitioners can manipulate that parameterization *after* pretraining to
+extend usable context without full retraining:
+
+- **Linear position interpolation** — compress position indices so a sequence of
+  length `2L` maps into the same rotation range originally trained for length `L`.
+  Cheap, but degrades resolution for nearby-token relationships.
+- **NTK-aware scaling** — adjusts the frequency base non-uniformly, preserving
+  high-frequency (local/nearby) resolution while compressing low-frequency
+  (long-range) resolution, generally outperforming naive linear interpolation.
+- **YaRN** — combines NTK-aware scaling with attention temperature adjustments and
+  minimal fine-tuning, achieving strong long-context extension at low compute cost;
+  used to extend several open-weight models well past their original pretraining
+  context length.
+
+This is a clear example of a positional encoding choice paying dividends years later:
+because RoPE is a *mathematical transformation* rather than a lookup table, it admits
+these kinds of post-hoc reparameterizations, whereas learned absolute embeddings do
+not (or only clumsily, via embedding interpolation and further fine-tuning).
+
+## Why position even needs external injection: the permutation-equivariance argument
+
+Self-attention's core operation — comparing every token to every other token via dot
+products and taking a weighted average — is permutation-equivariant: permute the
+input tokens and the output permutes identically. This is a mathematical fact about
+the operation, not a limitation of any specific implementation. Positional encoding
+exists specifically to break this symmetry so the model can distinguish "dog bites
+man" from "man bites dog." Every major positional scheme is, at its core, a different
+answer to "how do we break permutation symmetry with minimal cost and maximal
+generalization?" — additive absolute vectors (learned/sinusoidal), multiplicative
+rotation (RoPE), or additive attention-score bias (ALiBi).
+
+## Trade-off summary
+
+| Scheme | Mechanism | Extrapolation past training length | Extra params | Used in |
+|---|---|---|---|---|
+| Learned absolute | embedding lookup, added to input | Fails past max length | Yes (small) | BERT, GPT-2, GPT-3 |
+| Sinusoidal fixed | deterministic sin/cos, added to input | Defined but degrades quickly | None | Original Transformer |
+| RoPE | rotates Q/K by position-dependent angle | Degrades gracefully; extendable via scaling tricks | None | LLaMA, Mistral, GPT-NeoX-family |
+| ALiBi | linear distance penalty on attention scores directly | Best native extrapolation of the four | None | BLOOM, MPT |
+
+## The practical engineering takeaway
+
+For most new model builds today, the positional encoding decision is really a
+decision about the **context-length roadmap**: if long-context extension after
+pretraining is a priority, RoPE (with its rich ecosystem of scaling techniques) or
+ALiBi are the pragmatic defaults; learned absolute embeddings remain fine for models
+with a fixed, known-in-advance maximum context length where extrapolation is a
+non-goal. This is exactly why virtually every LLM released since ~2023 uses RoPE —
+not because it's proven "more correct" theoretically, but because it keeps future
+context-extension options open at near-zero upfront cost.

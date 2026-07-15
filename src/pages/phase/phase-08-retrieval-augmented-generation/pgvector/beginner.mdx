@@ -1,0 +1,89 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "pgvector"
+level: beginner
+phaseSlug: "phase-08-retrieval-augmented-generation"
+phaseName: "Retrieval-Augmented Generation"
+topicSlug: "pgvector"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "pgvector — GitHub README"
+    url: "https://github.com/pgvector/pgvector"
+  - type: docs
+    title: "Supabase — pgvector: Embeddings and vector similarity"
+    url: "https://supabase.com/docs/guides/ai/vector-columns"
+---
+
+## Vector search inside the database you already have
+
+If your application already stores data in PostgreSQL, you don't necessarily need a
+separate, dedicated vector database. **pgvector** is a PostgreSQL extension that adds
+a `vector` column type and similarity search operators directly to Postgres — so
+embeddings live in the same database as the rest of your application data, queryable
+with regular SQL.
+
+## Setting it up
+
+```sql
+-- Enable the extension once per database
+CREATE EXTENSION IF NOT EXISTS vector;
+
+CREATE TABLE articles (
+    id SERIAL PRIMARY KEY,
+    text TEXT NOT NULL,
+    embedding VECTOR(384)  -- matches all-MiniLM-L6-v2's output size
+);
+```
+
+## Storing and searching vectors with SQL
+
+```python
+import psycopg2
+from sentence_transformers import SentenceTransformer
+
+model = SentenceTransformer("all-MiniLM-L6-v2")
+conn = psycopg2.connect("dbname=mydb")
+cur = conn.cursor()
+
+texts = [
+    "Our refund policy allows returns within 30 days.",
+    "To reset your password, go to Settings.",
+    "Standard shipping takes 5-7 business days.",
+]
+for text in texts:
+    vector = model.encode(text).tolist()
+    cur.execute("INSERT INTO articles (text, embedding) VALUES (%s, %s)", (text, vector))
+conn.commit()
+
+query_vector = model.encode("How long until my order ships?").tolist()
+cur.execute(
+    "SELECT text, embedding <=> %s::vector AS distance "
+    "FROM articles ORDER BY distance LIMIT 2",
+    (query_vector,),
+)
+for text, distance in cur.fetchall():
+    print(distance, text)
+```
+
+The `<=>` operator computes cosine distance directly in SQL — pgvector also provides
+`<->` (Euclidean/L2 distance) and `<#>` (negative inner product) as alternatives,
+selected based on which distance metric matches your embedding model.
+
+## Try it yourself
+
+Your application already stores users, orders, and support tickets in Postgres. Why
+might adding a `vector` column to your existing `support_tickets` table be
+particularly convenient here, compared to standing up a separate vector database?
+
+<details>
+<summary>Solution</summary>
+
+You could search semantically similar tickets *and* join against existing relational
+data (which user filed it, its status, its creation date) in a single SQL query,
+without synchronizing data between two separate systems or keeping a second database
+in sync with the first. For teams already running Postgres, this avoids the
+operational overhead of introducing and maintaining an entirely separate vector
+database just for embeddings, at least until the scale or specialized features of a
+dedicated vector database become genuinely necessary.
+</details>

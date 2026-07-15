@@ -1,0 +1,83 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Re-ranking"
+level: beginner
+phaseSlug: "phase-08-retrieval-augmented-generation"
+phaseName: "Retrieval-Augmented Generation"
+topicSlug: "re-ranking"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "sentence-transformers — Cross-Encoders"
+    url: "https://www.sbert.net/examples/cross_encoder/applications/README.html"
+  - type: docs
+    title: "Cohere — Rerank"
+    url: "https://docs.cohere.com/docs/rerank-overview"
+---
+
+## A second, more careful look
+
+Vector search is fast because it compares a query to every document independently and
+cheaply — but that speed comes from a shortcut: it never looks at the query and a
+document *together*, only their separately-computed embeddings. **Re-ranking** adds a
+second pass that fixes this: take the top handful of candidates the fast search found,
+and score each one by actually reading the query and that document side by side, with
+a slower but much more accurate model.
+
+Think of it like a hiring process: a resume-scanning tool quickly narrows 1,000
+applicants down to 50 (retrieval), and then a human actually reads those 50 carefully
+to pick the best 5 (reranking). The first pass is fast but rough; the second is slow
+but precise, and it's only affordable because the first pass already did the
+narrowing.
+
+## Retrieval, then rerank
+
+```python
+from sentence_transformers import CrossEncoder
+
+reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+
+query = "How do I cancel my subscription?"
+candidates = [
+    "To cancel, go to Account Settings > Subscription > Cancel.",
+    "Our premium plan includes priority support.",
+    "You can upgrade your plan at any time from the billing page.",
+]
+
+pairs = [(query, doc) for doc in candidates]
+scores = reranker.predict(pairs)
+
+ranked = sorted(zip(candidates, scores), key=lambda x: x[1], reverse=True)
+for doc, score in ranked:
+    print(f"{score:.2f}  {doc}")
+```
+
+The cancellation instructions score highest — the cross-encoder reads the query and
+each candidate *together* and can tell that "cancel" in the query matches "cancel" as
+the actual topic of document 1, not just a loosely related billing document.
+
+## Why not just rerank everything from the start?
+
+Cross-encoders are much slower than the embedding-based search you learned about in
+Retrieval — scoring every document in a large corpus this way for every query would be
+far too slow. That's why reranking is always a *second* step: cheap vector search
+narrows millions of documents down to a manageable shortlist (say, 50), and only that
+shortlist gets the careful, expensive treatment.
+
+## Try it yourself
+
+Why might a cross-encoder reranker catch that document 1 above is the best match, when
+a plain embedding-similarity search might have ranked document 3 (about upgrading
+plans) nearly as high?
+
+<details>
+<summary>Solution</summary>
+
+Plain embedding search compares the query's vector to each document's vector
+independently, so "cancel my subscription" and "upgrade your plan" can end up
+deceptively close in embedding space — both are about subscription/billing actions in
+general. A cross-encoder reads the query and each document *together* in a single pass,
+so it can directly notice that the query is specifically about cancellation, not
+upgrading, and score document 1 clearly higher instead of relying on a rougher
+topic-level similarity.
+</details>

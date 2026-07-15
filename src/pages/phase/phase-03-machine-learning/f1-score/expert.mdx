@@ -1,0 +1,98 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "F1 Score"
+level: expert
+phaseSlug: "phase-03-machine-learning"
+phaseName: "Machine Learning"
+topicSlug: "f1-score"
+estReadTime: 11
+resources:
+  - type: docs
+    title: "scikit-learn: fbeta_score"
+    url: "https://scikit-learn.org/stable/modules/generated/sklearn.metrics.fbeta_score.html"
+  - type: article
+    title: "The Matthews Correlation Coefficient (MCC) is more informative than Cohen's Kappa and Brier score"
+    url: "https://bmcgenomics.biomedcentral.com/articles/10.1186/s12864-019-6413-7"
+---
+
+## The F-beta generalization
+
+F1 silently assumes precision and recall matter equally — that's a real, often unexamined
+assumption, not a neutral default. The **F-beta score** generalizes F1 by weighting recall
+`beta` times as important as precision:
+
+```
+F_beta = (1 + beta^2) * (precision * recall) / (beta^2 * precision + recall)
+```
+
+`beta = 1` recovers plain F1. `beta > 1` (commonly F2, `beta=2`) weights recall more
+heavily — appropriate when missing a positive is worse than a false alarm. `beta < 1`
+(commonly F0.5) weights precision more heavily — appropriate when false alarms are more
+costly than misses.
+
+```python
+from sklearn.metrics import fbeta_score
+
+y_true = [1, 1, 1, 1, 1, 0, 0, 0, 0, 0]
+y_pred = [1, 1, 1, 1, 0, 1, 1, 1, 0, 0]
+
+print("F1:  ", fbeta_score(y_true, y_pred, beta=1.0))
+print("F2:  ", fbeta_score(y_true, y_pred, beta=2.0))  # weights recall more
+print("F0.5:", fbeta_score(y_true, y_pred, beta=0.5))  # weights precision more
+```
+
+Choosing `beta=1` by default without examining the actual cost ratio of false positives to
+false negatives is a common, avoidable modeling error — F1 is the right choice only when
+those costs really are approximately equal, which is the exception more than the rule in
+most production classification problems (fraud, medical, moderation).
+
+## What F1 ignores: true negatives
+
+F1 (like precision and recall individually) is computed entirely from TP, FP, and FN — it
+never looks at TN. This has a specific consequence: F1 is insensitive to how well the model
+handles the negative class, which is exactly the class most affected by severe imbalance.
+Two models can have identical F1 scores while behaving completely differently on the
+majority class, and F1 alone won't reveal it.
+
+**Matthews Correlation Coefficient (MCC)** uses all four confusion matrix cells and is
+generally considered a more complete single-number summary for imbalanced binary
+classification:
+
+```
+MCC = (TP*TN - FP*FN) / sqrt((TP+FP)(TP+FN)(TN+FP)(TN+FN))
+```
+
+```python
+from sklearn.metrics import matthews_corrcoef, f1_score
+
+mcc = matthews_corrcoef(y_true, y_pred)
+f1 = f1_score(y_true, y_pred)
+print(f"F1: {f1:.3f}  MCC: {mcc:.3f}")
+```
+
+MCC ranges from -1 (total disagreement) to +1 (perfect prediction), with 0 meaning no
+better than random — and unlike F1, it's symmetric with respect to swapping which class is
+"positive," since it uses the full matrix rather than a chosen positive class.
+
+## Trade-off summary
+
+| Metric | Uses TN? | Weighting assumption | Best used when |
+|---|---|---|---|
+| F1 | No | Precision and recall equally important | Balanced cost of false positives and false negatives |
+| F-beta (general) | No | Explicit `beta` ratio of recall to precision importance | Known, unequal cost of FP vs FN |
+| MCC | Yes | None — symmetric, uses full confusion matrix | Imbalanced binary classification, need a single robust summary |
+| Balanced Accuracy | Yes | Equal weight per class regardless of size | Imbalanced multiclass, want per-class-equal sensitivity |
+| ROC-AUC | Yes (via FPR) | None — ranking quality across all thresholds | Comparing models before choosing an operating threshold |
+
+## Production concerns
+
+F1 is a convenient single number for a `GridSearchCV`/`RandomizedSearchCV` scoring
+objective, but optimizing for it directly bakes in the "precision and recall matter
+equally" assumption into every downstream hyperparameter choice — including tree depth,
+regularization strength, and class weighting. Before defaulting to `scoring='f1'` (or
+`'f1_macro'`/`'f1_weighted'`) in a search, it's worth explicitly asking what the real ratio
+of false-positive cost to false-negative cost is for the system being built, and using
+`fbeta_score` with a deliberately chosen `beta` — or a fully cost-weighted objective — as
+the search metric instead. Teams that default to F1 out of habit rather than because the
+costs are genuinely balanced often end up re-tuning a model later once the true cost
+asymmetry surfaces in production incident reviews.

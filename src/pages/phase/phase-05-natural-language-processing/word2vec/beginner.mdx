@@ -1,0 +1,81 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Word2Vec"
+level: beginner
+phaseSlug: "phase-05-natural-language-processing"
+phaseName: "Natural Language Processing"
+topicSlug: "word2vec"
+estReadTime: 7
+resources:
+  - type: article
+    title: "Mikolov et al. — Efficient Estimation of Word Representations (original Word2Vec paper)"
+    url: "https://arxiv.org/abs/1301.3781"
+  - type: docs
+    title: "Gensim — Word2Vec tutorial"
+    url: "https://radimrehurek.com/gensim/models/word2vec.html"
+---
+
+## Words as vectors of meaning
+
+Computers can't compare the "meaning" of `"king"` and `"queen"` directly — but they can
+compare numbers. **Word2Vec** turns every word into a list of numbers (a vector, e.g.
+300 numbers) such that words with similar meanings end up with similar vectors.
+
+Think of it like a map: cities that are geographically close have close coordinates.
+Word2Vec builds a similar "meaning map" — `"cat"` and `"dog"` end up near each other,
+far from `"airplane"`.
+
+### The famous example
+
+Word2Vec vectors capture relationships well enough to support arithmetic:
+
+```
+vector("king") - vector("man") + vector("woman") ≈ vector("queen")
+```
+
+This works because Word2Vec learns each word's vector from the *company it keeps* —
+words that appear in similar contexts across a huge amount of text end up with similar
+vectors. `"king"` and `"queen"` both appear near words like `"throne"`, `"royal"`,
+`"crown"` — so the model naturally places them close together.
+
+### Using pretrained vectors
+
+You don't need to train your own — pretrained vectors are freely available:
+
+```python
+import gensim.downloader as api
+
+# Downloads a pretrained Word2Vec model (trained on Google News)
+model = api.load("word2vec-google-news-300")
+
+print(model.most_similar("python", topn=3))
+# [('pythons', 0.64), ('snake', 0.58), ('boa_constrictor', 0.55)]
+
+print(model.similarity("king", "queen"))
+# 0.65 -- a high similarity score
+```
+
+Each word maps to a vector of 300 numbers; `model["python"]` returns that raw vector,
+which you could feed into any downstream machine learning model.
+
+## Try it yourself
+
+Using the loaded `model` above, find the 3 words most similar to `"computer"`, and
+compute the similarity between `"happy"` and `"sad"` — is it higher or lower than you'd
+expect for opposite words?
+
+<details>
+<summary>Solution</summary>
+
+```python
+print(model.most_similar("computer", topn=3))
+# e.g. [('computers', 0.79), ('laptop', 0.66), ('PC', 0.60)]
+
+print(model.similarity("happy", "sad"))
+# e.g. 0.51 -- surprisingly high! Word2Vec captures that "happy" and "sad"
+# appear in *similar contexts* (both describe emotions, both follow "I feel...")
+# even though they're semantic opposites. Similarity here means
+# "used similarly," not "means the same thing."
+```
+
+</details>

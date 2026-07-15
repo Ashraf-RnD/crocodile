@@ -1,0 +1,71 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "KV Cache"
+level: beginner
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "kv-cache"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "Hugging Face — Transformers Generation with Caching"
+    url: "https://huggingface.co/docs/transformers/en/llm_optims"
+---
+
+## Don't reread the whole book for every word
+
+When a language model generates text, it produces one token at a time, and each new
+token depends on attending back over every token that came before it. Without any
+optimization, generating the 500th token would mean recomputing attention over all 499
+previous tokens *from scratch* — like rereading an entire book from page one every
+single time you want to write the next word of your book report, just to remember
+what you'd already read.
+
+The **KV cache** fixes this. "K" and "V" stand for the Key and Value vectors that the
+attention mechanism computes for every token — think of them as a set of notes the
+model takes about each word it's already processed. Once those notes are computed for
+a token, they don't change, so the model saves (caches) them and simply reuses them
+for every future step, only computing fresh K/V for the *newest* token each time.
+
+## Why this makes generation fast
+
+Without a KV cache, generating a sequence of length `N` would cost roughly `O(N²)`
+work overall, because each of the `N` steps redoes `O(N)` work. With a KV cache, each
+step only computes attention keys/values for the one new token and reuses everything
+cached so far, dropping the per-step cost to roughly `O(N)` — a difference that
+becomes enormous as sequences get longer (hundreds vs thousands of tokens).
+
+```python
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+model_name = "gpt2"
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForCausalLM.from_pretrained(model_name)
+
+inputs = tokenizer("The KV cache lets a model", return_tensors="pt")
+
+# use_cache=True (the default) reuses K/V across generation steps instead
+# of recomputing attention over the full sequence at every step
+output = model.generate(**inputs, max_new_tokens=20, use_cache=True)
+print(tokenizer.decode(output[0]))
+```
+
+That `use_cache=True` flag is doing exactly what the analogy describes: keep the notes
+from earlier tokens around, don't redo the reading.
+
+## Try it yourself
+
+If you disabled the KV cache (`use_cache=False`) while generating a 200-token
+response, would step 1 and step 200 take roughly the same amount of computation, or
+would step 200 be noticeably more expensive? Why?
+
+<details>
+<summary>Solution</summary>
+
+Step 200 would be far more expensive. Without caching, every generation step
+recomputes attention over *all* tokens generated so far, so step 200 redoes attention
+over ~200 tokens while step 1 only handles the original prompt. This is exactly the
+`O(N²)` blowup the KV cache avoids by reusing previously computed Key/Value vectors
+instead of recomputing them.
+</details>

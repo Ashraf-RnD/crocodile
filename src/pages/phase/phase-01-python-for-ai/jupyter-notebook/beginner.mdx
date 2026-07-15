@@ -1,0 +1,80 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Jupyter Notebook"
+level: beginner
+phaseSlug: "phase-01-python-for-ai"
+phaseName: "Python for AI"
+topicSlug: "jupyter-notebook"
+estReadTime: 5
+resources:
+  - type: docs
+    title: "Jupyter — Official documentation"
+    url: "https://docs.jupyter.org/en/latest/"
+  - type: video
+    title: "Jupyter Notebook Tutorial — Corey Schafer"
+    url: "https://www.youtube.com/watch?v=HW29067qVWk"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## A notebook is a scratchpad that remembers
+
+A regular Python script runs top to bottom, once, and shows you nothing until it
+finishes (or crashes). **Jupyter Notebook** runs code in **cells** you execute one at
+a time, and it keeps the results — variables, printed output, plots — alive in
+memory between cells. This is why almost all exploratory data analysis and model
+prototyping in AI happens in notebooks rather than plain scripts: you want to load a
+big dataset once, then experiment on it interactively without re-running everything.
+
+```python
+# Cell 1
+import pandas as pd
+df = pd.read_csv("data.csv")   # slow — loads once
+
+# Cell 2 (run independently, as many times as you want)
+df.head()
+
+# Cell 3
+df["price"].mean()   # df is still in memory, no need to reload
+```
+
+You run Cell 1 once, then can re-run Cell 2 or Cell 3 (or edit and re-run them)
+dozens of times without paying the cost of reloading `data.csv` again.
+
+### Two kinds of cells
+
+<Mermaid client:visible code={`flowchart LR
+  N["Notebook"] --> C["Code cell — runs Python, shows output below"]
+  N --> M["Markdown cell — text, headings, images for documentation"]`} />
+
+```
+# This is a Markdown cell — write notes, headings, even LaTeX math like $x^2$
+## Code cells below execute Python and display results inline
+```
+
+Mixing markdown explanation with runnable code in the same document is why
+notebooks are also used to publish tutorials and research write-ups, not just for
+private experimentation.
+
+### Key things to know on day one
+
+- `Shift + Enter` runs the current cell and moves to the next one.
+- The number in `[3]` next to a cell shows the **execution order**, not position —
+  cells can be run out of order, which is powerful but also a common source of bugs
+  (see the "Try it yourself" below).
+- Restarting the kernel (`Kernel → Restart`) wipes all variables — useful when state
+  gets confusing.
+
+## Try it yourself
+
+You run Cell 1 (`x = 5`), then Cell 2 (`print(x)` → prints `5`), then you go back and
+edit Cell 1 to `x = 10` — but you don't re-run it. What does re-running Cell 2 print?
+
+<details>
+<summary>Solution</summary>
+
+It still prints `5`. Editing a cell's text does **not** re-execute it — the notebook's
+memory still holds the *old* value of `x` from when Cell 1 last actually ran. This
+"out-of-order state" trap is one of the most common notebook bugs; when in doubt,
+use "Restart Kernel and Run All" to confirm your notebook works top-to-bottom.
+
+</details>

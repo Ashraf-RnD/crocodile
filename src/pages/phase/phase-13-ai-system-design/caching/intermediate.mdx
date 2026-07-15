@@ -1,0 +1,100 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Caching"
+level: intermediate
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "caching"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "Anthropic Docs — Prompt caching"
+    url: "https://docs.claude.com/en/docs/build-with-claude/prompt-caching"
+  - type: docs
+    title: "OpenAI Platform — Prompt caching"
+    url: "https://platform.openai.com/docs/guides/prompt-caching"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Three different caches, three different problems
+
+AI systems typically layer several distinct caches, each solving a different
+problem:
+
+<Mermaid client:visible code={`flowchart TB
+  Req["Incoming request"] --> RespCache{"Response cache:<br/>identical/near-identical request seen before?"}
+  RespCache -->|hit| Fast["Return cached response"]
+  RespCache -->|miss| PromptCache{"Prompt/prefix cache:<br/>shared prefix already computed?"}
+  PromptCache -->|hit| Partial["Reuse cached KV state for the prefix,<br/>only compute the new part"]
+  PromptCache -->|miss| Full["Full inference from scratch"]
+  Partial --> Gen["Generate response"]
+  Full --> Gen
+  Gen --> Store["Store in response cache + prefix cache"]
+  Req --> EmbedCache{"Embedding cache:<br/>same text embedded before?"}
+  EmbedCache -->|hit| ReuseVec["Reuse stored vector"]
+  EmbedCache -->|miss| Embed["Compute new embedding"]`} />
+
+## Response caching (semantic caching)
+
+Exact-match caching (same input string -> same output) is easy but catches
+few real cache hits, because users phrase the same question differently.
+**Semantic caching** embeds the incoming query, searches for a
+near-duplicate among previously answered queries within some similarity
+threshold, and serves the cached answer if one is close enough. This trades
+a small amount of extra work (an embedding lookup) for a much higher hit
+rate on natural-language traffic.
+
+```python
+def get_cached_or_generate(query, cache, threshold=0.92):
+    query_vec = embed(query)
+    match = cache.find_nearest(query_vec)
+    if match and match.similarity >= threshold:
+        return match.answer  # semantic cache hit
+    answer = call_llm(query)
+    cache.insert(query_vec, answer)
+    return answer
+```
+
+The threshold is a real tuning knob: too loose and you serve wrong answers
+to subtly different questions ("cancel my order" vs. "cancel my
+subscription"); too tight and you barely improve on exact-match hit rates.
+
+## Prompt/prefix caching
+
+Many LLM requests share a large, unchanging prefix — a system prompt, a
+long set of tool definitions, a big block of retrieved context reused across
+a conversation. Prompt caching (offered natively by major LLM APIs) reuses
+the model's internal computed state for that shared prefix instead of
+reprocessing it on every request, cutting both latency and cost for the
+prefix portion specifically. This is different from response caching: it
+doesn't require the *whole* request to match, just the prefix, and it still
+computes a fresh generation for the new part of the prompt.
+
+## Embedding caching
+
+In RAG and search-heavy systems, the same piece of text (a document chunk,
+a common query) often gets embedded repeatedly. Caching embeddings by
+content hash avoids redundant embedding-model calls, which matters
+particularly for large or frequently-reprocessed corpora.
+
+## Cache invalidation is still the hard part
+
+The classic problem remains: how do you know when a cached answer is no
+longer valid? For AI systems specifically, common triggers are a TTL
+(reasonable default for most cached answers — expire after some hours/days),
+an explicit invalidation event (the underlying document/policy changed), or
+versioning the cache key on anything the answer depends on (model version,
+system prompt version) so a prompt change doesn't silently serve
+pre-change answers. Skipping this and caching forever is a common and
+costly mistake — stale cached answers can persist and mislead users long
+after the underlying truth has changed.
+
+## Where caches live
+
+Response and embedding caches are typically a fast key-value store (Redis or
+similar) shared across serving instances, so a cache hit on one server
+benefits requests landing on any server. Prompt/prefix caching, in contrast,
+is usually managed inside the inference engine itself (GPU memory), which
+means it benefits from — and requires — routing requests that share a prefix
+to the same or a nearby replica, tying cache effectiveness to the load
+balancer's routing strategy (see "Scalability" in this phase).

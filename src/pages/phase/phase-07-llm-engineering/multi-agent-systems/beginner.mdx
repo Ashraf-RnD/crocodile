@@ -1,0 +1,96 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Multi-Agent Systems"
+level: beginner
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "multi-agent-systems"
+estReadTime: 7
+resources:
+  - type: docs
+    title: "LangGraph — Multi-Agent Systems"
+    url: "https://langchain-ai.github.io/langgraph/concepts/multi_agent/"
+  - type: article
+    title: "Anthropic — How We Built Our Multi-Agent Research System"
+    url: "https://www.anthropic.com/engineering/multi-agent-research-system"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Think of it as a team instead of one generalist
+
+One agent trying to do everything — research, write, fact-check, format — is like one
+person trying to be an entire newspaper. A **multi-agent system** splits the work
+across specialized agents, each focused on one job, coordinated by something (a
+"manager" agent, or a fixed sequence) that passes work between them.
+
+<Mermaid client:visible code={`flowchart LR
+  U[User request] --> M[Manager agent]
+  M --> R[Research agent]
+  M --> W[Writer agent]
+  M --> F[Fact-checker agent]
+  R --> M
+  W --> M
+  F --> M
+  M --> Out[Final answer]`} />
+
+### A simple two-agent example
+
+```python
+from openai import OpenAI
+client = OpenAI()
+
+def research_agent(topic):
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "system", "content": "You are a research assistant. List 3 key facts about the topic, concisely."},
+                   {"role": "user", "content": topic}],
+    )
+    return response.choices[0].message.content
+
+def writer_agent(topic, facts):
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "system", "content": "You are a writer. Turn these facts into a short, engaging paragraph."},
+                   {"role": "user", "content": f"Topic: {topic}\nFacts:\n{facts}"}],
+    )
+    return response.choices[0].message.content
+
+topic = "the history of the printing press"
+facts = research_agent(topic)
+article = writer_agent(topic, facts)
+print(article)
+```
+
+Two separate agents, each with a focused system prompt and a narrow job, hand work off
+to each other — the research agent never worries about prose style, and the writer
+agent never worries about fact-finding. That separation of concerns is the whole idea.
+
+### Why split into multiple agents at all?
+
+1. **Focus** — a narrow system prompt for "just research" performs more reliably than
+   one giant prompt trying to do research, writing, and fact-checking all at once.
+2. **Reusability** — the research agent can be reused for a dozen different writing
+   tasks without changes.
+3. **Parallelism** — independent agents (like researching two unrelated topics) can
+   run at the same time instead of one after another.
+
+### Try it yourself
+
+You're building a system to answer customer support tickets. Sketch (in plain
+English) two agents you'd split the work into, and what each one's single
+responsibility would be.
+
+<details>
+<summary>Solution</summary>
+
+A reasonable split:
+
+1. **Classifier agent** — reads the ticket and decides its category (billing,
+   technical, account) and urgency. Single responsibility: categorize.
+2. **Response agent** — given the category and the ticket, drafts an actual reply
+   using category-specific knowledge. Single responsibility: respond.
+
+The classifier's output (category, urgency) becomes the response agent's input — a
+simple hand-off, exactly like the research → writer example above.
+
+</details>

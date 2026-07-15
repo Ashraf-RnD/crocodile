@@ -1,0 +1,84 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "vLLM"
+level: beginner
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "vllm"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "vLLM Documentation — Quickstart"
+    url: "https://docs.vllm.ai/en/latest/getting_started/quickstart.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Why you can't just call `model.generate()` in production
+
+If you've fine-tuned a model with Hugging Face `transformers`, you've called
+`model.generate(**inputs)` and gotten text back. That works great for one prompt at a
+time in a notebook. But put it behind an API that 50 users hit at once, and it falls
+over: each `generate()` call reserves a huge, fixed block of GPU memory for the KV
+cache (the running "memory" of attention keys/values per token) sized for the
+*worst-case* sequence length, even if the actual output is short. Most of that memory
+sits reserved and unused. **vLLM** is an inference server built to fix exactly this —
+it serves LLMs with far higher throughput and far less wasted GPU memory than naive
+`generate()` loops.
+
+## PagedAttention, in one analogy
+
+Think of GPU memory for the KV cache like RAM for a running program. Naive serving
+allocates one giant *contiguous* block per request — like insisting a program's memory
+live in one unbroken chunk, wasting space between requests. **PagedAttention** (vLLM's
+core idea, borrowed from how operating systems page virtual memory) instead splits the
+KV cache into small fixed-size blocks that can live anywhere in GPU memory and be
+shared or reused across requests. The result: far less wasted memory, so vLLM can hold
+many more concurrent requests in the same GPU.
+
+<Mermaid client:visible code={`flowchart LR
+  A["Naive serving: one big reserved block per request"] --> W["Wasted, unused memory"]
+  B["vLLM PagedAttention: small reusable blocks"] --> E["Memory packed tightly, more requests fit"]`} />
+
+## Running your first vLLM server
+
+```bash
+pip install vllm
+
+vllm serve meta-llama/Llama-3.1-8B-Instruct --port 8000
+```
+
+That single command downloads the model (if needed), loads it onto the GPU, and starts
+an HTTP server that speaks the **OpenAI-compatible API** — meaning you can talk to it
+with the same `openai` Python client you'd use for OpenAI itself:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="not-needed")
+
+response = client.chat.completions.create(
+    model="meta-llama/Llama-3.1-8B-Instruct",
+    messages=[{"role": "user", "content": "Explain KV caching in one sentence."}],
+)
+print(response.choices[0].message.content)
+```
+
+This is why teams standardize on vLLM: your application code doesn't need to know or
+care that it's talking to a self-hosted model instead of a hosted API.
+
+## Try it yourself
+
+Two requests arrive: one asking for a 20-token answer, another asking for a
+2000-token answer. With naive HF `generate()` serving, both might reserve memory sized
+for the *maximum possible* output length. What does vLLM's block-based approach let it
+do differently?
+
+<details>
+<summary>Solution</summary>
+
+vLLM only allocates new KV-cache blocks as tokens are actually generated, rather than
+reserving space for the theoretical maximum up front. The 20-token request uses a
+couple of blocks and stops; the 2000-token request keeps allocating blocks as it goes.
+No memory is reserved and wasted for output that's never generated — which is exactly
+why vLLM can pack far more concurrent requests onto the same GPU.
+</details>

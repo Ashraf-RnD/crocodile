@@ -1,0 +1,98 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Perplexity"
+level: expert
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "perplexity"
+estReadTime: 12
+resources:
+  - type: article
+    title: "Perplexity — Introducing pplx-api"
+    url: "https://blog.perplexity.ai/blog/introducing-pplx-api"
+  - type: article
+    title: "Pinecone — Retrieval Augmented Generation (RAG) explained"
+    url: "https://www.pinecone.io/learn/retrieval-augmented-generation/"
+---
+
+## A note on sourcing
+
+Perplexity has not published a full architecture diagram of its production
+search-and-answer pipeline. This reasons from its public blog posts about its
+API and product, and from well-established RAG systems engineering — treat
+specifics as plausible architecture, not confirmed internals.
+
+## Problem 1: freshness vs. index cost
+
+A search-grounded answer engine needs its underlying web index to be fresh —
+stale results directly produce stale or wrong answers, which is a much more
+visible failure mode here than in a generic chat product. But crawling and
+re-indexing the web continuously is enormously expensive. The practical
+compromise most such systems land on is **tiered freshness**: a broad index
+refreshed on a slower cycle for general content, plus a fast-path live search
+(hitting a real-time news/search API) specifically for queries classified as
+time-sensitive. Getting the *classification* wrong — treating a time-
+sensitive query as generic, or vice versa — is arguably a bigger risk to
+answer quality than any model choice, since no amount of generation quality
+fixes a wrong or outdated source passage.
+
+## Problem 2: hallucinated citations
+
+RAG reduces hallucination of *facts* by grounding the model in retrieved
+text, but it does not automatically prevent **citation hallucination** — the
+model asserting a claim is supported by source `[3]` when it actually isn't,
+or blending two sources into a claim neither fully supports. This is a
+distinct failure mode from generic hallucination and needs its own
+mitigation:
+
+- **Constrained generation**: prompting/fine-tuning the model specifically to
+  only make claims it can attribute, and to prefer "sources disagree on this"
+  over confident synthesis when passages conflict.
+- **Post-hoc verification**: a cheaper pass (heuristic or a smaller model)
+  checks whether each generated sentence's cited source passage actually
+  contains supporting text, flagging or suppressing unsupported claims before
+  they reach the user — this trades extra latency for a real reduction in
+  a specific, high-trust-cost failure mode.
+
+## Problem 3: latency floor set by the network, not the model
+
+Unlike a pure-generation product, a meaningful fraction of a Perplexity
+query's total latency is **search + fetch + extraction**, work that happens
+over the open internet against servers you don't control. Slow or unreliable
+third-party pages set a hard floor on latency no amount of GPU scaling fixes.
+Engineering responses:
+
+- **Aggressive timeouts with partial results**: don't let one slow page block
+  the whole answer — fetch in parallel with a timeout and generate from
+  whatever sources returned in time, rather than waiting for every source.
+  This is a correctness/completeness trade-off made explicitly for latency.
+- **Caching search results and extracted page content** for popular/recent
+  queries, since the same query (or a near-duplicate) is very likely to
+  recur within a short window — see the "Caching" topic in this phase for the
+  general pattern.
+- **Speculative parallel search**: firing the search request(s) concurrently
+  with query rewriting/classification rather than strictly sequencing them,
+  and discarding the search if classification determines it wasn't needed —
+  trading some wasted search calls for lower p50 latency on the common case.
+
+## Problem 4: ranking under adversarial and SEO-gamed content
+
+Search results are not a clean, trustworthy corpus — SEO-optimized content
+farms exist specifically to rank well for common queries while providing low
+information value, and outright misinformation exists too. A retrieval ranker
+tuned purely for topical relevance will happily surface this content into the
+generation prompt, degrading answer quality in a way that's hard to detect
+automatically. This pushes toward incorporating **source-quality signals**
+(historical reliability, domain reputation) as a ranking feature independent
+of topical relevance — an ongoing arms race, not a solved problem, similar to
+web search's long-running fight against SEO spam.
+
+## Trade-off summary
+
+| Concern | Cheap/simple approach | Higher-fidelity approach | Cost |
+|---|---|---|---|
+| Freshness | Single index, periodic refresh | Tiered: broad index + live search fast-path for time-sensitive queries | Query classification complexity |
+| Citation accuracy | Trust the model's citation markers | Post-hoc verification pass against source text | Extra latency per query |
+| Slow source pages | Wait for all fetches to complete | Timeout + generate from partial results | Possible incompleteness in answer |
+| Repeated queries | Always re-search live | Cache search results & extracted content with TTL | Staleness risk if TTL too long |
+| Low-quality sources | Rank by topical relevance only | Blend in source-quality/reputation signal | Ongoing maintenance, adversarial arms race |

@@ -1,0 +1,72 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Adam"
+level: beginner
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "adam"
+estReadTime: 7
+resources:
+  - type: article
+    title: "Adam: A Method for Stochastic Optimization (original paper)"
+    url: "https://arxiv.org/abs/1412.6980"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The default optimizer for a reason
+
+**Adam** (Adaptive Moment Estimation) combines two ideas you've already met: momentum
+(remembering past gradient direction) and a *per-parameter* adaptive learning rate
+(automatically taking bigger steps for parameters that have had small/consistent
+gradients, and smaller steps for parameters with large/noisy gradients). It's the
+default optimizer for most transformer and LLM training precisely because it "just
+works" reasonably well without heavy hyperparameter tuning.
+
+<Mermaid client:visible code={`flowchart LR
+  G["Gradient"] --> M["Momentum-like average (1st moment)"]
+  G --> V["Magnitude-tracking average (2nd moment)"]
+  M --> Update["Update = 1st moment / sqrt(2nd moment)"]
+  V --> Update
+  Update --> W["Apply to weight"]`} />
+
+## Using it (this is 90% of what you need)
+
+```python
+import torch
+
+model = torch.nn.Linear(10, 1)
+optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+
+for batch_x, batch_y in data_loader:
+    optimizer.zero_grad()
+    loss = torch.nn.functional.mse_loss(model(batch_x), batch_y)
+    loss.backward()
+    optimizer.step()
+```
+
+Same 4-step pattern as SGD — Adam is a drop-in replacement, and `lr=0.001` (or 3e-4,
+a well-known "magic number" in the community) is a solid starting point for many
+problems, versus SGD where you'd typically need to search harder for a good rate.
+
+## Why it adapts per-parameter
+
+Some weights get large, frequent gradients; others get small, rare ones (common with
+sparse features or rarely-activated neurons). A single global learning rate treats
+them identically, which is wasteful. Adam tracks a running estimate of each
+parameter's typical gradient magnitude and scales its step size down for parameters
+with historically large gradients, and up for ones with historically small gradients
+— automatically, without you hand-tuning per-layer rates.
+
+## Try it yourself
+
+Two weights: one gets gradients around 10.0 every step, another gets gradients around
+0.01 every step. With plain SGD and one learning rate, which weight moves faster per
+step (in absolute terms)? What would you want instead?
+
+<details>
+<summary>Solution</summary>
+
+The 10.0-gradient weight moves ~1000x faster per step with the same learning rate —
+likely too fast for one and too slow for the other. This is exactly the imbalance
+Adam's per-parameter scaling is designed to correct automatically.
+</details>

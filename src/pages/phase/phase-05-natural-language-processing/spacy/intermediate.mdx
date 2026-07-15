@@ -1,0 +1,118 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "spaCy"
+level: intermediate
+phaseSlug: "phase-05-natural-language-processing"
+phaseName: "Natural Language Processing"
+topicSlug: "spacy"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "spaCy — Processing pipelines documentation"
+    url: "https://spacy.io/usage/processing-pipelines"
+  - type: docs
+    title: "spaCy — Rule-based matching (Matcher/PhraseMatcher)"
+    url: "https://spacy.io/usage/rule-based-matching"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The pipeline is a configurable sequence of components
+
+Calling `nlp(text)` runs a chain of components, each adding structured information to
+the `Doc` object. You can inspect, disable, or add to this chain depending on what
+your application actually needs:
+
+<Mermaid client:visible code={`flowchart LR
+  A[Raw text] --> B[tokenizer]
+  B --> C[tagger - POS tags]
+  C --> D[parser - dependency tree]
+  D --> E[ner - named entities]
+  E --> F["lemmatizer / custom components"]
+  F --> G[Doc object]`} />
+
+```python
+import spacy
+
+nlp = spacy.load("en_core_web_sm")
+print(nlp.pipe_names)
+# ['tok2vec', 'tagger', 'parser', 'attribute_ruler', 'lemmatizer', 'ner']
+
+# Disable components you don't need -- meaningful speedup on large corpora
+with nlp.select_pipes(disable=["parser", "lemmatizer"]):
+    doc = nlp("Fast NER-only processing.")
+    print([(e.text, e.label_) for e in doc.ents])
+```
+
+Disabling unused components is one of the simplest and highest-leverage performance
+optimizations in spaCy — running the full pipeline (including the dependency parser)
+when you only need named entities wastes real compute at scale.
+
+## Batch processing with `nlp.pipe`
+
+Calling `nlp(text)` in a loop over thousands of documents is slow because it doesn't
+batch work efficiently. `nlp.pipe()` processes documents in streaming batches,
+significantly improving throughput:
+
+```python
+texts = ["Document one.", "Document two.", "Document three."] * 10000
+
+# Slow: one document at a time
+docs = [nlp(text) for text in texts]
+
+# Fast: internally batched, and can use multiple processes
+docs = list(nlp.pipe(texts, batch_size=1000, n_process=4))
+```
+
+`n_process` spins up multiple worker processes (real parallelism, since spaCy's core
+is Cython/C-backed and releases the GIL for much of its work) — this is the standard
+way to process large corpora, e.g. cleaning millions of support tickets or news
+articles.
+
+## Rule-based matching alongside statistical models
+
+spaCy's statistical pipeline is not the only tool for extracting structure — the
+`Matcher` lets you write rule-based patterns over token attributes, which is often
+more precise and predictable than a trained model for well-defined patterns:
+
+```python
+from spacy.matcher import Matcher
+
+matcher = Matcher(nlp.vocab)
+pattern = [{"LOWER": "machine"}, {"LOWER": "learning"}]
+matcher.add("ML_TERM", [pattern])
+
+doc = nlp("We study machine learning and deep learning.")
+matches = matcher(doc)
+for match_id, start, end in matches:
+    print(doc[start:end].text)
+# "machine learning"
+```
+
+Combining rule-based matching (for known, high-precision patterns — product codes,
+phone numbers, fixed terminology) with statistical NER (for open-ended entity types)
+is a common production pattern — it avoids retraining a model just to catch patterns
+you could already describe exactly.
+
+## Custom pipeline components
+
+You can insert your own logic into the pipeline as a first-class component, so it
+runs automatically as part of `nlp(text)`:
+
+```python
+from spacy.language import Language
+
+@Language.component("custom_flagger")
+def flag_urgent(doc):
+    doc._.is_urgent = any(tok.text.lower() == "urgent" for tok in doc)
+    return doc
+
+from spacy.tokens import Doc
+Doc.set_extension("is_urgent", default=False)
+nlp.add_pipe("custom_flagger", last=True)
+
+doc = nlp("This is an urgent request.")
+print(doc._.is_urgent)  # True
+```
+
+This extension mechanism is how teams bolt domain-specific logic (custom entity
+rules, business logic flags) onto spaCy's pipeline without forking the library.

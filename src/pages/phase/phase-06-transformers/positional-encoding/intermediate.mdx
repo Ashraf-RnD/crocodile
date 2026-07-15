@@ -1,0 +1,93 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Positional Encoding"
+level: intermediate
+phaseSlug: "phase-06-transformers"
+phaseName: "Transformers"
+topicSlug: "positional-encoding"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "Hugging Face — RoPE / rotary embeddings reference"
+    url: "https://huggingface.co/docs/transformers/en/model_doc/llama#transformers.LlamaConfig"
+  - type: article
+    title: "RoFormer: Enhanced Transformer with Rotary Position Embedding"
+    url: "https://arxiv.org/abs/2104.09864"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Two families: fixed vs. learned
+
+There are two broad approaches to giving Transformers positional information:
+
+1. **Fixed sinusoidal encoding** (original Transformer) — computed with a formula,
+   no training required, and can in principle generalize to sequence lengths longer
+   than seen during training.
+2. **Learned positional embeddings** (used in GPT-2, BERT) — an embedding table just
+   like the word embedding table, indexed by position, and trained via backprop like
+   any other parameter.
+
+```python
+import torch
+import torch.nn as nn
+
+# Learned positional embeddings — the BERT/GPT-2 style approach
+class LearnedPositionalEmbedding(nn.Module):
+    def __init__(self, max_seq_len, d_model):
+        super().__init__()
+        self.pos_embedding = nn.Embedding(max_seq_len, d_model)
+
+    def forward(self, x):
+        # x: (batch, seq_len, d_model)
+        seq_len = x.size(1)
+        positions = torch.arange(seq_len, device=x.device)
+        return x + self.pos_embedding(positions)
+
+pe_layer = LearnedPositionalEmbedding(max_seq_len=512, d_model=256)
+x = torch.randn(4, 20, 256)
+x_with_pos = pe_layer(x)
+```
+
+Learned embeddings are simple and often perform as well or better within the trained
+length range, but they **cannot extrapolate** past `max_seq_len` — position 513 has
+no trained embedding at all if the model only ever saw sequences up to 512.
+
+<Mermaid client:visible code={`flowchart LR
+  Tok["Token embeddings"] --> Add["Element-wise add"]
+  Pos["Positional encoding/embedding"] --> Add
+  Add --> Layers["Into Transformer layers"]`} />
+
+## Relative position: RoPE
+
+Modern LLMs (LLaMA, Mistral, GPT-NeoX-derived models) mostly moved away from adding
+a positional vector to embeddings, in favor of **Rotary Position Embeddings (RoPE)**.
+Instead of adding position information, RoPE *rotates* the query and key vectors by
+an angle proportional to their position before computing the attention dot product.
+The key mathematical property: the dot product between a rotated query at position
+`m` and a rotated key at position `n` depends only on their **relative distance**
+`m - n`, not their absolute positions.
+
+```python
+# Conceptual sketch — real implementations (e.g. Hugging Face LLaMA) precompute
+# and cache the rotation frequencies for efficiency.
+def apply_rotary(x, position, freqs):
+    # x: (..., d) split into pairs of dims that get rotated together
+    cos, sin = torch.cos(position * freqs), torch.sin(position * freqs)
+    x1, x2 = x[..., ::2], x[..., 1::2]
+    rotated = torch.stack([x1 * cos - x2 * sin, x1 * sin + x2 * cos], dim=-1)
+    return rotated.flatten(-2)
+```
+
+Because attention scores become a function of relative distance rather than absolute
+position, RoPE tends to generalize to somewhat longer sequences than seen in training
+more gracefully than fixed absolute encodings — a major reason it's now the default
+choice in most open-weight LLMs.
+
+## Why this choice actually matters in practice
+
+Positional encoding is one of the few architectural choices that directly determines
+a model's **context length behavior**. Hugging Face's `AutoModel` classes expose this
+directly — e.g. `LlamaConfig.rope_theta` controls RoPE's base frequency, and
+techniques like **RoPE scaling** (linear scaling, NTK-aware scaling, YaRN) let
+practitioners extend a pretrained model's usable context length post-hoc by
+rescaling how positions map to rotation angles, without retraining from scratch.

@@ -1,0 +1,86 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Attention Is All You Need"
+level: intermediate
+phaseSlug: "phase-06-transformers"
+phaseName: "Transformers"
+topicSlug: "attention-is-all-you-need"
+estReadTime: 10
+resources:
+  - type: article
+    title: "Attention Is All You Need (original paper)"
+    url: "https://arxiv.org/abs/1706.03762"
+  - type: article
+    title: "The Annotated Transformer (Harvard NLP, line-by-line implementation)"
+    url: "https://nlp.seas.harvard.edu/annotated-transformer/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## What the paper actually contributed, piece by piece
+
+It's tempting to think of "the Transformer" as one single idea, but the paper
+combines several distinct contributions that are each individually reused across
+today's models:
+
+<Mermaid client:visible code={`flowchart TB
+  A["Scaled dot-product attention (the core operation)"] --> E["Full Transformer architecture"]
+  B["Multi-head attention (run attention in parallel, multiple 'views')"] --> E
+  C["Positional encoding (inject order info, since attention has none)"] --> E
+  D["Encoder-decoder stack with residual connections + LayerNorm"] --> E
+  E --> F["Machine translation results beating prior RNN/CNN state of the art"]`} />
+
+1. **Scaled dot-product attention** — `softmax(QKᵀ/√d_k)V`. Not a new idea in
+   isolation (attention existed in RNN-based seq2seq models before this paper, e.g.
+   Bahdanau attention), but here it becomes the *entire* computational backbone
+   rather than an add-on to recurrence.
+2. **Multi-head attention** — running several attention computations in parallel
+   with separate learned projections, letting the model attend to different types of
+   relationships simultaneously.
+3. **Positional encoding** — since attention alone has no sense of word order,
+   sinusoidal position vectors are added to the input embeddings.
+4. **A specific encoder-decoder recipe** — residual connections around every
+   sublayer, layer normalization, and a position-wise feed-forward network after
+   each attention block — the exact stacking pattern still used (with pre-LN
+   modifications) in every Transformer variant today.
+
+## Results the paper reported
+
+On WMT 2014 English-to-German and English-to-French translation, the Transformer
+(specifically the "big" model variant) achieved state-of-the-art BLEU scores while
+training in **dramatically less wall-clock time** than the previous best models —
+the paper reports training the big model in 3.5 days on 8 GPUs, versus weeks for
+comparable-quality prior systems. This training-speed result is arguably as
+important historically as the translation quality result: it's what made it
+practical to scale Transformers up rapidly in the years that followed.
+
+```python
+# A minimal illustration of the architecture the paper describes,
+# using PyTorch's built-in Transformer module (mirrors the paper's design)
+import torch
+import torch.nn as nn
+
+model = nn.Transformer(
+    d_model=512, nhead=8, num_encoder_layers=6, num_decoder_layers=6,
+    dim_feedforward=2048, dropout=0.1, batch_first=True,
+)
+
+src = torch.randn(2, 10, 512)    # source sentence embeddings
+tgt = torch.randn(2, 8, 512)     # target sentence embeddings (shifted right)
+out = model(src, tgt)
+print(out.shape)  # torch.Size([2, 8, 512])
+```
+
+This is essentially the paper's Figure 1 architecture, implemented directly — six
+encoder layers, six decoder layers, 8 attention heads, 512-dim embeddings, exactly
+as specified in the "base" model configuration in the paper.
+
+## Why "translation paper" became "foundation of nearly everything"
+
+The paper itself only demonstrated machine translation, but the architecture's
+components proved to be domain-agnostic: any problem that can be framed as a
+sequence had a natural fit. BERT reused just the encoder half for language
+understanding; GPT reused just the decoder half (with causal masking) for
+generation; Vision Transformers later applied the same self-attention mechanism to
+image patches instead of words. The paper's real long-term contribution wasn't
+"a better translation model" — it was a general-purpose sequence-processing building
+block that turned out to generalize far beyond its original use case.

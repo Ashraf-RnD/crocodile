@@ -1,0 +1,76 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "ROC-AUC"
+level: beginner
+phaseSlug: "phase-03-machine-learning"
+phaseName: "Machine Learning"
+topicSlug: "roc-auc"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "scikit-learn: roc_auc_score"
+    url: "https://scikit-learn.org/stable/modules/generated/sklearn.metrics.roc_auc_score.html"
+  - type: video
+    title: "StatQuest: ROC and AUC, Clearly Explained"
+    url: "https://www.youtube.com/watch?v=4jRBRDbJemM"
+---
+
+## Measuring how well a model ranks
+
+Most metrics you've seen (accuracy, precision, recall) depend on a chosen threshold — the
+point where a predicted probability becomes a "yes" or "no" label. **ROC-AUC** asks a
+different question: forget any single threshold — if I grabbed one random true positive and
+one random true negative, how often would the model's score rank the positive higher?
+
+An AUC (**A**rea **U**nder the **C**urve) of `1.0` means the model perfectly ranks every
+positive above every negative. An AUC of `0.5` means the model ranks no better than a coin
+flip. AUC below `0.5` means the model's ranking is inverted from what it should be.
+
+## In code
+
+```python
+from sklearn.linear_model import LogisticRegression
+from sklearn.datasets import make_classification
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import roc_auc_score
+
+X, y = make_classification(n_samples=500, n_features=5, random_state=0)
+X_train, X_test, y_train, y_test = train_test_split(X, y, random_state=0)
+
+clf = LogisticRegression().fit(X_train, y_train)
+
+# roc_auc_score needs probabilities, not hard labels
+probs = clf.predict_proba(X_test)[:, 1]
+auc = roc_auc_score(y_test, probs)
+print(f"ROC-AUC: {auc:.3f}")
+```
+
+Notice `roc_auc_score` takes `predict_proba` output, not `predict` output — it needs a
+continuous score to evaluate ranking quality across every possible threshold, not just the
+labels produced at one fixed cutoff.
+
+## Try it yourself
+
+You have true labels and predicted probabilities from a model. Compute the ROC-AUC score
+and check whether it's closer to a perfect ranker (`1.0`) or a coin flip (`0.5`).
+
+```python
+y_true = [0, 0, 1, 1, 0, 1]
+y_scores = [0.1, 0.35, 0.4, 0.8, 0.3, 0.65]
+```
+
+<details>
+<summary>Solution</summary>
+
+```python
+from sklearn.metrics import roc_auc_score
+
+y_true = [0, 0, 1, 1, 0, 1]
+y_scores = [0.1, 0.35, 0.4, 0.8, 0.3, 0.65]
+
+auc = roc_auc_score(y_true, y_scores)
+print(f"ROC-AUC: {auc:.3f}")
+# ROC-AUC: 0.889 — the model ranks positives above negatives most, but not all, of the time
+```
+
+</details>

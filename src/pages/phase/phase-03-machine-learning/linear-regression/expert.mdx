@@ -1,0 +1,122 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Linear Regression"
+level: expert
+phaseSlug: "phase-03-machine-learning"
+phaseName: "Machine Learning"
+topicSlug: "linear-regression"
+estReadTime: 12
+resources:
+  - type: docs
+    title: "scikit-learn: Linear Models (Ridge, Lasso, ElasticNet)"
+    url: "https://scikit-learn.org/stable/modules/linear_model.html"
+  - type: article
+    title: "Gauss-Markov theorem and OLS assumptions"
+    url: "https://en.wikipedia.org/wiki/Gauss%E2%80%93Markov_theorem"
+---
+
+## OLS assumptions and what breaks
+
+Ordinary least squares (OLS) is the estimator behind `sklearn.linear_model.LinearRegression`. Its
+statistical guarantees — unbiasedness, and being the Best Linear Unbiased Estimator (BLUE) per the
+Gauss-Markov theorem — rest on assumptions that are easy to violate silently in practice:
+
+- **Linearity**: the target is a linear combination of the features (plus noise). Violated by
+  curved or threshold relationships; diagnose with residual-vs-fitted plots showing curvature.
+- **Independence of errors**: residuals aren't correlated with each other. Violated in time series
+  or grouped/panel data (e.g. repeated measurements per customer) — leads to underestimated
+  standard errors and overconfident inference, even though point predictions may be fine.
+- **Homoscedasticity**: error variance is constant across the range of predictions. Violated when
+  residual spread grows with fitted value (a funnel shape). Standard errors and confidence
+  intervals become unreliable; point estimates from `.fit()` remain unbiased but inefficient.
+- **No perfect multicollinearity** (and ideally low multicollinearity): features shouldn't be
+  linear combinations of each other. Near-collinearity doesn't break the fit numerically but makes
+  individual coefficients unstable and hard to interpret — the model can still predict well while
+  individual coefficient signs and magnitudes become meaningless.
+- **No endogeneity**: features shouldn't be correlated with the error term (e.g. omitted-variable
+  bias). This is the hardest to detect from data alone and usually requires domain reasoning.
+
+Note what's *not* required: normality of errors is only needed for exact-sample hypothesis
+testing and confidence intervals, not for the point estimates themselves (which are consistent
+under the Gauss-Markov conditions regardless).
+
+## Normal equation vs. gradient descent
+
+Two ways to solve the least-squares problem:
+
+**Closed-form (normal equation)**: minimize `||Xw - y||^2` by solving `w = (X^T X)^-1 X^T y`
+directly. This is exact in one step, but computing a matrix inverse is `O(p^3)` in the number of
+features `p`, and `X^T X` can be ill-conditioned when features are collinear.
+
+**scikit-learn's actual approach**: `LinearRegression` does not use the naive normal equation or
+gradient descent. It calls `scipy.linalg.lstsq`, which uses SVD (singular value decomposition) of
+`X` to solve the least-squares problem directly. SVD avoids explicitly forming `X^T X` (which
+squares the condition number and amplifies numerical instability) and handles rank-deficient `X`
+gracefully by returning the minimum-norm solution. This is why `LinearRegression` has no
+`learning_rate` or `max_iter` hyperparameter — it's not an iterative solver.
+
+**Gradient descent** (batch, stochastic, or mini-batch) is used instead when:
+- The dataset is too large to fit `X^T X` or run SVD in memory — `SGDRegressor` in scikit-learn
+  fits linear regression incrementally, one batch at a time.
+- You need online/streaming updates as new data arrives.
+- You're adding regularization terms or loss functions where no closed form exists.
+
+For typical tabular datasets (thousands to low millions of rows, hundreds of features),
+`LinearRegression`'s SVD-based solve is both faster and numerically more stable than hand-rolled
+gradient descent.
+
+## Regularization trade-offs
+
+Plain OLS has zero bias (asymptotically) but can have high variance when features are numerous,
+correlated, or the sample size is small relative to feature count. Regularization intentionally
+introduces bias to reduce variance — usually a net win for predictive accuracy out of sample.
+
+## Trade-off summary
+
+| Property | OLS | Ridge (L2) | Lasso (L1) | ElasticNet (L1+L2) |
+|---|---|---|---|---|
+| Bias | None (unbiased) | Increases with alpha | Increases with alpha | Increases with alpha |
+| Variance | Highest, especially with collinearity | Reduced, shrinks correlated coefs together | Reduced, but unstable selection under correlation | Reduced, more stable selection than Lasso |
+| Sparsity (feature selection) | No | No — shrinks but never zeros coefficients | Yes — drives coefficients to exactly zero | Yes, tunable via `l1_ratio` |
+| Handles multicollinearity | Poorly — unstable coefficients | Well — spreads weight across correlated features | Arbitrarily picks one of a correlated group | Best of both — groups correlated features, some sparsity |
+| Interpretability | High if assumptions hold | Moderate — all features retained | High — fewer nonzero coefficients | Moderate |
+| Solver in sklearn | SVD-based least squares | Closed-form or `sag`/`saga`/`lsqr` | Coordinate descent (`Lasso`) | Coordinate descent (`ElasticNet`) |
+| When to reach for it | Small p, low collinearity, need unbiased inference | Many correlated features, want to keep them all | Want automatic feature selection | Correlated features + want sparsity |
+
+`alpha` in Ridge/Lasso/ElasticNet controls the strength of the penalty and should be tuned via
+cross-validation (`RidgeCV`, `LassoCV`, `ElasticNetCV`), not picked by hand.
+
+## Production concerns
+
+**Feature drift**: a linear model's coefficients encode the relationships present in training
+data at a point in time. If the input distribution shifts (e.g. average house size in a market
+changes, or a feature's units change upstream), predictions degrade silently — there's no
+mechanism inside `LinearRegression` to detect this. Monitor input feature distributions
+(population stability index, KS-test) and prediction distributions in production, not just
+offline accuracy at training time.
+
+**Extrapolation risk**: linear regression has no built-in awareness of its training data's
+support. Given a feature value far outside the training range, it will happily extrapolate the
+line — sometimes producing predictions that are directionally nonsensical (e.g. negative prices).
+Guard with explicit range checks on inputs before scoring, or fall back to a documented default
+behavior outside the trained range.
+
+**Interpretability vs. black-box trade-off**: a fitted linear model's coefficients are directly
+inspectable — "each additional bedroom adds $8,000, holding other features constant" — which is
+valuable for debugging, stakeholder trust, and regulatory scrutiny (credit scoring, insurance
+pricing, healthcare) where "why did the model say this" has legal weight. Gradient-boosted trees
+or neural nets often out-predict linear regression on raw accuracy, but require SHAP/LIME-style
+post-hoc explanation layers to approach the same level of transparency, and even those are
+approximations rather than exact decompositions.
+
+**When linear regression is the right production choice**:
+- As a baseline to beat before justifying the complexity of a more expensive model.
+- In regulated domains where model decisions must be explained to auditors or customers by
+  contract or law.
+- When the relationship genuinely is close to linear and the marginal accuracy gain from a
+  complex model doesn't justify its latency, training cost, or maintenance burden.
+- When you need fast, cheap inference at scale — a linear model is a dot product; there's no
+  faster general-purpose predictor.
+- When you need well-calibrated, statistically grounded uncertainty estimates (confidence and
+  prediction intervals), which are mathematically well-defined for OLS under its assumptions in a
+  way that's much harder to obtain rigorously from tree ensembles or deep models.

@@ -1,0 +1,81 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "LiteLLM"
+level: beginner
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "litellm"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "LiteLLM — Getting Started"
+    url: "https://docs.litellm.ai/docs/"
+  - type: docs
+    title: "LiteLLM — Supported Providers"
+    url: "https://docs.litellm.ai/docs/providers"
+---
+
+## Think of it as a universal remote for LLM providers
+
+Every LLM provider — OpenAI, Anthropic, Google, Cohere, a local Ollama model — has a
+slightly different API shape. **LiteLLM** gives you one function, `completion()`, that
+works the same way no matter which provider you're calling, translating your request
+into whatever that specific provider actually expects.
+
+### The same call, three different providers
+
+```python
+from litellm import completion
+
+# OpenAI
+response = completion(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+)
+
+# Anthropic — same function, same message format, just a different model string
+response = completion(
+    model="claude-sonnet-4-5",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+)
+
+# A local model running via Ollama
+response = completion(
+    model="ollama/llama3",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+)
+
+print(response.choices[0].message.content)
+```
+
+Notice `response.choices[0].message.content` works identically every time — LiteLLM
+normalizes each provider's actual response format into the same OpenAI-style shape,
+so your downstream code never needs to know which provider actually answered.
+
+### Why this matters
+
+Without LiteLLM, switching from OpenAI to Anthropic means rewriting every place you
+call the API, because the SDKs and response shapes differ. With LiteLLM, it's a
+one-line change to the `model` string — genuinely useful the first time you need to
+add a fallback provider, compare model quality, or reduce cost by routing some
+requests to a cheaper model.
+
+### Try it yourself
+
+Write a `completion()` call that asks `gpt-4o-mini` to summarize the text "LiteLLM
+lets you call over 100 LLM APIs using the same format" in five words or fewer.
+
+<details>
+<summary>Solution</summary>
+
+```python
+from litellm import completion
+
+response = completion(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "Summarize in 5 words or fewer: 'LiteLLM lets you call over 100 LLM APIs using the same format'"}],
+)
+print(response.choices[0].message.content)  # e.g. "One API for many LLMs"
+```
+
+</details>

@@ -1,0 +1,86 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "RLHF Concepts"
+level: expert
+phaseSlug: "phase-10-fine-tuning"
+phaseName: "Fine-tuning"
+topicSlug: "rlhf-concepts"
+estReadTime: 13
+resources:
+  - type: article
+    title: "Secrets of RLHF in Large Language Models (survey of practical failure modes)"
+    url: "https://arxiv.org/abs/2307.04964"
+  - type: docs
+    title: "TRL — PPOTrainer implementation details"
+    url: "https://huggingface.co/docs/trl/main/en/ppo_trainer"
+---
+
+## Reward model generalization is the pipeline's real bottleneck
+
+The reward model is trained on a fixed, finite set of human preference comparisons, but
+it's then used to score arbitrary policy-generated text during PPO — text the reward
+model never saw during its own training. This distribution shift is the root cause of
+most RLHF failure modes: as the policy updates, it drifts into regions of output space
+the reward model was never trained to score reliably, and starts exploiting whatever
+spurious correlations the reward model latched onto (length, specific phrasing,
+superficial confidence markers) rather than genuine quality. This is why reward model
+quality — diversity of training comparisons, calibration, resistance to length bias —
+matters more to final RLHF outcomes than most of the PPO hyperparameters that get the
+most tuning attention in practice.
+
+## Why PPO's variance reduction machinery exists, and what it costs
+
+Vanilla policy gradient has high variance because a single sampled trajectory's reward
+is a noisy estimate of the true expected reward. PPO's value function (a fourth model,
+alongside policy/reference/reward) estimates a baseline to subtract, reducing gradient
+variance — but training a value function that itself needs to converge introduces its
+own instability, particularly early in training when the value estimates are poor. Many
+practical RLHF implementations report that value-function instability, not the policy
+update itself, is the dominant source of training runs that need to be restarted or
+have their KL coefficient re-tuned mid-run — a genuinely operational cost distinct from
+the conceptual elegance of the PPO objective.
+
+## The clip range and KL coefficient are coupled, not independent knobs
+
+PPO's clipping (`epsilon`, typically 0.2) bounds how far a single update can move the
+policy per step; the KL penalty coefficient bounds cumulative drift from the reference
+model across the whole run. In practice these interact: a wide clip range with a weak
+KL coefficient allows fast but potentially unstable large updates, while a tight clip
+range with a strong KL coefficient can starve the policy of enough gradient signal to
+meaningfully improve within a practical training budget. Teams often report needing to
+retune both jointly rather than treating "KL coefficient" as the single dial for reward
+hacking — over-tightening the clip range alone can just make training slow without
+actually preventing reward exploitation.
+
+## Adaptive KL control vs. fixed KL coefficients
+
+A fixed KL coefficient (`init_kl_coef` held constant) assumes the "right" amount of
+divergence is stable across the whole training run, which is rarely true in practice —
+early training can tolerate more drift productively, while late training benefits from
+tighter control to avoid degenerate collapse. **Adaptive KL controllers** (TRL supports
+this via `AdaptiveKLController`) adjust the coefficient dynamically to target a desired
+average KL divergence, trading a small amount of additional complexity for meaningfully
+more stable long training runs — this is close to standard practice in serious RLHF
+implementations rather than an optional refinement.
+
+## Trade-off summary: RLHF (PPO) vs. its alternatives
+
+| Dimension | RLHF (PPO) | DPO | Reward model + best-of-N (no RL) |
+|---|---|---|---|
+| Models needed simultaneously | 4 (policy, reference, reward, value) | 2 (policy, reference) | 2 (generator, reward model) |
+| Training stability | Lower — sensitive to KL/clip tuning | Higher — closed-form loss, no RL loop | High — no gradient-based policy update at all |
+| Compute cost | Highest | Lower | Lowest at train time, higher at inference time |
+| Generalization beyond preference dataset | Better — reward model can score novel outputs | Weaker — implicitly tied to the fixed preference dataset's distribution | Depends entirely on reward model quality |
+| Operational complexity | High | Moderate | Low, but scales poorly with N at inference |
+
+## Where full RLHF still earns its complexity
+
+Despite DPO's popularity, RLHF-with-PPO retains a real advantage: because the reward
+model is a standalone, generalizing function, it can score *any* generated response,
+including ones the policy produces after significant drift during training — DPO's
+objective, by contrast, is only ever defined relative to the fixed pairs in its
+training dataset, so it has no mechanism to actively explore and get feedback on novel
+outputs during training. This is why frontier labs training for very open-ended,
+long-horizon capabilities (rather than fine-tuning toward a fixed known-good
+distribution) have historically retained PPO-based RLHF or hybrid approaches, even as
+DPO dominates as the practical default for most applied fine-tuning teams.

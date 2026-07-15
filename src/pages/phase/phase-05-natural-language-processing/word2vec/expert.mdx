@@ -1,0 +1,91 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Word2Vec"
+level: expert
+phaseSlug: "phase-05-natural-language-processing"
+phaseName: "Natural Language Processing"
+topicSlug: "word2vec"
+estReadTime: 12
+resources:
+  - type: article
+    title: "Levy & Goldberg — Neural Word Embedding as Implicit Matrix Factorization"
+    url: "https://papers.nips.cc/paper/2014/hash/feab05aa91085b7a8012516bc3533958-Abstract.html"
+  - type: article
+    title: "Bolukbasi et al. — Man is to Computer Programmer as Woman is to Homemaker? Debiasing Word Embeddings"
+    url: "https://arxiv.org/abs/1607.06520"
+---
+
+## Word2Vec is implicit matrix factorization
+
+Levy & Goldberg's landmark analysis showed that Skip-gram with negative sampling
+(SGNS) is mathematically equivalent to factorizing a word-context matrix whose entries
+are the **shifted pointwise mutual information (PMI)** between word and context pairs,
+shifted by `log(k)` where `k` is the number of negative samples. This reframes Word2Vec
+not as a fundamentally novel neural technique but as an efficient, scalable
+implementation of a classical count-based distributional semantics idea (PMI matrices,
+long used in computational linguistics) — the neural network is essentially a fast
+approximate factorization method, not the source of the semantic structure itself.
+This matters practically: it explains why increasing the negative sampling count `k`
+systematically shifts the implicit matrix being factorized, which is why `k` has a
+measurable, predictable effect on embedding quality rather than being an arbitrary
+hyperparameter.
+
+## Frequency effects and subsampling
+
+Extremely frequent words (`"the"`, `"a"`, `"is"`) provide far less useful training
+signal than their raw frequency would suggest — they co-occur with nearly everything,
+so their gradient contributions mostly add noise. Word2Vec's subsampling formula
+discards frequent words probabilistically during training:
+
+```
+P(discard word w) = 1 - sqrt(t / freq(w))
+```
+
+where `t` is a threshold (typically `1e-5`). This is not a minor implementation
+detail — ablations in the original paper show subsampling both speeds up training
+several-fold *and* measurably improves embedding quality on analogy tasks, because it
+rebalances the effective training distribution toward more informative co-occurrences.
+
+## Anisotropy: the embedding space isn't as clean as it looks
+
+A well-documented property of Word2Vec (and static embeddings generally) is
+**anisotropy** — the learned vectors don't spread uniformly through the embedding
+space but cluster into a narrow cone. This means raw cosine similarity between two
+random words is almost always positive and non-trivially large, which inflates
+apparent similarity scores and can make "most similar words" lists misleading unless
+you're comparing relative rankings rather than absolute similarity values. This same
+anisotropy issue reappears, in a more severe form, in raw contextual embeddings from
+transformers (relevant to the Sentence Embeddings topic) — it's part of the motivation
+for embedding-specific fine-tuning objectives like those used in Sentence-BERT.
+
+## Encoded bias is a direct, measurable consequence of training data
+
+Because Word2Vec vectors are learned purely from co-occurrence statistics in a text
+corpus, they faithfully encode whatever societal biases are present in that corpus.
+Bolukbasi et al. demonstrated this concretely: solving the analogy
+`"man" : "computer programmer" :: "woman" : ?` returns `"homemaker"` in vectors
+trained on Google News. This isn't a bug you can patch — it's the expected behavior of
+a system that learns purely from context statistics, and it means any downstream
+system built on off-the-shelf embeddings (resume screening, search ranking) inherits
+that bias unless explicitly debiased or evaluated for it. Debiasing techniques (e.g.
+projecting out a learned "gender direction") reduce it on specific, targeted analogy
+tests but do not eliminate bias throughout the embedding space — a caution relevant
+whenever a "solved" embedding is dropped into a production pipeline without a bias
+evaluation pass.
+
+## Why static embeddings still matter in a transformer-dominated world
+
+| Property | Word2Vec (static) | Contextual (BERT/transformer) |
+|---|---|---|
+| Representation per word | One fixed vector regardless of context | A different vector per occurrence, context-dependent |
+| Inference cost | A single lookup — O(1), no forward pass | Requires a full forward pass through the network |
+| Training data needed | Works reasonably well on modest (millions-of-words) corpora | Needs massive pretraining corpora to be competitive |
+| Typical use today | Cold-start recommender systems, lightweight/offline NLP, interpretable feature engineering, low-latency edge deployment | Anything where contextual disambiguation and downstream accuracy matter more than latency/cost |
+| Polysemy handling | None — "bank" has one vector | Handled naturally per-occurrence |
+
+Static embeddings persist in production specifically where the O(1) lookup cost
+matters — real-time recommendation systems, on-device NLP, and any pipeline where
+running a transformer forward pass per request is not economically viable. Knowing
+when a five-year-old technique is still the right engineering choice, rather than
+reflexively reaching for the newest transformer, is itself an expert-level judgment
+call.

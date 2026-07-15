@@ -1,0 +1,132 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Weaviate"
+level: intermediate
+phaseSlug: "phase-08-retrieval-augmented-generation"
+phaseName: "Retrieval-Augmented Generation"
+topicSlug: "weaviate"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "Weaviate — Hybrid Search"
+    url: "https://weaviate.io/developers/weaviate/search/hybrid"
+  - type: docs
+    title: "Weaviate — Filters"
+    url: "https://weaviate.io/developers/weaviate/search/filters"
+---
+
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Schema, modules, and bring-your-own-vectors in production
+
+Production Weaviate collections declare an explicit schema (property types,
+vectorizer module, index config) rather than relying on defaults, and commonly bring
+externally-computed vectors for full control over the embedding model:
+
+```python
+import weaviate
+from weaviate.classes.config import Configure, Property, DataType
+
+client = weaviate.connect_to_local()
+
+client.collections.create(
+    name="SupportDoc",
+    properties=[
+        Property(name="text", data_type=DataType.TEXT),
+        Property(name="department", data_type=DataType.TEXT),
+        Property(name="updated_at", data_type=DataType.DATE),
+    ],
+    vector_config=Configure.Vectors.self_provided(),  # you supply vectors explicitly
+)
+```
+
+<Mermaid client:visible code={`flowchart LR
+  App["Your application"] --> Embed["Embedding model (your choice)"]
+  Embed --> Insert["Insert vector + properties"]
+  Insert --> Weaviate["Weaviate collection"]
+  Query["Query text"] --> Embed2["Embedding model"]
+  Embed2 --> Search["near_vector search + filters"]
+  Search --> Weaviate`} />
+
+## Inserting with your own vectors and metadata filtering
+
+```python
+docs = client.collections.get("SupportDoc")
+
+docs.data.insert_many([
+    {"properties": {"text": t, "department": "billing"}, "vector": v.tolist()}
+    for t, v in zip(texts, vectors)
+])
+
+from weaviate.classes.query import Filter
+
+results = docs.query.near_vector(
+    near_vector=query_vector.tolist(),
+    filters=Filter.by_property("department").equal("billing"),
+    limit=5,
+)
+```
+
+Like other production vector databases, Weaviate applies filters during the vector
+search itself, so a highly selective filter doesn't silently starve you of results
+that a naive post-filter would drop.
+
+## Native hybrid search with a tunable alpha
+
+Weaviate's `hybrid` query combines BM25-style keyword search and vector search
+natively in one call, with a single `alpha` parameter to blend them:
+
+```python
+results = docs.query.hybrid(
+    query="payment not going through",
+    vector=query_vector.tolist(),   # optional — omit to let Weaviate embed the query text
+    alpha=0.6,                       # 0 = pure keyword (BM25), 1 = pure vector
+    limit=10,
+)
+```
+
+This is the same fusion concept covered in the Hybrid Search topic — Weaviate exposes
+it as a first-class query type rather than requiring you to combine two separate
+searches yourself, which is one of the reasons teams pick Weaviate specifically for
+RAG systems that need both keyword precision and semantic recall out of the box.
+
+## GraphQL and generative search (RAG built into the query)
+
+Weaviate's distinguishing feature for RAG specifically is **generative search** —
+retrieving results and passing them straight to an LLM in the same call, so a common
+RAG loop (retrieve, then generate) collapses into one query:
+
+```python
+response = docs.generate.near_text(
+    query="How do I get a refund?",
+    limit=3,
+    grouped_task="Summarize these documents into a single, concise refund policy answer.",
+)
+print(response.generated)
+```
+
+This is convenient for prototyping a RAG endpoint quickly, though many production
+systems still separate retrieval and generation explicitly — keeping the LLM call in
+application code gives more control over prompt construction, model choice, and error
+handling than delegating it to the database layer.
+
+## Multi-tenancy as a first-class feature
+
+Unlike bolting tenant isolation on via metadata filters, Weaviate supports native
+multi-tenancy at the collection level, physically isolating each tenant's data:
+
+```python
+client.collections.create(
+    name="SupportDoc",
+    multi_tenancy_config=Configure.multi_tenancy(enabled=True),
+)
+docs.tenants.create(["tenant_acme", "tenant_globex"])
+tenant_scoped = docs.with_tenant("tenant_acme")
+tenant_scoped.data.insert_many([...])
+```
+
+For SaaS RAG products serving many distinct customers, this is a meaningful
+architectural choice versus filtering: tenant-scoped queries avoid scanning other
+tenants' data entirely, and tenant data can be managed (backed up, deleted) as an
+independent unit — at the cost of per-tenant overhead that, like Milvus's partitions,
+scales better to hundreds of tenants than to millions of individual, tiny ones.

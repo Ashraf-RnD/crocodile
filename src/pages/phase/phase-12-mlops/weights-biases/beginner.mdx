@@ -1,0 +1,90 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Weights & Biases"
+level: beginner
+phaseSlug: "phase-12-mlops"
+phaseName: "MLOps"
+topicSlug: "weights-biases"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "Weights & Biases — Quickstart"
+    url: "https://docs.wandb.ai/quickstart/"
+  - type: video
+    title: "W&B in 5 minutes"
+    url: "https://www.youtube.com/watch?v=91HhNtmb0B4"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## A live dashboard for your training runs
+
+**Weights & Biases** (W&B) is a hosted experiment tracking tool. It does what
+MLflow does — log parameters and metrics — but its signature feature is **live,
+streaming charts** you can watch update in your browser while training is still
+running, plus rich visualizations (images, confusion matrices, audio) with very
+little setup.
+
+### Logging your first run
+
+```python
+import wandb
+
+wandb.init(project="digit-classifier", config={
+    "learning_rate": 0.001,
+    "epochs": 10,
+    "batch_size": 64,
+})
+
+for epoch in range(10):
+    # ... training step ...
+    train_loss = 0.5 / (epoch + 1)
+    accuracy = 0.7 + epoch * 0.02
+
+    wandb.log({"epoch": epoch, "loss": train_loss, "accuracy": accuracy})
+
+wandb.finish()
+```
+
+The moment you call `wandb.init()`, W&B prints a URL. Open it and you'll see
+loss and accuracy plotted live, updating after every `wandb.log()` call — no
+need to wait for training to finish or refresh a page.
+
+### The mental model
+
+<Mermaid client:visible code={`flowchart LR
+  A["wandb.init()"] --> B["Training loop"]
+  B -->|"wandb.log(metrics)"| C["W&B cloud servers"]
+  C --> D["Live dashboard — updates in real time"]
+  B --> E["wandb.finish()"]`} />
+
+Unlike a local-only tool, everything is synced to W&B's servers by default —
+your teammates can watch your run's dashboard from their own browser while it's
+still training, which is invaluable for long training jobs where you want an
+early signal something's going wrong.
+
+## Try it yourself
+
+Log a run for a model with `learning_rate=0.01`, `optimizer="adam"`, and three
+epochs of loss values: `0.9`, `0.5`, `0.3`.
+
+<details>
+<summary>Solution</summary>
+
+```python
+import wandb
+
+wandb.init(project="my-project", config={
+    "learning_rate": 0.01,
+    "optimizer": "adam",
+})
+
+losses = [0.9, 0.5, 0.3]
+for epoch, loss in enumerate(losses):
+    wandb.log({"epoch": epoch, "loss": loss})
+
+wandb.finish()
+```
+
+Open the printed dashboard URL to watch the loss curve appear.
+
+</details>

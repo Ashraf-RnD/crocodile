@@ -1,0 +1,64 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Matrix Multiplication"
+level: intermediate
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "matrix-multiplication"
+estReadTime: 8
+resources:
+  - type: docs
+    title: "PyTorch — torch.matmul semantics"
+    url: "https://pytorch.org/docs/stable/generated/torch.matmul.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Batched matrix multiplication
+
+Real models don't multiply two plain matrices — they multiply *batches* of them at
+once. `torch.matmul` treats any dimensions beyond the last two as a batch dimension
+and multiplies each pair independently, in parallel on the GPU:
+
+```python
+import torch
+a = torch.randn(32, 8, 64, 64)   # batch=32, 8 attention heads, 64x64 matrices
+b = torch.randn(32, 8, 64, 64)
+(a @ b).shape                     # (32, 8, 64, 64) — 256 independent matmuls, batched
+```
+
+This batched matmul is exactly the operation at the core of multi-head attention:
+every head's query/key/value projections happen as one batched call, not a Python loop
+over heads.
+
+<Mermaid client:visible code={`flowchart TB
+  subgraph Batch ["Batched matmul on GPU"]
+    H1["Head 1: Q @ K^T"]
+    H2["Head 2: Q @ K^T"]
+    H3["... 8 heads total"]
+  end
+  Batch --> Out["All heads computed in parallel, not sequentially"]`} />
+
+## Matmul is not commutative, and order changes cost
+
+`A @ B != B @ A` in general (shapes may not even both be valid). But when chaining
+multiple matmuls, the *order you associate* them in changes total compute cost even
+though the mathematical result is identical:
+
+```
+(A @ B) @ C   vs   A @ (B @ C)
+```
+
+For `A: (1000, 1), B: (1, 1000), C: (1000, 1)`, computing `B @ C` first costs far less
+than `A @ B` first — this is the same idea behind why LoRA's low-rank decomposition
+(`W + BA` instead of a full-rank update) is so much cheaper to compute and store.
+
+## Einsum: matmul's general form
+
+`einsum` lets you express arbitrary contractions (matmul, batched matmul, transpose,
+sum) in one notation, which is common in transformer implementation code because it
+makes head/batch/sequence dimension handling explicit:
+
+```python
+# equivalent to a @ b for batched 3D tensors
+torch.einsum('bik,bkj->bij', a, b)
+```

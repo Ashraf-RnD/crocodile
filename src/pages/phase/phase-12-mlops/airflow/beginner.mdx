@@ -1,0 +1,104 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Airflow"
+level: beginner
+phaseSlug: "phase-12-mlops"
+phaseName: "MLOps"
+topicSlug: "airflow"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "Apache Airflow — Tutorial"
+    url: "https://airflow.apache.org/docs/apache-airflow/stable/tutorial/index.html"
+  - type: video
+    title: "Airflow in 100 Seconds"
+    url: "https://www.youtube.com/watch?v=lPQvyautkeo"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## A scheduler for multi-step jobs
+
+Imagine your ML pipeline needs to: pull fresh data, clean it, train a model,
+evaluate it, and email a report — every night at 2am. Running this manually,
+or with a fragile cron job and a pile of shell scripts, breaks the moment one
+step fails or takes too long.
+
+**Apache Airflow** lets you define this as a **DAG** (Directed Acyclic
+Graph) — a set of tasks with dependencies between them — in Python. Airflow
+schedules it, retries failed tasks, and shows you exactly which step failed.
+
+### Your first DAG
+
+```python
+from airflow import DAG
+from airflow.operators.python import PythonOperator
+from datetime import datetime
+
+def extract_data():
+    print("Pulling fresh data...")
+
+def train_model():
+    print("Training model...")
+
+def evaluate_model():
+    print("Evaluating model...")
+
+with DAG(
+    dag_id="daily_retrain",
+    start_date=datetime(2024, 1, 1),
+    schedule="0 2 * * *",   # every day at 2am
+    catchup=False,
+) as dag:
+
+    extract = PythonOperator(task_id="extract", python_callable=extract_data)
+    train = PythonOperator(task_id="train", python_callable=train_model)
+    evaluate = PythonOperator(task_id="evaluate", python_callable=evaluate_model)
+
+    extract >> train >> evaluate   # defines the order: extract, then train, then evaluate
+```
+
+The `>>` operator wires up dependencies — `train` won't start until `extract`
+succeeds, and Airflow's web UI shows you a visual graph of exactly this.
+
+### The mental model
+
+<Mermaid client:visible code={`flowchart LR
+  A["extract (2am daily)"] --> B["train"]
+  B --> C["evaluate"]
+  C --> D["Report emailed"]
+  style A fill:#e0f2fe
+  style B fill:#e0f2fe
+  style C fill:#e0f2fe`} />
+
+If `train` fails, Airflow can automatically retry it a few times before
+alerting a human — no more discovering at 9am that last night's job silently
+died on step 2.
+
+## Try it yourself
+
+Define a DAG with two tasks — `download` then `clean` — that runs every
+Monday at 6am.
+
+<details>
+<summary>Solution</summary>
+
+```python
+from airflow import DAG
+from airflow.operators.python import PythonOperator
+from datetime import datetime
+
+def download(): ...
+def clean(): ...
+
+with DAG(
+    dag_id="weekly_prep",
+    start_date=datetime(2024, 1, 1),
+    schedule="0 6 * * 1",   # 6am every Monday
+    catchup=False,
+) as dag:
+    t1 = PythonOperator(task_id="download", python_callable=download)
+    t2 = PythonOperator(task_id="clean", python_callable=clean)
+    t1 >> t2
+```
+
+</details>

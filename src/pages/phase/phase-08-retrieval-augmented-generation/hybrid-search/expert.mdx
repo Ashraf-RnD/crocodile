@@ -1,0 +1,83 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Hybrid Search"
+level: expert
+phaseSlug: "phase-08-retrieval-augmented-generation"
+phaseName: "Retrieval-Augmented Generation"
+topicSlug: "hybrid-search"
+estReadTime: 12
+resources:
+  - type: article
+    title: "Reciprocal Rank Fusion outperforms Condorcet and individual rank learning methods"
+    url: "https://plg.uwaterloo.ca/~gvcormac/cormacksigir09-rrf.pdf"
+  - type: docs
+    title: "Elasticsearch — Reciprocal Rank Fusion"
+    url: "https://www.elastic.co/guide/en/elasticsearch/reference/current/rrf.html"
+---
+
+## Why sparse and dense retrieval fail in complementary, not overlapping, ways
+
+The case for hybrid search isn't "two signals are better than one" in the abstract —
+it's that BM25 and dense embeddings have close-to-orthogonal failure modes. BM25 fails
+on vocabulary mismatch (synonyms, paraphrase, cross-lingual queries) because it has no
+notion of meaning beyond token overlap. Dense embeddings fail on **out-of-distribution
+exact-match** content — rare tokens, alphanumeric IDs, code identifiers, numbers — that
+the embedding model likely undertrained on relative to natural language, and on
+**negation** (embeddings frequently rank "the medication is not recommended" as similar
+to "the medication is recommended," since the sentences are lexically and topically
+near-identical despite opposite meaning). Because the failure modes don't overlap, a
+document that's hard for one method is often easy for the other, which is exactly the
+condition under which fusion produces a real, not just additive, quality gain.
+
+## Score normalization vs. rank fusion: a real trade-off
+
+| Approach | Mechanism | Strength | Weakness |
+|---|---|---|---|
+| Raw score sum | `score = w1*cosine + w2*bm25` | Preserves magnitude information (how confident, not just how ranked) | Requires calibrating incompatible scales; BM25 scores vary with corpus statistics (IDF), making weights corpus-specific and fragile to reindexing |
+| Min-max normalized score sum | Normalize each list to [0,1] before summing | Fixes scale mismatch somewhat | Sensitive to outliers in the current result set; normalization changes per query, making tuning hard to reason about |
+| Reciprocal Rank Fusion (RRF) | `score = Σ 1/(k + rank)` per list | Scale-free by construction, no tuning of relative weights needed, robust default | Discards magnitude information entirely — a near-tie and a landslide win look identical if ranks match |
+| Learned fusion (e.g. a small learned reranker over both signals as features) | Train a model to combine dense score, sparse score, and other features | Can outperform fixed-formula fusion when you have labeled relevance data | Requires training data and adds a model to maintain; overkill without sufficient labeled query-relevance pairs |
+
+RRF is the pragmatic default precisely because it needs zero calibration and is robust
+to corpus drift, but it's a genuine trade-off — teams with substantial labeled
+click-through or relevance data often outgrow RRF into a learned fusion model (a
+lightweight reranker or gradient-boosted ranker over both retrieval scores as
+features) once they have enough signal to train one reliably.
+
+## Where sparse retrieval belongs in the index architecture
+
+Sparse (BM25-style) retrieval can be implemented two ways in a hybrid system: as a
+traditional inverted-text index (Elasticsearch, OpenSearch) alongside a separate
+vector store, or as a **learned sparse vector** (SPLADE, and similar) stored natively
+in the same vector database as the dense embedding. Learned sparse representations
+expand a document's token set with semantically related terms during indexing (a
+document about "car" gets weight added to "vehicle," "automobile") — closing part of
+the vocabulary-mismatch gap that classic BM25 cannot, while remaining a sparse,
+efficiently-indexable representation rather than a dense one. This is why vector
+databases like Qdrant and Weaviate now support native sparse vector fields
+side-by-side with dense ones in the same collection — it collapses "two separate
+indexes to maintain" into "two vector types in one index," simplifying the
+infrastructure story materially.
+
+## Query-dependent alpha, not a fixed global weight
+
+A single, fixed `alpha` (dense/sparse blend weight) is a compromise across query
+types that a real query distribution rarely respects uniformly — a query that's
+mostly a product SKU wants alpha near 0, a query that's mostly a natural-language
+question wants alpha near 1. Sophisticated production systems classify or score the
+query first (e.g. does it contain quoted phrases, numeric codes, or known entity
+patterns?) and adjust `alpha` per query, or run a small learned model to predict the
+optimal blend — trading a fixed, simple configuration for query-adaptive weighting
+that better matches the actual failure modes each query type is prone to.
+
+## Evaluation: hybrid search must be validated, not assumed
+
+It's tempting to treat hybrid search as a strict improvement over vector-only search,
+but a badly tuned fusion (wrong alpha, wrong k in RRF, sparse index built on
+poorly-tokenized text) can *underperform* vector-only search by injecting
+lexically-matched but semantically irrelevant results into the top-k, crowding out
+better dense-search results that would have surfaced alone. Any hybrid search rollout
+should be validated against a labeled retrieval eval set (recall@k, nDCG) comparing
+dense-only, sparse-only, and hybrid configurations side by side — the assumption that
+"combining two signals can only help" does not hold unconditionally once fusion
+parameters are in play.

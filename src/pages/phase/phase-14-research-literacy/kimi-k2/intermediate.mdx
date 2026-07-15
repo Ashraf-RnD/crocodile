@@ -1,0 +1,86 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Kimi K2"
+level: intermediate
+phaseSlug: "phase-14-research-literacy"
+phaseName: "Research Literacy"
+topicSlug: "kimi-k2"
+estReadTime: 11
+resources:
+  - type: article
+    title: "Kimi K2: Open Agentic Intelligence — Technical Report"
+    url: "https://arxiv.org/abs/2507.20534"
+  - type: article
+    title: "Kimi K2 Explained: A Technical Deep Dive into its MoE Architecture"
+    url: "https://intuitionlabs.ai/articles/kimi-k2-technical-deep-dive"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Architecture: DeepSeek-V3-style MoE, scaled further
+
+Kimi K2 builds directly on the DeepSeek-V3 architectural template (see the
+DeepSeek-V3 lesson in this phase for the underlying mechanisms): **Multi-head
+Latent Attention (MLA)** for a compressed KV cache, and a **fine-grained
+Mixture-of-Experts** design with shared experts. Kimi K2 pushes the expert
+count and total parameter budget further — 61 layers, 64 attention heads, and
+384 experts with 8 selected per token, for roughly **1.04 trillion total
+parameters and 32 billion active per token** — trained on 15.5 trillion
+tokens.
+
+<Mermaid client:visible code={`flowchart TB
+  Tok["Input token"] --> MLA["Multi-head Latent Attention (compressed KV cache)"]
+  MLA --> Router["Router across 384 experts"]
+  Router --> Sel["8 experts selected per token"]
+  Sel --> Combine["Combine expert outputs"]
+  Combine --> Out["Layer output"]
+  Note["~1.04T total params, ~32B active per token"]`} />
+
+## The MuonClip optimizer
+
+**Muon** is a relatively new optimizer (an alternative to AdamW) that
+orthogonalizes gradient updates using a Newton-Schulz iteration, and had shown
+faster convergence than AdamW at smaller scale. At the scale Kimi K2 targets,
+however, Muon is prone to a specific failure mode: attention logits (the raw
+scores computed before the softmax in attention) can grow explosively large
+as training proceeds, destabilizing the whole run.
+
+**MuonClip** adds a technique called **qk-clip**: it directly rescales the
+query and key projection matrices to cap how large attention logits are
+allowed to grow, intervening at the source of the instability rather than
+patching its downstream symptoms (like gradient clipping would).
+
+```python
+# Conceptual sketch of qk-clip's intervention point
+def qk_clip(q_proj_weight, k_proj_weight, max_logit_threshold, observed_max_logit):
+    if observed_max_logit > max_logit_threshold:
+        scale = max_logit_threshold / observed_max_logit
+        q_proj_weight *= scale ** 0.5
+        k_proj_weight *= scale ** 0.5
+    return q_proj_weight, k_proj_weight
+```
+
+The reported result: the full 15.5-trillion-token pretraining run completed
+with no observed loss spikes — a notable claim at trillion-parameter MoE
+scale, where training instability is a common and expensive problem (each
+restart from a checkpoint after a spike costs real compute and time).
+
+## Agentic data pipeline
+
+Kimi K2's post-training deliberately emphasizes **synthetic agentic
+trajectories** — generated examples of multi-step tool use, planning, and
+task completion — alongside more conventional supervised fine-tuning and
+reinforcement learning stages. This is a direct response to a gap observed in
+prior open models: strong performance on single-turn knowledge or reasoning
+benchmarks doesn't reliably translate into strong performance on
+longer-horizon, tool-using agentic tasks, which require the model to
+correctly sequence actions, handle intermediate tool outputs, and recover
+from errors across many steps.
+
+## Why the architecture choices matter together
+
+Scaling MoE total parameters increases capacity for the kind of broad,
+specialized "expert knowledge" agentic tasks can require, while MLA keeps the
+resulting KV cache (and therefore serving cost) from growing unmanageably
+large at inference time — the same efficiency logic DeepSeek-V3 established,
+pushed to a larger operating point, with MuonClip as the specific enabling
+technique that made training at that operating point tractable.

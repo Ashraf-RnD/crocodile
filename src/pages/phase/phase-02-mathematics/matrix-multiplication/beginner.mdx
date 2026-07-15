@@ -1,0 +1,63 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Matrix Multiplication"
+level: beginner
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "matrix-multiplication"
+estReadTime: 7
+resources:
+  - type: video
+    title: "3Blue1Brown — Matrix multiplication as composition"
+    url: "https://www.youtube.com/watch?v=XkY2DOUCWMU"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The rule: rows times columns
+
+To multiply matrix `A` by matrix `B`, take each row of `A`, and for each column of
+`B`, multiply matching elements and add them up (that's a dot product). The result's
+shape is `(rows of A, columns of B)`.
+
+**The inner dimensions must match**: `A` is `(m, k)`, `B` must be `(k, n)` — the `k`
+has to agree, or it's not defined.
+
+<Mermaid client:visible code={`flowchart LR
+  A["A: shape (2, 3)"] --> M["matmul"]
+  B["B: shape (3, 4)"] --> M
+  M --> C["Result: shape (2, 4)"]
+  Note["Inner dims (3 and 3) must match"]`} />
+
+```python
+import numpy as np
+A = np.array([[1, 2, 3],
+              [4, 5, 6]])        # shape (2, 3)
+B = np.array([[7, 8],
+              [9, 10],
+              [11, 12]])          # shape (3, 2)
+A @ B   # shape (2, 2)
+```
+
+## This is exactly what a neural network layer does
+
+A "dense" or "linear" layer is nothing but `input @ weights + bias`. If your input is
+a batch of 32 examples with 10 features (`(32, 10)`) and the layer has 5 output
+neurons, the weight matrix is `(10, 5)`, producing a `(32, 5)` output.
+
+```python
+inputs = np.random.rand(32, 10)   # batch of 32, 10 features each
+weights = np.random.rand(10, 5)    # 10 in, 5 out
+outputs = inputs @ weights         # shape (32, 5)
+```
+
+## Try it yourself
+
+You have a batch of 16 images flattened to 784 pixels (`(16, 784)`), and a layer with
+128 output neurons. What shape must the weight matrix be, and what's the output shape?
+
+<details>
+<summary>Solution</summary>
+
+Weight matrix: `(784, 128)` — inner dimension must match the 784.
+Output: `(16, 128)` — batch size stays 16, feature dim becomes 128.
+</details>

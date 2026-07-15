@@ -1,0 +1,83 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Hugging Face Transformers"
+level: expert
+phaseSlug: "phase-05-natural-language-processing"
+phaseName: "Natural Language Processing"
+topicSlug: "hugging-face-transformers"
+estReadTime: 13
+resources:
+  - type: docs
+    title: "Hugging Face — Text Generation Inference (TGI)"
+    url: "https://huggingface.co/docs/text-generation-inference/index"
+  - type: docs
+    title: "Hugging Face — Accelerate documentation (distributed training/inference)"
+    url: "https://huggingface.co/docs/accelerate/index"
+---
+
+## `from_pretrained` hides a distributed-systems problem
+
+`AutoModel.from_pretrained("...")` looks like a simple deserialization call, but for
+large models it's solving a genuinely hard problem: sharded checkpoint download,
+device placement across potentially multiple GPUs, and memory-efficient weight
+loading that never requires holding two full copies of the model in memory
+simultaneously. The `device_map="auto"` and `low_cpu_mem_usage=True` flags
+(backed by `accelerate`) implement **meta-device loading** — allocating the model's
+parameter tensors without real memory first, then streaming weights directly into
+their final device placement as they're read from disk/network, layer by layer. For
+a 70B-parameter model, the naive approach (load in full to CPU RAM, then copy to GPU)
+can require 2-3x the model's footprint in peak memory; meta-device loading avoids
+that entirely. Understanding this is the difference between a fine-tuning job that
+OOMs on a machine that should have had enough memory, and one that doesn't.
+
+## Training-serving parity: why the tokenizer version is part of your model artifact
+
+A model's weights encode a mapping from *token IDs* to meaning — they say nothing
+about which token ID corresponds to which text. If a served model's tokenizer config,
+vocabulary file, or even library version differs even slightly from what was used
+during fine-tuning (a different `normalizer` setting, a re-generated `merges.txt`),
+every downstream prediction is silently degraded with no error thrown. Production
+systems that treat the tokenizer as a mutable "preprocessing config" separate from
+the model checkpoint have shipped real, hard-to-diagnose regressions this way. The
+correct practice: version and deploy the tokenizer files and model weights as a
+single atomic artifact (which is exactly what a Hub repo commit hash captures), and
+pin that exact commit hash in production rather than trusting a mutable branch
+reference like `main`.
+
+## Inference-time architectural divergence from training
+
+The `transformers` library's default `generate()` implementation is not what
+production LLM serving actually uses at scale. Purpose-built inference servers
+(Hugging Face's own **Text Generation Inference**, vLLM, TensorRT-LLM) implement
+**continuous batching** (dynamically adding new requests into an in-flight batch as
+earlier requests finish, rather than waiting for a fixed batch to fully complete) and
+**PagedAttention**-style KV-cache memory management (treating the attention
+key/value cache like paged virtual memory to avoid fragmentation from
+variable-length sequences). These deliver order-of-magnitude throughput improvements
+over the vanilla `transformers` generation loop under concurrent load. The takeaway:
+`transformers` is the right tool for research, fine-tuning, and prototyping, but
+production-scale serving of large generative models is a distinct engineering
+problem generally solved with a dedicated inference server, not by scaling up calls
+to `model.generate()` directly.
+
+## Quantization changes both memory and numerical behavior
+
+Loading a model with `load_in_8bit=True` or `load_in_4bit=True` (via `bitsandbytes`
+integration) doesn't just save memory — it changes the actual numerical computation
+path, and different quantization schemes (`nf4`, `int8`, GPTQ, AWQ) have measurably
+different accuracy/speed/memory trade-offs depending on model architecture and task.
+A model that passes evaluation in full precision (fp32/bf16) can show non-trivial
+accuracy degradation once quantized, particularly on tasks requiring precise
+numerical or few-shot reasoning — which means quantization decisions belong in the
+evaluation loop, not applied post-hoc as an assumed-safe memory optimization.
+
+## Trade-off summary: choosing how to run a Transformers model
+
+| Approach | Best for | Cost |
+|---|---|---|
+| `pipeline()` | Prototyping, demos, simple scripts | Least control, reloads tokenizer/model overhead each call unless cached |
+| `AutoModel` + manual loop | Custom training, research, fine-grained control | More code, must handle batching/device placement yourself |
+| `Trainer` API | Standard fine-tuning without writing a training loop | Less flexible for unusual training regimes |
+| PEFT / LoRA fine-tuning | Adapting large models cheaply, multi-tenant fine-tunes | Slightly lower ceiling than full fine-tuning on some tasks |
+| Dedicated inference server (TGI, vLLM) | Production serving under real concurrent load | Additional infrastructure to deploy and operate |
+| Quantized (`bitsandbytes`, GPTQ, AWQ) | Memory-constrained deployment, edge/consumer GPUs | Measurable, task-dependent accuracy trade-off — must be evaluated, not assumed |

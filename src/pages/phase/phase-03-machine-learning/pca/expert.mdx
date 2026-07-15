@@ -1,0 +1,86 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "PCA"
+level: expert
+phaseSlug: "phase-03-machine-learning"
+phaseName: "Machine Learning"
+topicSlug: "pca"
+estReadTime: 12
+resources:
+  - type: docs
+    title: "scikit-learn: PCA (decomposition module)"
+    url: "https://scikit-learn.org/stable/modules/decomposition.html#pca"
+  - type: article
+    title: "scikit-learn: PCA API reference (svd_solver, whiten)"
+    url: "https://scikit-learn.org/stable/modules/generated/sklearn.decomposition.PCA.html"
+---
+
+## Expert: PCA
+
+### PCA is computed via SVD, not eigen-decomposition of the covariance matrix
+
+Textbook PCA is often introduced as "eigen-decompose the covariance matrix." scikit-learn does not do this directly. Instead, `PCA` centers the data matrix `X` (subtracts the column means) and computes its **Singular Value Decomposition**:
+
+```
+X_centered = U @ diag(S) @ Vt
+```
+
+The rows of `Vt` are the principal axes (`pca.components_`), and the singular values `S` relate to the explained variance by `explained_variance_ = S**2 / (n_samples - 1)`. Working directly with `X`'s SVD instead of forming `Xᵀ X` (the covariance matrix, up to scaling) avoids squaring the condition number of the data, which is a real numerical stability concern for ill-conditioned or high-dimensional data. This is why `PCA(svd_solver=...)` exposes several backends: `"full"` (LAPACK exact SVD), `"randomized"` (fast approximate SVD, default for large `n_features`/`n_samples` when `n_components` is small), and `"arpack"` (truncated SVD via ARPACK, useful when you need only a handful of components from a large sparse-ish matrix).
+
+```python
+from sklearn.decomposition import PCA
+from sklearn.datasets import load_digits
+
+X, _ = load_digits(return_X_y=True)  # 1797 x 64
+
+pca = PCA(n_components=10, svd_solver="randomized", random_state=0)
+X_reduced = pca.fit_transform(X)
+
+# Relationship between singular values and explained variance:
+import numpy as np
+manual_var = pca.singular_values_**2 / (X.shape[0] - 1)
+assert np.allclose(manual_var, pca.explained_variance_)
+```
+
+### Whitening
+
+`PCA(whiten=True)` additionally divides each component's projected values by the square root of its eigenvalue, so the output has unit variance along every axis (and, since components are already orthogonal, an identity covariance matrix). Plain PCA decorrelates features but leaves their variances unequal (component 1 still has much more spread than component 10). Whitening equalizes them.
+
+This matters for downstream algorithms whose behavior depends on the *scale* of the input dimensions rather than just their correlation structure — for example, k-means (distance-based), or as a preprocessing step before independent component analysis (ICA), which assumes unit-variance, decorrelated inputs. The cost: whitening amplifies the variance of low-signal, high-noise trailing components, so it should generally be paired with dropping those components (i.e., using a smaller `n_components`) rather than applied to the full-rank transform.
+
+### The fundamental limitation: PCA only sees linear structure
+
+PCA finds the best-fitting **linear subspace**. If the true structure of the data is a curved manifold, PCA cannot "bend" its axes to follow it. The canonical illustration is the **swiss roll**: points arranged on a 2D sheet that has been rolled up in 3D space. The intrinsic (geodesic) structure is 2-dimensional, but any straight-line projection PCA computes will crush the roll flat and merge points that are far apart along the sheet's surface but close together in raw Euclidean 3D coordinates. PCA's variance-maximizing objective has no way to "unroll" that manifold — it can only rotate and project along straight lines.
+
+Practically, this means: if your data's meaningful structure is nonlinear (image manifolds, word embeddings with curved semantic geometry, sensor data with periodic/cyclical relationships), PCA will report a plausible-looking `explained_variance_ratio_` while discarding information that a nonlinear method would preserve. This motivates kernel PCA and fully nonlinear alternatives like t-SNE, UMAP, and autoencoders.
+
+## Trade-off summary
+
+| Method | Structure captured | Preserves | Speed (large N) | Best use | Invertible |
+|---|---|---|---|---|---|
+| PCA | Linear | Global variance/structure | Fast (SVD, scales well) | Preprocessing for downstream ML, denoising, general-purpose dimensionality reduction | Yes (`inverse_transform`, approximate if components dropped) |
+| t-SNE | Nonlinear | Local neighborhood structure | Slow (O(n^2) naively; Barnes-Hut helps) | Pure visualization (2D/3D exploratory plots) | No |
+| UMAP | Nonlinear | Local + more global structure than t-SNE | Faster than t-SNE, scales to large N | Visualization, and sometimes as features (with caution) | Approximate (has an `inverse_transform`, less reliable) |
+| Autoencoders | Nonlinear (arbitrary, learned) | Whatever the network is trained to preserve | Depends on architecture; needs training | Learned feature compression, representation learning, can target task-specific structure | Yes (decoder network) |
+
+### Production concerns
+
+**Variance is not the same as predictive signal.** PCA selects components purely by how much variance they explain in the unlabeled feature matrix. Nothing in that objective guarantees the high-variance directions are the ones that separate your classes or correlate with your regression target. It is entirely possible — and common in practice — that the component carrying the label-relevant signal has modest variance and gets truncated when you keep only the "top" components, while a high-variance nuisance direction (e.g., lighting conditions in images, sensor calibration drift) survives. Always validate that PCA + downstream model beats the raw-feature model on a held-out set before adopting it; don't assume dimensionality reduction is free.
+
+**Persist and version the fitted transform.** A fitted `PCA` object (component axes, means, and scaler statistics if used) is part of your model artifact, not a stateless preprocessing step. At inference time you must apply the *exact* fitted transform used in training — same means, same axes, same order — or predictions will silently be wrong. In practice: bundle `StandardScaler` and `PCA` into a single `sklearn.pipeline.Pipeline`, serialize it with `joblib.dump`, and version it alongside the model it feeds, retraining/re-fitting the whole pipeline together whenever the upstream feature distribution shifts.
+
+```python
+import joblib
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.linear_model import LogisticRegression
+
+pipe = Pipeline([
+    ("scaler", StandardScaler()),
+    ("pca", PCA(n_components=0.95, svd_solver="full", random_state=0)),
+    ("clf", LogisticRegression(max_iter=1000)),
+])
+pipe.fit(X_train, y_train)
+joblib.dump(pipe, "model_v3.joblib")  # scaler + PCA + classifier, versioned together
+```

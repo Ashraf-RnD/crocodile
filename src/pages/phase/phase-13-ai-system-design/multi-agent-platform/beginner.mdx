@@ -1,0 +1,74 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Multi-Agent Platform"
+level: beginner
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "multi-agent-platform"
+estReadTime: 6
+resources:
+  - type: article
+    title: "Anthropic — Building effective agents"
+    url: "https://www.anthropic.com/research/building-effective-agents"
+  - type: article
+    title: "Anthropic — How we built our multi-agent research system"
+    url: "https://www.anthropic.com/engineering/multi-agent-research-system"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## A team of specialized workers instead of one generalist
+
+A single AI agent trying to do everything — research a topic, write code,
+check its own work, format the output — tends to lose focus on long,
+complex tasks, the same way one person juggling five very different jobs
+does worse than five people each owning one. A **multi-agent platform**
+splits a big task across several AI agents, each with a narrower job, plus
+one "manager" agent that coordinates them and combines their work.
+
+<Mermaid client:visible code={`flowchart TB
+  User["User gives a complex task"] --> Manager["Manager / orchestrator agent<br/>breaks task into subtasks"]
+  Manager --> A1["Worker agent 1<br/>e.g. research"]
+  Manager --> A2["Worker agent 2<br/>e.g. writing"]
+  Manager --> A3["Worker agent 3<br/>e.g. fact-checking"]
+  A1 --> Manager
+  A2 --> Manager
+  A3 --> Manager
+  Manager --> Result["Combined final result"]`} />
+
+## Why split the work at all
+
+Each worker agent gets a **focused prompt and a smaller job**, which tends to
+produce better results than one agent trying to hold the entire task, all
+its constraints, and all its intermediate findings in a single context at
+once. It also allows different agents to work on different subtasks
+**at the same time** rather than one after another — a research agent
+gathering sources doesn't have to wait for a writing agent to finish a draft
+of an unrelated section.
+
+## The coordination cost
+
+This isn't free, though. The manager agent has to decide how to split the
+work, has to combine results that might conflict or overlap, and has to
+handle a worker agent failing or returning something unhelpful. More agents
+also means more total LLM calls for the same task, which means more latency
+end-to-end (even with parallelism) and more cost — a multi-agent system is a
+deliberate trade of simplicity and cost for better quality on tasks that are
+genuinely too complex for one agent to handle well.
+
+## Try it yourself
+
+Would you expect a multi-agent setup to help more on "summarize this one
+article" or "research this topic across twenty sources, write a report, and
+verify every claim"?
+
+<details>
+<summary>Solution</summary>
+
+The second one. Summarizing a single article is a small, focused task that
+one agent can handle well in a single pass — adding multiple agents would
+just add coordination overhead and cost for no real benefit. The research-
+and-report task naturally splits into distinct sub-jobs (finding sources,
+drafting, checking facts) that benefit from focused agents working in
+parallel, which is exactly the kind of complex, multi-part task multi-agent
+systems are built for.
+</details>

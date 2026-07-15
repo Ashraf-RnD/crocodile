@@ -1,0 +1,66 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Probability"
+level: expert
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "probability"
+estReadTime: 10
+resources:
+  - type: article
+    title: "The Kullback-Leibler divergence explained"
+    url: "https://www.countbayesie.com/blog/2017/5/9/kullback-leibler-divergence-explained"
+---
+
+## Numerical stability of softmax and log-softmax
+
+Naive softmax overflows for large logits: `exp(1000)` is `inf` in float32. The
+standard fix is the **log-sum-exp trick** — subtract the max logit before
+exponentiating, which doesn't change the mathematical result but keeps every
+intermediate value bounded:
+
+```python
+def stable_softmax(z):
+    z = z - np.max(z)          # shift so max is 0, no overflow
+    exp = np.exp(z)
+    return exp / exp.sum()
+```
+
+For loss computation specifically, frameworks fuse softmax and cross-entropy into a
+single **log-softmax + NLL** operation (`nn.CrossEntropyLoss` in PyTorch) rather than
+computing softmax then taking a log separately — this avoids computing `exp()` and
+`log()` back-to-back, which loses precision and is a common source of `NaN` losses in
+custom loss implementations.
+
+## KL divergence: measuring distance between distributions
+
+`KL(P || Q) = sum P(x) log(P(x)/Q(x))` measures how much information is lost using
+distribution `Q` to approximate `P`. It's the theoretical basis for:
+
+- Cross-entropy loss (`H(P, Q) = H(P) + KL(P || Q)` — minimizing cross-entropy against
+  a fixed true distribution is equivalent to minimizing KL divergence)
+- The KL term in a VAE's ELBO loss, regularizing the latent distribution toward a prior
+- PPO/RLHF's KL penalty, keeping a fine-tuned policy close to its reference model
+
+Critically, KL divergence is **not symmetric** — `KL(P||Q) != KL(Q||P)` — and this
+asymmetry has real consequences: minimizing `KL(P||Q)` (used in maximum likelihood)
+produces a "mean-seeking" Q that covers all of P's modes, while minimizing `KL(Q||P)`
+(used in some variational inference) produces a "mode-seeking" Q that latches onto a
+single mode and ignores others.
+
+## Calibration: when probabilities lie
+
+A model can be highly accurate yet **miscalibrated** — its stated "90% confident"
+predictions might only be correct 70% of the time. Modern large neural networks are
+frequently overconfident, especially after training with label smoothing removed or
+with heavy overparameterization. Temperature scaling — dividing logits by a learned
+scalar `T > 1` before softmax — is a simple, effective post-hoc fix that doesn't
+change the model's ranking of classes, only how sharply it commits to them:
+
+```python
+def calibrated_softmax(logits, temperature):
+    return stable_softmax(logits / temperature)
+```
+
+This matters directly for any system (an LLM's stated confidence, a fraud model's risk
+score) where the probability value itself is acted upon, not just the argmax class.

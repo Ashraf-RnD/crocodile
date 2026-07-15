@@ -1,0 +1,123 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Qdrant"
+level: intermediate
+phaseSlug: "phase-08-retrieval-augmented-generation"
+phaseName: "Retrieval-Augmented Generation"
+topicSlug: "qdrant"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "Qdrant — Filtering"
+    url: "https://qdrant.tech/documentation/concepts/filtering/"
+  - type: docs
+    title: "Qdrant — Hybrid Queries"
+    url: "https://qdrant.tech/documentation/concepts/hybrid-queries/"
+---
+
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Running Qdrant for real: server mode and collections config
+
+Beyond the in-memory client, production Qdrant runs as a server (self-hosted via
+Docker, or Qdrant Cloud) that your application connects to over gRPC or REST:
+
+```python
+from qdrant_client import QdrantClient
+from qdrant_client.models import VectorParams, Distance, PayloadSchemaType
+
+client = QdrantClient(url="http://localhost:6333", api_key="...")
+
+client.create_collection(
+    collection_name="support_docs",
+    vectors_config=VectorParams(size=1536, distance=Distance.COSINE),
+)
+
+# Index payload fields you'll filter on — without this, filters still work
+# correctly but scan payloads linearly instead of using an index
+client.create_payload_index(
+    collection_name="support_docs",
+    field_name="department",
+    field_schema=PayloadSchemaType.KEYWORD,
+)
+```
+
+<Mermaid client:visible code={`flowchart LR
+  App["Your application"] -->|gRPC/REST| Qdrant["Qdrant server"]
+  Qdrant --> Collection["Collection: support_docs"]
+  Collection --> HNSW["HNSW vector index"]
+  Collection --> Payload["Payload index (filters)"]`} />
+
+## Combining vector search with structured filters
+
+Real RAG queries usually aren't "find similar text" alone — they're "find similar text
+*within this user's accessible documents, updated in the last 90 days*." Qdrant applies
+filters natively during the ANN search, not as a slow post-filter:
+
+```python
+from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
+import time
+
+results = client.query_points(
+    collection_name="support_docs",
+    query=query_vector,
+    query_filter=Filter(
+        must=[
+            FieldCondition(key="department", match=MatchValue(value="billing")),
+            FieldCondition(key="updated_at", range=Range(gte=time.time() - 90 * 86400)),
+        ]
+    ),
+    limit=5,
+)
+```
+
+## Native hybrid search with the Query API
+
+Qdrant supports sparse vectors alongside dense ones in the same collection, letting you
+run hybrid (dense + BM25-style) search without a separate keyword index:
+
+```python
+from qdrant_client.models import Prefetch, FusionQuery, Fusion, SparseVector
+
+results = client.query_points(
+    collection_name="support_docs",
+    prefetch=[
+        Prefetch(query=dense_query_vector, using="dense", limit=25),
+        Prefetch(query=SparseVector(indices=sparse_idx, values=sparse_vals), using="sparse", limit=25),
+    ],
+    query=FusionQuery(fusion=Fusion.RRF),
+    limit=10,
+)
+```
+
+The `Prefetch` + `FusionQuery` pattern runs both searches server-side and fuses with
+Reciprocal Rank Fusion, avoiding a round trip to fetch two result sets and merge them
+in application code.
+
+## Upsert patterns and incremental indexing
+
+RAG corpora change over time — documents get added, edited, or deleted. Qdrant's
+`upsert` is idempotent on point ID, so re-embedding and re-upserting a changed document
+with the same ID replaces it cleanly:
+
+```python
+client.upsert(
+    collection_name="support_docs",
+    points=[PointStruct(id=doc_id, vector=new_vector, payload=new_payload)],
+)
+client.delete(collection_name="support_docs", points_selector=[stale_doc_id])
+```
+
+Using a stable, deterministic ID scheme (e.g. a hash of source document path + chunk
+index) rather than random UUIDs makes re-ingestion pipelines idempotent — rerunning
+ingestion on unchanged documents doesn't create duplicates, and updates naturally
+overwrite the right point.
+
+## Choosing between in-memory, local server, and Qdrant Cloud
+
+In-memory mode is for prototyping only — nothing persists past process exit. A local
+Docker-run server persists to disk and is the right choice for self-hosted production
+at moderate scale. Qdrant Cloud (managed) removes operational burden (backups,
+scaling, upgrades) at the cost of a hosted service dependency and cost per node —
+generally the right default unless you have specific data-residency or infra-control
+requirements that push toward self-hosting.

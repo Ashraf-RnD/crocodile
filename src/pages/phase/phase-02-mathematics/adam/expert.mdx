@@ -1,0 +1,67 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Adam"
+level: expert
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "adam"
+estReadTime: 11
+resources:
+  - type: article
+    title: "On the Convergence of Adam and Beyond (AMSGrad paper)"
+    url: "https://arxiv.org/abs/1904.09237"
+---
+
+## The non-convergence issue and AMSGrad
+
+The original Adam proof of convergence contained a gap: in certain (constructed, but
+valid) settings, Adam's second-moment estimate `v_t` can decrease at a point where it
+should be increasing, causing the optimizer to fail to converge even on simple convex
+problems where SGD would. **AMSGrad** fixes this by maintaining the maximum of all
+past `v_t` values rather than the current EMA, guaranteeing monotonic non-increase of
+the effective step size. In practice, this specific pathology is rare on real deep
+learning loss surfaces, which is largely why plain Adam/AdamW remains dominant despite
+the theoretical gap — a reminder that a documented theoretical weakness doesn't
+automatically translate into a practical one at the scale and data distributions
+actually encountered.
+
+## Memory-efficient Adam variants at LLM scale
+
+Storing `m` and `v` in float32 for a model with `N` parameters costs `8N` bytes of
+optimizer state alone — for a 7B-parameter model, that's 56GB, often exceeding the
+memory needed for the weights and gradients combined. This has driven several
+production-relevant variants:
+
+- **8-bit Adam** (bitsandbytes): quantizes optimizer state to 8-bit, cutting memory
+  ~4x with minimal accuracy impact
+- **Adafactor**: avoids storing a full `v` per parameter by factoring it into
+  row/column statistics for matrix-shaped parameters, trading some update precision
+  for dramatically lower memory
+- **Fused/paged optimizers**: reduce memory fragmentation and kernel-launch overhead
+  rather than changing the underlying math
+
+Choosing an optimizer at LLM fine-tuning scale is as much a memory-engineering
+decision as a convergence-quality one — this is precisely why LoRA/QLoRA fine-tuning
+(covered later in the roadmap) matters so much: freezing most parameters means Adam's
+`m`/`v` state only needs to be stored for the small trainable adapter parameters, not
+the full base model.
+
+## Adam's implicit preconditioning interpretation
+
+Dividing by `sqrt(v_hat)` per parameter is a diagonal approximation to a full
+second-order preconditioner (like the inverse Hessian in Newton's method), but far
+cheaper — `O(N)` state instead of `O(N²)`. This framing explains Adam's practical
+robustness to poorly-scaled or poorly-initialized problems: it's implicitly correcting
+for per-parameter curvature differences that a single global learning rate (plain SGD)
+cannot, without paying the full cost of genuine second-order optimization.
+
+## Why LLM pretraining still uses AdamW almost universally
+
+Despite active research into alternatives (Lion, Sophia, Shampoo — each claiming
+efficiency or convergence advantages), AdamW remains the overwhelming default for
+large-scale LLM pretraining. This is less "AdamW is provably optimal" and more that
+it has an enormous track record of stability at scale, well-understood failure modes,
+and mature tooling/infrastructure support — switching optimizers for a
+multi-million-dollar pretraining run carries real risk that a purely academic
+efficiency gain often doesn't justify, a pragmatic engineering trade-off distinct
+from the pure optimization-theory question of which method converges fastest.

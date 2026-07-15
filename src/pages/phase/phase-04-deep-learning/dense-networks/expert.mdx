@@ -1,0 +1,87 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Dense Networks"
+level: expert
+phaseSlug: "phase-04-deep-learning"
+phaseName: "Deep Learning"
+topicSlug: "dense-networks"
+estReadTime: 12
+resources:
+  - type: article
+    title: "Deep Residual Learning for Image Recognition (He et al.)"
+    url: "https://arxiv.org/abs/1512.03385"
+  - type: article
+    title: "Delving Deep into Rectifiers (Kaiming initialization paper)"
+    url: "https://arxiv.org/abs/1502.01852"
+---
+
+## The universal approximation theorem, and why it doesn't settle the question
+
+The universal approximation theorem states that a single hidden layer with enough
+neurons can approximate any continuous function on a bounded domain arbitrarily
+well. In practice this result is nearly irrelevant to architecture decisions: it
+says nothing about *how many* neurons are needed (which can be exponential), nor
+about whether such a network is learnable via gradient descent from a random
+initialization. Depth, not just width, matters enormously in practice because deeper
+networks can represent the same functions with exponentially fewer total parameters
+for functions with compositional structure — which is most of what real-world data
+looks like.
+
+## Depth vs. width as an engineering trade-off
+
+| Dimension | Effect of increasing | Practical cost |
+|---|---|---|
+| Depth (more layers) | Exponentially more expressive for compositional functions | Harder optimization (vanishing/exploding gradients), more sequential latency |
+| Width (more neurons/layer) | More capacity per layer, easier optimization | Quadratic parameter growth, more memory, parallelizes well on GPU |
+
+This is why the historical trend (AlexNet -> VGG -> ResNet -> modern transformers)
+moved toward deeper networks *combined with* mechanisms (residual connections,
+normalization) specifically designed to make depth optimizable — depth alone,
+without those mitigations, reliably fails to train past a moderate number of layers.
+
+## Why residual connections changed what "deep" meant
+
+A residual block computes `y = F(x) + x` instead of `y = F(x)`. The `+x` identity
+path gives gradients a direct route back to earlier layers that bypasses `F`
+entirely, so `dLoss/dx` always has a component of exactly 1 regardless of how poorly
+conditioned `F`'s gradient is. This is what allowed networks to scale from ~20 layers
+(VGG) to 100+ layers (ResNet) and, later, to the hundreds of transformer blocks in
+modern LLMs — dense networks without this mechanism empirically degrade in accuracy
+past a certain depth, not just in training difficulty.
+
+## Initialization theory: why Kaiming/Xavier aren't arbitrary
+
+Random initialization must keep the variance of activations (forward) and gradients
+(backward) roughly constant across layers — otherwise repeated multiplication by
+weight matrices with the wrong scale causes activations to explode or vanish purely
+from initialization, before any training has happened. **Xavier/Glorot
+initialization** balances variance for symmetric activations (tanh); **Kaiming/He
+initialization** accounts for ReLU zeroing out roughly half of activations, scaling
+weights by `sqrt(2/fan_in)` to compensate. Getting this wrong is invisible in small
+networks (a few layers can absorb the mismatch) but reliably prevents convergence in
+deep ones — it's one of the few things that must be correct before training even
+starts producing a useful signal.
+
+## Parameter count and FLOPs as first-class design constraints
+
+A dense layer `Linear(in, out)` costs `in * out` parameters and roughly `2 * in * out`
+FLOPs per sample. For high-dimensional inputs (raw images, long sequences), this
+grows prohibitively — a `Linear(150528, 4096)` layer for a 224x224x3 image already
+costs ~600M parameters in one layer alone. This parameter/FLOP cost, not just
+theoretical expressiveness, is the direct engineering reason CNNs (parameter
+sharing via convolution) and transformers (attention with structured weight reuse)
+replaced pure dense architectures for structured, high-dimensional data — dense
+layers remain the default only where inputs are already low-dimensional or where
+they're used as the final "head" on top of a feature extractor.
+
+## Production concerns beyond accuracy
+
+- **Inference latency**: dense layers are pure matrix multiplies — extremely
+  GPU/TPU-friendly, but memory-bandwidth-bound rather than compute-bound at small
+  batch sizes, which matters for real-time serving.
+- **Quantization robustness**: dense layers generally quantize well (int8) since
+  their operation is a simple matmul, making them a common target for aggressive
+  compression in edge deployment.
+- **Overfitting risk scales with width**: wide dense layers on small datasets
+  overfit fast; dropout, weight decay, and reduced width are the standard levers
+  before reaching for architectural changes.

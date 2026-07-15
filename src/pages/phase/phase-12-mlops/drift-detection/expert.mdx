@@ -1,0 +1,121 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Drift Detection"
+level: expert
+phaseSlug: "phase-12-mlops"
+phaseName: "MLOps"
+topicSlug: "drift-detection"
+estReadTime: 12
+resources:
+  - type: article
+    title: "A Unifying Review of Deep Learning Concept Drift Detection"
+    url: "https://arxiv.org/abs/2004.05785"
+  - type: docs
+    title: "NannyML — Confidence-Based Performance Estimation (CBPE) methodology"
+    url: "https://nannyml.readthedocs.io/en/stable/how_it_works/performance_estimation.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Statistical significance is not the same as business significance
+
+A drift test with enough samples will nearly always find *some* `p < 0.05`
+result across dozens of monitored features — this is the multiple-comparisons
+problem, and naive drift monitoring that alerts on any single significant
+test produces alert fatigue that erodes trust in the whole system. Two
+mitigations matter in practice:
+
+- **Correct for multiple comparisons** (Bonferroni or Benjamini-Hochberg)
+  when testing many features simultaneously, or use an aggregate score (PSI
+  averaged/weighted across features) rather than alerting per-feature.
+- **Separate statistical detection from business materiality.** A feature
+  can drift significantly (`p < 0.001`) while causing negligible actual
+  prediction degradation, because the model's sensitivity to that feature is
+  low. The right escalation signal is drift *combined with* estimated
+  performance impact (via CBPE-style methods), not drift alone — alerting
+  purely on statistical drift without an impact estimate trains on-call
+  engineers to ignore the alerts.
+
+<Mermaid client:visible code={`flowchart TB
+  A["Feature drift detected, p<0.05"] --> B{"Estimated performance impact?"}
+  B -->|negligible — low feature importance| C["Log only, no page"]
+  B -->|material — high feature importance + confidence drop| D["Page on-call, consider retrain"]`} />
+
+## Concept drift is fundamentally harder to detect than data drift
+
+Data drift (input distribution shift) is directly observable from incoming
+requests. Concept drift (the input→output relationship changing) is only
+observable once ground-truth labels arrive — and by definition, if you had
+instant labels you often wouldn't need the model in the first place. This
+creates a structural detection lag that differs by domain:
+
+- **Fast-label domains** (ad click prediction — label available in minutes):
+  concept drift is detectable near real-time via rolling accuracy metrics
+- **Slow-label domains** (loan default prediction — label available in
+  months): concept drift can only be inferred indirectly, via proxy signals
+  like prediction confidence calibration drift or input drift correlated
+  with historically-known drift episodes, since waiting for ground truth
+  means discovering the problem long after it started
+
+Teams in slow-label domains often invest heavily in proxy/indirect drift
+signals precisely because the alternative — waiting for real labels — means
+a model can silently degrade for months before anyone notices.
+
+## Drift thresholds need a decision policy, not just a number
+
+Setting `PSI > 0.25` as an automatic retraining trigger without further
+context creates two distinct failure modes:
+
+- **Over-triggering**: seasonal, expected, recurring shifts (e.g. retail
+  traffic patterns around a holiday) repeatedly trigger unnecessary
+  retraining, burning GPU budget and creating "alert fatigue" that leads
+  teams to eventually just raise the threshold — silently reducing
+  sensitivity to real drift.
+- **Under-triggering**: a slow, gradual drift that never crosses a fixed
+  threshold in any single measurement window can still accumulate into
+  serious model degradation over months — cumulative drift detection
+  (tracking drift trend over time, not just point-in-time snapshots) catches
+  this where a fixed-threshold snapshot test doesn't.
+
+Mature drift monitoring systems distinguish **seasonal/cyclical drift**
+(expected, should not trigger retraining) from **structural drift**
+(a genuine, sustained shift) using techniques like comparing against the
+same period a year prior, or decomposing the time series before applying a
+drift test — treating every distributional change as equally alarming is a
+common source of both false alarms and missed real ones.
+
+## Embeddings and drift in unstructured/high-dimensional inputs
+
+For models consuming text, images, or embeddings, classical univariate
+statistical tests (KS test per feature) don't apply directly — the relevant
+drift signal is in the joint, high-dimensional distribution. Common
+approaches:
+
+- **Embedding-space drift**: project inputs through the model's own
+  embedding layer, then measure distributional shift in that lower-dimensional
+  space (e.g. Maximum Mean Discrepancy, or drift in centroid distance)
+- **Model-based drift proxies**: monitor the trained model's own prediction
+  confidence/entropy distribution over time — a rising share of
+  low-confidence predictions is often a more actionable drift signal for
+  unstructured inputs than any statistical test on raw pixels or tokens
+
+This is a meaningfully different toolkit from tabular drift detection, and
+teams that only bring tabular-style statistical tests to an LLM or vision
+pipeline typically miss the drift signals that actually matter for those
+systems.
+
+## Trade-offs across drift detection strategies
+
+| Approach | Detects | Lag | Cost | Failure mode if misapplied |
+|---|---|---|---|---|
+| Univariate statistical tests (KS, chi-squared) | Data drift, per-feature | Fast (no labels needed) | Low | Alert fatigue from multiple-comparisons noise |
+| PSI / aggregate scores | Data drift, feature-set level | Fast | Low | Masks which specific feature actually shifted |
+| Label-based performance monitoring | Concept drift, ground truth | Slow (label-dependent) | Low (once labels exist) | Too late in slow-label domains |
+| Confidence-based estimation (CBPE, NannyML) | Concept drift proxy, no labels needed | Fast | Moderate | Can misestimate under severe concept drift itself |
+| Embedding/model-based drift | Unstructured input drift | Fast | Higher (requires model internals) | Overkill for simple tabular features |
+
+No single method is sufficient alone — production drift monitoring
+typically layers fast, cheap data-drift signals for early warning with
+slower, more expensive concept-drift/performance-based signals for
+confirmation, because optimizing purely for detection speed produces false
+alarms, while optimizing purely for accuracy produces dangerously slow
+detection.

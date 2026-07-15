@@ -1,0 +1,116 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Embeddings"
+level: expert
+phaseSlug: "phase-08-retrieval-augmented-generation"
+phaseName: "Retrieval-Augmented Generation"
+topicSlug: "embeddings"
+estReadTime: 12
+resources:
+  - type: article
+    title: "Matryoshka Representation Learning"
+    url: "https://arxiv.org/abs/2205.13147"
+  - type: article
+    title: "Fine-Tuning Embedding Models — sentence-transformers docs"
+    url: "https://www.sbert.net/docs/sentence_transformer/training_overview.html"
+---
+
+## Embeddings are a learned, task-specific compression — not a universal fact
+
+An embedding model is trained (typically via contrastive learning on query-passage
+pairs) to place semantically related text nearby in a fixed-dimensional space. This
+means the notion of "similar" baked into the vectors is only as good as the training
+distribution: a model trained on web search query-document pairs will not necessarily
+capture domain-specific similarity — e.g. in legal or medical text, two passages that
+share almost no vocabulary but are clinically equivalent, or two passages that share
+vocabulary but mean opposite things (a symptom "present" vs. "absent"). Out-of-domain
+retrieval failures are usually an embedding-distribution mismatch, not a bug in the
+pipeline.
+
+## Fine-tuning embeddings on your own retrieval data
+
+Off-the-shelf embeddings plateau in specialized domains. Fine-tuning on
+(query, relevant passage, irrelevant passage) triplets from your own corpus, even a
+few thousand examples, often closes a meaningful gap:
+
+```python
+from sentence_transformers import SentenceTransformer, losses, InputExample
+from torch.utils.data import DataLoader
+
+model = SentenceTransformer("BAAI/bge-base-en-v1.5")
+
+train_examples = [
+    InputExample(texts=[
+        "What's our refund window for enterprise contracts?",
+        "Enterprise contracts include a 90-day refund window from invoice date.",
+    ]),
+    # ... thousands more (query, positive passage) pairs, mined from real usage
+    # logs, click data, or LLM-generated synthetic queries per passage
+]
+train_loader = DataLoader(train_examples, shuffle=True, batch_size=32)
+loss = losses.MultipleNegativesRankingLoss(model)  # in-batch negatives
+
+model.fit(train_objectives=[(train_loader, loss)], epochs=3, warmup_steps=100)
+```
+
+`MultipleNegativesRankingLoss` treats every other example's positive passage in the
+batch as an implicit negative for the current query — this is why batch size and
+negative *hardness* (near-miss passages, not random unrelated ones) matter far more
+than raw dataset size for fine-tuning quality; a small set of hard negatives beats a
+large set of easy ones.
+
+## Matryoshka embeddings: variable-cost precision
+
+**Matryoshka Representation Learning (MRL)** trains a single embedding model so that
+*truncated prefixes* of the full vector are also independently valid embeddings — the
+first 64 dimensions alone are a usable (lower-fidelity) embedding, as are the first
+256, as are all 1536. This is why OpenAI's `text-embedding-3` models expose a
+`dimensions` parameter: it's not arbitrary post-hoc truncation, it's a property the
+model was explicitly trained to support.
+
+```python
+# Same model, different fidelity/storage trade-offs, no retraining needed
+full = client.embeddings.create(model="text-embedding-3-large", input=text).data[0].embedding
+short = client.embeddings.create(model="text-embedding-3-large", input=text, dimensions=256).data[0].embedding
+```
+
+This enables a **two-stage retrieval** pattern: use short, cheap vectors (fast ANN
+search, small index) to over-fetch a broad candidate set, then re-score that candidate
+set with the full-precision vectors — most of the search cost is paid at low
+dimensionality, precision is only spent on the shortlist.
+
+## Distance metric choice is not cosmetic
+
+| Metric | What it measures | When it's the right default |
+|---|---|---|
+| Cosine similarity | Angle between vectors, ignores magnitude | Text embeddings normalized to unit length (the common case) |
+| Dot product | Angle *and* magnitude | Models explicitly trained with dot-product loss (some retrieval-tuned models encode confidence/frequency in magnitude) |
+| Euclidean (L2) | Straight-line distance | Rare for text; more common in image/audio embeddings where magnitude carries meaningful signal |
+
+Using the wrong metric against a given model's training objective silently degrades
+ranking quality without throwing any error — vectors still return *a* ranking, just a
+worse one, which makes this a notoriously easy bug to miss until an eval catches it.
+
+## Dimensionality, index cost, and the recall trade-off
+
+Higher-dimensional embeddings generally encode finer semantic distinctions, but the
+cost is not free: storage scales linearly with dimensions (a 1M-document corpus at
+1536 dims in float32 is ~6GB just for vectors, before index overhead), and ANN index
+build/query time also scales with dimensionality. This is the direct engineering
+motivation behind quantization (storing vectors as int8 or binary instead of float32,
+covered in the vector-database topics) and Matryoshka truncation — both trade a small,
+measurable recall drop for large, predictable infrastructure savings, and the right
+operating point depends on your recall requirements and query volume, not a fixed rule
+of thumb.
+
+## Embedding drift and the re-indexing problem
+
+Upgrading to a newer or fine-tuned embedding model requires re-embedding and
+re-indexing the *entire* corpus — old and new vectors are not comparable, so you
+cannot mix them in one index during a rolling migration. Production systems handle
+this with either a full re-index behind a version-tagged collection (query the old
+index until the new one is fully populated, then cut over atomically) or, for very
+large corpora, an incremental dual-write period where both old and new vectors are
+maintained until migration completes. Treat embedding model upgrades as a
+schema-migration-grade operation, not a config change — the cost and risk profile is
+closer to changing a database's primary key encoding than swapping an API parameter.

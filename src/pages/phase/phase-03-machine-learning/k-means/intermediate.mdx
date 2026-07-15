@@ -1,0 +1,138 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "K-Means"
+level: intermediate
+phaseSlug: "phase-03-machine-learning"
+phaseName: "Machine Learning"
+topicSlug: "k-means"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "scikit-learn: K-Means clustering"
+    url: "https://scikit-learn.org/stable/modules/clustering.html#k-means"
+  - type: docs
+    title: "scikit-learn: silhouette_score"
+    url: "https://scikit-learn.org/stable/modules/generated/sklearn.metrics.silhouette_score.html"
+---
+
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Lloyd's algorithm
+
+`KMeans` in scikit-learn implements Lloyd's algorithm, an iterative
+two-step loop that repeats until the assignments stop changing (or a
+`max_iter` cap is hit):
+
+<Mermaid client:visible code={`flowchart LR
+  A[Initialize K centroids] --> B[Assign each point to nearest centroid]
+  B --> C[Recompute centroids as mean of assigned points]
+  C --> D{Assignments changed?}
+  D -->|Yes| B
+  D -->|No| E[Converged]`} />
+
+Each iteration is guaranteed to decrease (or hold steady) the objective
+K-Means minimizes: total squared distance from points to their assigned
+centroid, called **inertia**. Because the loop only ever improves inertia,
+it always converges — but not necessarily to the *global* best split.
+
+### k-means++ initialization
+
+Random centroid initialization can put two centers in the same true
+cluster, leading to a bad local minimum. `k-means++` (the scikit-learn
+default) picks initial centroids that are spread apart: the first is
+chosen uniformly at random, and each subsequent one is chosen with
+probability proportional to its squared distance from the nearest
+already-chosen centroid. This alone dramatically improves convergence
+quality without changing the core algorithm.
+
+```python
+from sklearn.cluster import KMeans
+
+model = KMeans(
+    n_clusters=4,
+    init="k-means++",   # default; spreads out initial centroids
+    n_init="auto",       # number of random restarts, best inertia wins
+    random_state=42,
+)
+model.fit(X)
+```
+
+## Feature scaling matters
+
+K-Means uses Euclidean distance, so features on larger numeric scales
+dominate the assignment step. A "salary" column in the tens of thousands
+will drown out an "age" column in the tens. Always scale before clustering:
+
+```python
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+from sklearn.pipeline import make_pipeline
+
+pipeline = make_pipeline(
+    StandardScaler(),
+    KMeans(n_clusters=4, n_init="auto", random_state=42),
+)
+pipeline.fit(X)
+labels = pipeline.named_steps["kmeans"].labels_
+```
+
+Without scaling, clusters end up driven by whichever feature happens to
+have the largest variance in raw units, not by genuine structure in the
+data.
+
+## Choosing K
+
+K-Means requires you to pick `K` up front. Two common ways to pick it:
+
+**Elbow method** — plot inertia against K and look for the point where
+adding more clusters stops giving a big drop:
+
+```python
+import matplotlib.pyplot as plt
+
+inertias = []
+k_range = range(1, 11)
+for k in k_range:
+    model = KMeans(n_clusters=k, n_init="auto", random_state=42)
+    model.fit(X_scaled)
+    inertias.append(model.inertia_)
+
+plt.plot(k_range, inertias, marker="o")
+plt.xlabel("K")
+plt.ylabel("Inertia")
+```
+
+The "elbow" — where the curve bends and flattens — is a reasonable K.
+It's subjective and can be ambiguous on real data.
+
+**Silhouette score** — measures how well-separated clusters are, from -1
+(likely wrong cluster) to 1 (well matched, well separated). Unlike inertia
+it doesn't trivially decrease as K grows, so it's easier to compare across
+K values directly:
+
+```python
+from sklearn.metrics import silhouette_score
+
+for k in range(2, 8):
+    model = KMeans(n_clusters=k, n_init="auto", random_state=42)
+    labels = model.fit_predict(X_scaled)
+    score = silhouette_score(X_scaled, labels)
+    print(k, score)
+```
+
+Pick the K with the highest silhouette score, cross-checked against the
+elbow plot and domain knowledge about how many groups actually make sense.
+
+## Common pitfalls
+
+- **Sensitive to outliers.** Because centroids are means, a single extreme
+  point can drag a centroid far from the bulk of its cluster. Consider
+  removing outliers first, or use `KMedoids`/DBSCAN if outliers are
+  expected.
+- **Assumes roughly spherical, equal-sized clusters.** K-Means splits
+  space using Voronoi-like boundaries around centroids, so elongated or
+  differently-sized clusters get cut incorrectly.
+- **K must be chosen in advance.** Unlike DBSCAN or hierarchical
+  clustering, K-Means won't discover the number of clusters for you.
+- **Different runs can give different results** if `n_init` is too low —
+  always let scikit-learn run multiple initializations and keep the best.

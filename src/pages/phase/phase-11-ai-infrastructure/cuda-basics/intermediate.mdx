@@ -1,0 +1,124 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "CUDA Basics"
+level: intermediate
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "cuda-basics"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "NVIDIA — CUDA C Programming Guide (Thread Hierarchy)"
+    url: "https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#thread-hierarchy"
+  - type: docs
+    title: "PyTorch — CUDA semantics (streams and asynchronous execution)"
+    url: "https://pytorch.org/docs/stable/notes/cuda.html#asynchronous-execution"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## A real kernel: vector addition
+
+Everything `torch.cuda` does under the hood eventually bottoms out in a **kernel** —
+a function written in CUDA C++ that runs on the GPU, once per thread. Here's the
+"hello world" of CUDA, adding two vectors element-wise:
+
+```cpp
+__global__ void addVectors(float* a, float* b, float* c, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) {
+        c[i] = a[i] + b[i];
+    }
+}
+
+// launched from host (CPU) code:
+int numBlocks = (n + blockSize - 1) / blockSize;
+addVectors<<<numBlocks, blockSize>>>(a, b, c, n);
+```
+
+`__global__` marks a function as a kernel — callable from the CPU, executed on the
+GPU. Instead of a `for` loop over `n` elements, CUDA launches `n` (or more) threads
+simultaneously, each computing its own index `i` and handling exactly one element.
+The loop is gone; it's been replaced by parallelism.
+
+## The thread / block / grid hierarchy
+
+That `<<<numBlocks, blockSize>>>` syntax is launching a **grid** of **blocks**, each
+containing many **threads**. This three-level hierarchy is how CUDA organizes
+massive parallelism:
+
+<Mermaid client:visible code={`flowchart TB
+  Grid["Grid (the whole kernel launch)"] --> B0["Block 0"]
+  Grid --> B1["Block 1"]
+  Grid --> B2["Block N"]
+  B1 --> T0["Thread 0"]
+  B1 --> T1["Thread 1"]
+  B1 --> T2["Thread 255"]`} />
+
+Threads within a block can cooperate (share memory, synchronize); blocks are
+independent and can run on any of the GPU's streaming multiprocessors (SMs) in any
+order. `blockIdx.x * blockDim.x + threadIdx.x` is the standard formula for turning
+"which block, which thread within it" into a single flat index — you'll see this
+exact line in nearly every CUDA kernel that processes a 1D array.
+
+## The memory hierarchy: not all GPU memory is equal
+
+The same way a CPU has L1/L2/L3 cache vs. RAM, a GPU has multiple memory tiers with
+wildly different speed and size trade-offs:
+
+- **Registers** — per-thread, fastest possible access (~1 cycle), tiny (a few KB
+  per thread's share)
+- **Shared memory / SRAM** — per-block, on-chip, ~20-30x faster than global memory,
+  but only tens of KB per SM — threads in a block use it to cooperate without
+  round-tripping to slow memory
+- **Global memory / HBM** — the GPU's main memory (the "40960MiB" you see in
+  `nvidia-smi`), gigabytes in size but hundreds of cycles of latency per access, even
+  though its *aggregate bandwidth* (~2-3 TB/s on an A100) is enormous
+
+This is the mental model behind why kernel fusion and batch size matter for PyTorch
+performance: an unfused sequence of ops (e.g. a matmul, then a separate ReLU, then a
+separate dropout) each reads its input from and writes its output back to slow
+global memory. A fused kernel keeps intermediate results in registers or shared
+memory and only touches global memory once. Increasing batch size has a similar
+effect — it does more compute per byte fetched from global memory, pushing you
+away from being memory-bandwidth-bound and toward compute-bound, where the GPU's
+thousands of cores are actually the bottleneck instead of memory traffic.
+
+## CUDA streams: overlapping compute and data transfer
+
+By default, CUDA operations on a GPU run in a single **stream** — a queue that
+executes in order. But copying data across PCIe (host to device) and running a
+kernel are separate pieces of hardware (a DMA engine and the SM cores), so they can
+happen *at the same time* if you put them on different streams:
+
+```python
+import torch
+
+stream = torch.cuda.Stream()
+with torch.cuda.stream(stream):
+    next_batch_gpu = next_batch_cpu.to("cuda", non_blocking=True)
+# meanwhile the default stream keeps computing on the current batch
+```
+
+This is exactly what a well-tuned `DataLoader` with `pin_memory=True` and
+`non_blocking=True` transfers is doing under the hood: prefetching the *next* batch
+onto the GPU while the *current* batch is still being computed on, so the GPU's
+compute cores are never sitting idle waiting on PCIe. It's the streams-level version
+of the same "don't starve the GPU" problem the beginner lesson diagnosed with
+`nvidia-smi`'s GPU-Util column.
+
+## Try it yourself
+
+You fuse three separate elementwise PyTorch ops into one custom CUDA kernel and
+throughput improves, even though the total floating-point operations performed
+didn't change. Why?
+
+<details>
+<summary>Solution</summary>
+
+Each of the three original ops read its input from global memory and wrote its
+output back to global memory — three round trips to slow HBM. The fused kernel
+keeps intermediate values in registers between the three arithmetic steps and only
+touches global memory once for the read and once for the final write. Since
+elementwise ops are typically memory-bandwidth-bound (very little compute per byte
+moved), cutting memory traffic — not compute — is what speeds things up.
+</details>

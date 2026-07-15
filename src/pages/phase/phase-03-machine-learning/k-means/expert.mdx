@@ -1,0 +1,149 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "K-Means"
+level: expert
+phaseSlug: "phase-03-machine-learning"
+phaseName: "Machine Learning"
+topicSlug: "k-means"
+estReadTime: 12
+resources:
+  - type: docs
+    title: "scikit-learn: K-Means clustering"
+    url: "https://scikit-learn.org/stable/modules/clustering.html#k-means"
+  - type: docs
+    title: "scikit-learn: MiniBatchKMeans"
+    url: "https://scikit-learn.org/stable/modules/generated/sklearn.cluster.MiniBatchKMeans.html"
+---
+
+## What K-Means actually optimizes
+
+K-Means minimizes **within-cluster sum of squares** (WCSS), also called
+inertia:
+
+```
+J = sum over clusters k, sum over points x in cluster k, of ||x - mu_k||^2
+```
+
+where `mu_k` is the centroid (mean) of cluster `k`. Finding the assignment
+that globally minimizes `J` is NP-hard even for `K=2` in general dimension.
+Lloyd's algorithm — assign, then recompute means, repeat — is a heuristic
+coordinate-descent scheme: each step is optimal given the other is fixed,
+so `J` never increases, but the process can get stuck in a local optimum
+that is far from the global one.
+
+### K-Means as a constrained Gaussian Mixture Model
+
+K-Means is the limiting case of a Gaussian Mixture Model (GMM) fit with
+Expectation-Maximization, under three restrictions:
+
+1. Every component's covariance is **spherical** (`sigma^2 * I`), not a
+   general covariance matrix.
+2. Every component shares the **same fixed variance** `sigma^2`, taken to
+   the limit `sigma^2 -> 0`.
+3. Assignment is **hard** (each point belongs to exactly one cluster) instead
+   of soft/probabilistic responsibilities.
+
+Under a shared spherical covariance, the Mahalanobis distance a GMM would
+use collapses to plain Euclidean distance, and the E-step's soft
+responsibilities become a hard nearest-centroid assignment as `sigma^2`
+shrinks to zero. This is exactly Lloyd's algorithm. It explains precisely
+why K-Means fails when:
+
+- **Clusters are non-spherical** (e.g. elongated, curved, or differently
+  oriented) — Euclidean distance to a single centroid can't represent
+  an anisotropic (elliptical) shape. A GMM with full covariance matrices
+  can.
+- **Clusters have unequal variance or density** — a tight cluster next to
+  a diffuse one gets its boundary pulled toward the diffuse cluster's
+  centroid, because K-Means implicitly assumes all clusters have the same
+  spread.
+- **Clusters have unequal size (point count)** — inertia minimization
+  tends to produce clusters of similar spatial extent, so a small
+  tight cluster next to a large one may get fragmented or absorbed.
+
+## Complexity and Mini-Batch K-Means
+
+A single Lloyd's iteration is `O(n * k * d)`: for each of `n` points,
+compute distance to each of `k` centroids across `d` dimensions. Over `i`
+iterations to convergence, total cost is `O(n * k * i * d)`. This is
+linear in `n`, which is favorable, but it still requires a full pass over
+the dataset every iteration and the whole dataset resident for
+recomputing means.
+
+For large-scale or streaming data, `MiniBatchKMeans` replaces full-batch
+mean recomputation with small random mini-batches, updating centroids
+with a decaying learning rate after each batch:
+
+```python
+from sklearn.cluster import MiniBatchKMeans
+
+model = MiniBatchKMeans(
+    n_clusters=10,
+    batch_size=1024,
+    n_init="auto",
+    random_state=42,
+)
+model.partial_fit(X_batch)  # can be called repeatedly on streaming chunks
+```
+
+This trades a small amount of solution quality (slightly higher inertia
+than full-batch K-Means) for a large reduction in memory and per-step
+compute, and it supports online/incremental updates via `partial_fit`,
+which plain `KMeans` does not.
+
+## Initialization sensitivity and n_init
+
+Because Lloyd's algorithm only guarantees local convergence, the quality
+of the result depends heavily on where centroids start. `k-means++`
+improves the odds of a good start but doesn't eliminate the problem.
+scikit-learn's `n_init` parameter runs the full algorithm multiple times
+from different initializations and keeps the run with the lowest final
+inertia:
+
+```python
+model = KMeans(n_clusters=8, init="k-means++", n_init=10, random_state=42)
+```
+
+More restarts reduce the chance of reporting a poor local optimum, at
+linear cost in runtime. In production pipelines with a stable, well
+understood feature space, `n_init=10` (or scikit-learn's `"auto"` heuristic)
+is usually enough; for exploratory work on unfamiliar data, increasing it
+is a cheap way to sanity-check that results are stable across runs.
+
+## Trade-off summary
+
+| Property | K-Means | DBSCAN | Gaussian Mixture Model | Hierarchical (agglomerative) |
+|---|---|---|---|---|
+| Cluster shape assumption | Spherical, equal variance | Arbitrary (density-connected) | Elliptical (per-component covariance) | Arbitrary, depends on linkage |
+| Must specify K in advance | Yes | No (uses `eps`, `min_samples`) | Yes (number of components) | No (choose cut height after fit) |
+| Handles outliers | Poorly (centroids shift) | Well (labels them as noise) | Poorly-to-moderate (soft weights) | Poorly (single/complete linkage sensitive) |
+| Scalability | O(n k i d), scales well; use Mini-Batch for very large n | O(n log n) with spatial index, degrades in high-dim | Slower EM iterations, O(n k d^2) with full covariance | O(n^2) or O(n^2 log n), poor for large n |
+| Deterministic given init | No (depends on init, use n_init) | Yes | No (EM local optima) | Yes (given data and linkage) |
+
+## Production concerns
+
+**Re-clustering cadence.** Cluster centroids are a snapshot of the data
+distribution at fit time. As user behavior or feature distributions drift,
+centroids become stale and misclassify new points. Decide explicitly
+whether to retrain on a fixed schedule, trigger retraining on detected
+drift (e.g. rising average distance-to-nearest-centroid), or maintain
+`MiniBatchKMeans` in a continuously-updating mode via `partial_fit`.
+
+**Cluster assignments as features vs. as the end product.** Clustering is
+often not the final deliverable — cluster IDs (or distances to each
+centroid) become input features to a downstream supervised model. In that
+setup, treat the fitted `KMeans` object like any other pipeline stage:
+persist it, version it alongside the model that consumes its output, and
+re-fit it as part of the same retraining pipeline so training/serving
+skew doesn't creep in between the clustering step and the downstream model.
+
+**Curse of dimensionality on embeddings.** K-Means (and Euclidean distance
+generally) degrades in high dimensions: as dimensionality grows, distances
+between points tend to concentrate, so the ratio between nearest and
+farthest neighbor distances shrinks toward 1 and centroids stop being
+meaningfully discriminative. This is a common issue when clustering raw
+embedding vectors (e.g. 768- or 1536-dimensional sentence embeddings).
+The standard mitigation is to reduce dimensionality first — PCA for a
+linear, variance-preserving projection, or UMAP/t-SNE for a non-linear
+projection that preserves local neighborhood structure — and cluster in
+that lower-dimensional space rather than directly on the raw embedding.

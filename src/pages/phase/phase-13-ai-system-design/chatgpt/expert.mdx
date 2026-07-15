@@ -1,0 +1,101 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "ChatGPT"
+level: expert
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "chatgpt"
+estReadTime: 12
+resources:
+  - type: article
+    title: "OpenAI — Scaling Kubernetes to 7,500 nodes (infra behind large model training/serving)"
+    url: "https://openai.com/index/scaling-kubernetes-to-7500-nodes/"
+  - type: article
+    title: "vLLM / PagedAttention paper — Efficient Memory Management for LLM Serving"
+    url: "https://arxiv.org/abs/2309.06180"
+---
+
+## A note on sourcing
+
+OpenAI does not publish ChatGPT's internal architecture in detail. What
+follows is engineering reasoning from public infrastructure blog posts (from
+OpenAI and comparable large-scale LLM serving systems), open research on LLM
+serving (vLLM/PagedAttention, continuous batching), and general distributed
+systems principles applied to what a system at ChatGPT's scale must be doing
+— not insider knowledge of OpenAI's actual stack.
+
+## Problem 1: KV-cache memory is the real scaling bottleneck
+
+Every generated token requires attention over all previous tokens, so
+inference servers cache the **key/value tensors** for every token in the
+current context (the "KV cache") to avoid recomputing them each step. This
+cache is large — it scales with `sequence_length x num_layers x hidden_size`
+per request — and it lives in GPU memory alongside the model weights
+themselves. At scale, **KV-cache capacity, not raw compute, is usually what
+limits how many concurrent conversations a GPU can serve.**
+
+This is precisely the problem PagedAttention/vLLM addresses: instead of
+allocating one large contiguous KV-cache block per request (which fragments
+memory and wastes it on requests that turn out shorter than the max
+allocation), it pages the KV cache like an OS pages virtual memory, allocating
+in fixed-size blocks and reclaiming/sharing them, e.g. across requests that
+share a common prefix (the same system prompt). A production system serving
+millions of chats plausibly needs exactly this kind of memory manager to keep
+GPU utilization high without over-provisioning.
+
+## Problem 2: streaming at scale
+
+Every active conversation with an open stream holds a connection (and
+server-side generation state) for as long as generation runs — potentially
+tens of seconds for a long response. Unlike stateless request/response APIs,
+this means:
+
+- Load balancers need **connection-aware** routing, not just round-robin —
+  routing a new request to an already-saturated GPU because it "looks free"
+  in a stateless health check degrades everyone's time-to-first-token.
+- A single node failure mid-stream loses in-flight generations. Systems
+  either accept the client-visible truncation (cheapest) or checkpoint
+  generation state periodically to allow resumption (much more complex, and
+  usually not worth it for chat — but worth it for long agentic/tool-use
+  runs).
+- Backpressure has to propagate correctly: if a client's network is slow to
+  consume tokens, the server must not let output buffers grow unboundedly,
+  or a few slow clients can pin GPU memory that should be serving other
+  users.
+
+## Problem 3: safety filtering without destroying latency
+
+Running a full moderation model on every token as it streams would add
+per-token latency on the critical path. Practical mitigations engineering
+teams reach for:
+
+- **Incremental/windowed classification**: score a rolling window of recent
+  tokens rather than the full generated text so far, amortizing cost.
+- **Async, catch-up moderation**: let tokens stream immediately and moderate
+  slightly behind the stream, accepting a small window where policy-violating
+  text could theoretically be visible for a fraction of a second before the
+  stream is cut — a latency/safety trade-off made explicitly, not by
+  accident.
+- **Cheap pre-filter, expensive escalation**: a lightweight classifier runs on
+  every token; only flagged spans get sent to a heavier, more accurate (and
+  slower) safety model.
+
+## Problem 4: capacity planning under wildly bursty demand
+
+Unlike typical web traffic, LLM inference demand is extremely spiky (product
+launches, viral moments) and GPUs cannot be provisioned in seconds the way
+stateless web servers can — cold starts involve loading tens of gigabytes of
+model weights onto a GPU. This pushes toward keeping a warm buffer of
+under-utilized capacity (expensive) or aggressive multi-tenant batching that
+degrades gracefully (better utilization, but harder to reason about latency
+percentiles per user).
+
+## Trade-off summary
+
+| Concern | Cheap/simple approach | Scales-to-millions approach | Cost |
+|---|---|---|---|
+| KV cache | Fixed max-length allocation per request | Paged/block-based allocation with prefix sharing | Engineering complexity, but far higher GPU utilization |
+| Streaming delivery | Stateless round-robin load balancing | Connection- and load-aware routing, backpressure control | More stateful infra, harder failover |
+| Safety filtering | Full moderation pass before returning full response | Incremental/async moderation on the token stream | Small window of un-moderated output risk |
+| Capacity for bursts | Autoscale reactively | Pre-warmed GPU buffer + multi-tenant batching | Idle GPU cost vs. p99 latency during spikes |
+| Model selection | One model for everyone | Router picks model tier per request/plan | Routing logic complexity for lower average cost |

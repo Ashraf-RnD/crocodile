@@ -1,0 +1,86 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Tool Calling"
+level: expert
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "tool-calling"
+estReadTime: 12
+resources:
+  - type: article
+    title: "Berkeley Function-Calling Leaderboard (tool-use benchmarks)"
+    url: "https://gorilla.cs.berkeley.edu/leaderboard.html"
+  - type: docs
+    title: "Anthropic — Tool Use Best Practices"
+    url: "https://docs.anthropic.com/en/docs/build-with-claude/tool-use/overview"
+---
+
+## Tool-use quality degrades non-linearly with toolbox size
+
+Accuracy at picking the right tool doesn't degrade gracefully as you add more tools —
+it tends to hold up fine up to a modest number, then drop sharply once the model has
+to discriminate between many semantically similar options. This is a context-window
+and attention problem as much as a capability one: every tool's schema and description
+occupies prompt real estate the model must weigh against every other tool on every
+single decision. Production systems address this with **dynamic tool filtering** —
+retrieving only the subset of tools relevant to the current request (via embedding
+similarity or a lightweight router) rather than exposing the full toolbox on every
+call. This is effectively RAG applied to tool selection instead of documents.
+
+## Tool orchestration patterns beyond the flat ReAct loop
+
+A single flat "reason, act, observe" loop works for simple tasks but breaks down as
+tool count and task complexity grow. Two patterns address this:
+
+- **Hierarchical / supervisor routing** — a lightweight router model or classifier
+  first decides *which category* of tool is relevant (e.g. "this is a billing
+  question"), then hands off to a sub-agent with only that category's tools loaded.
+  This trades a small amount of added latency (the routing step) for a much smaller,
+  more accurate tool selection surface per turn.
+- **Planning before acting** — for tasks with clear multi-step structure, having the
+  model produce an explicit plan (a list of intended tool calls) before executing any
+  of them is more auditable and interruptible than pure reactive ReAct, at the cost of
+  being less adaptive when early results change what's actually needed.
+
+## Idempotency and retries in tool execution
+
+Network calls, downstream APIs, and even the model's own retry-after-error behavior
+mean the *same* tool call can execute more than once. For any side-effecting tool
+(charging a payment, sending a notification, creating a record), design the underlying
+operation to be idempotent — accept a client-generated idempotency key, or make the
+operation naturally safe to repeat (`set_status("shipped")` is idempotent;
+`increment_inventory(5)` is not without extra bookkeeping). This is a distributed
+systems concern that tool-calling doesn't remove — it just adds a new caller (the
+model, potentially retrying non-deterministically) on top of the same old problem.
+
+## Observability: tool calls are your audit trail
+
+Every tool call — arguments, execution time, result, and any error — should be logged
+with a correlation ID tying it back to the originating user request and conversation
+turn. This is what makes debugging a bad multi-tool trajectory tractable after the
+fact ("the model called `refund_order` with the wrong amount — why?") and is
+foundational for building evals: a labeled dataset of "given this state, was this the
+right tool call" only exists if you're capturing full trajectories, not just final
+answers.
+
+## Trade-offs in tool-calling architecture
+
+| Decision | Benefit | Cost |
+|---|---|---|
+| Flat toolbox, all tools always available | Simple to implement and reason about | Accuracy degrades as tool count grows; wastes context |
+| Dynamic tool retrieval (RAG over tool descriptions) | Scales to hundreds of tools | Added retrieval latency; router can mis-route |
+| Hierarchical/supervisor routing | Smaller, more accurate per-turn tool set | Extra hop of latency; routing errors compound |
+| Forced planning before execution | More auditable, interruptible, parallelizable | Less adaptive to information discovered mid-task |
+| Idempotent tool design | Safe under retries and duplicate calls | Extra engineering effort per side-effecting tool |
+
+## Security posture for tool-calling systems
+
+Because tool arguments are influenced by anything the model has read — including
+retrieved documents and prior tool outputs — a tool-calling system is only as safe as
+its least-trusted input source. Treat tool definitions as a **capability boundary**:
+a tool the model can call is a tool an attacker can potentially get called indirectly,
+via prompt injection buried in a document the model retrieves and processes. Mitigate
+with least-privilege tool scopes, explicit allow-lists per conversation context, output
+validation independent of the model's own claims, and mandatory human confirmation for
+anything irreversible — the same posture you'd apply to any system executing
+instructions derived from partially untrusted input.

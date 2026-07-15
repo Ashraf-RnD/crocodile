@@ -1,0 +1,78 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Caching"
+level: beginner
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "caching"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "Anthropic Docs — Prompt caching"
+    url: "https://docs.claude.com/en/docs/build-with-claude/prompt-caching"
+  - type: docs
+    title: "OpenAI Platform — Prompt caching"
+    url: "https://platform.openai.com/docs/guides/prompt-caching"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Don't do the same expensive work twice
+
+Caching means: if you've already computed an answer once, save it, and hand
+back the saved copy next time instead of redoing the work. It's one of the
+oldest ideas in computing, and it matters *especially* for AI systems
+because a single LLM call can be slow (seconds) and expensive (real money
+per request) — recomputing an identical or near-identical answer is pure
+waste.
+
+<Mermaid client:visible code={`flowchart LR
+  Request["New request arrives"] --> Check{"Seen this before?"}
+  Check -->|yes, cache hit| Cached["Return cached answer instantly"]
+  Check -->|no, cache miss| Model["Call the LLM"]
+  Model --> Save["Save the result in the cache"]
+  Save --> Return["Return the answer"]`} />
+
+## A simple example
+
+Imagine a customer support bot that gets asked "what's your return policy?"
+hundreds of times a day, worded slightly differently each time. Rather than
+generating a fresh answer from the LLM every single time, a well-designed
+system can recognize this is effectively the same question and serve a
+cached answer — instant, and free after the first time.
+
+```python
+cache = {}
+
+def answer_question(question: str) -> str:
+    key = normalize(question)  # e.g. lowercase, strip punctuation
+    if key in cache:
+        return cache[key]  # cache hit — instant, no LLM call
+    answer = call_llm(question)  # cache miss — the expensive path
+    cache[key] = answer
+    return answer
+```
+
+## The catch: not every answer should be cached
+
+If a user asks "what time is it?" or "what's the latest news?", caching the
+answer would mean serving stale or flat-out wrong information later. Caching
+works well for questions with stable answers (a return policy, a
+well-known fact) and works poorly for anything time-sensitive or
+personalized. Knowing *what* to cache is as important as knowing how.
+
+## Try it yourself
+
+Would you cache the answer to "explain how photosynthesis works" or to
+"what's my account balance"? Why?
+
+<details>
+<summary>Solution</summary>
+
+Cache "explain how photosynthesis works" — it's a general, factual question
+whose correct answer doesn't change from user to user or day to day, so a
+cached response saves real LLM cost and latency with no downside. "What's my
+account balance" must never be cached across users, since it's specific to
+one person and changes over time — serving a cached answer here would mean
+giving someone the wrong (possibly someone else's) balance, which is a
+correctness bug, not just a missed optimization.
+</details>

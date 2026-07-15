@@ -1,0 +1,97 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "QLoRA"
+level: beginner
+phaseSlug: "phase-10-fine-tuning"
+phaseName: "Fine-tuning"
+topicSlug: "qlora"
+estReadTime: 7
+resources:
+  - type: article
+    title: "QLoRA: Efficient Finetuning of Quantized LLMs (paper)"
+    url: "https://arxiv.org/abs/2305.14314"
+  - type: docs
+    title: "Hugging Face — bitsandbytes 4-bit quantization guide"
+    url: "https://huggingface.co/docs/transformers/quantization/bitsandbytes"
+---
+
+## LoRA, but the frozen part is also compressed
+
+You already know [LoRA](/phase/phase-10-fine-tuning/lora/beginner) freezes the huge
+base model and only trains two tiny matrices. LoRA is cheap to *train*, but the frozen
+base model still has to sit in GPU memory in full precision — a 7B model in 16-bit
+still needs about 14GB just to load, before you've trained anything.
+
+**QLoRA** answers a simple question: what if the frozen part didn't need to be full
+precision at all? Since those weights never get updated, why not compress them down to
+4-bit and only decompress them on the fly during the forward pass?
+
+Think of it like keeping a reference textbook as a compressed ZIP file on disk instead
+of a full paper copy on your desk. You still read it (decompress a page when needed),
+you just don't need the shelf space (GPU memory) for the whole uncompressed book at
+once.
+
+### The numbers that make this matter
+
+| Setup | Approx. GPU memory to fine-tune a 7B model |
+|---|---|
+| Full fine-tuning (16-bit) | ~60GB+ |
+| LoRA (16-bit base + small adapter) | ~16GB |
+| QLoRA (4-bit base + small adapter) | ~6GB |
+
+That drop from ~16GB to ~6GB is why QLoRA is the reason people can fine-tune a 7B (and
+even 13B–30B) model on a single consumer GPU, like a 24GB RTX 4090, instead of needing
+a data-center-grade A100.
+
+### A minimal example with `bitsandbytes`
+
+```python
+from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+import torch
+
+bnb_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_quant_type="nf4",
+    bnb_4bit_compute_dtype=torch.bfloat16,
+)
+
+model = AutoModelForCausalLM.from_pretrained(
+    "meta-llama/Llama-3.1-8B",
+    quantization_config=bnb_config,
+    device_map="auto",
+)
+
+model = prepare_model_for_kbit_training(model)
+
+lora_config = LoraConfig(r=16, lora_alpha=32, target_modules=["q_proj", "v_proj"])
+model = get_peft_model(model, lora_config)
+```
+
+The base model loads in 4-bit (`load_in_4bit=True`). The LoRA adapter matrices
+themselves stay in higher precision (`bfloat16`), because those are the parameters
+actually being trained — you never want to train in 4-bit, only store frozen weights
+in it.
+
+## Try it yourself
+
+If a 7B-parameter model needs roughly 2 bytes per parameter in 16-bit and 0.5 bytes per
+parameter in 4-bit, roughly how much memory does just loading the frozen base model
+take in each case?
+
+<details>
+<summary>Solution</summary>
+
+```python
+params = 7_000_000_000
+
+fp16_gb = params * 2 / 1e9   # 14.0 GB
+int4_gb = params * 0.5 / 1e9  # 3.5 GB
+
+print(fp16_gb, int4_gb)
+```
+
+Roughly 14GB vs 3.5GB — a 4x reduction, which is exactly why QLoRA fits on GPUs that
+plain LoRA cannot.
+
+</details>

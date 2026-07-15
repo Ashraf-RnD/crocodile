@@ -1,0 +1,95 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Streaming"
+level: intermediate
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "streaming"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "MDN — Server-Sent Events (SSE)"
+    url: "https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events"
+  - type: docs
+    title: "OpenAI Platform — Streaming API responses"
+    url: "https://platform.openai.com/docs/api-reference/streaming"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Transport choices: SSE vs. WebSockets
+
+Two protocols dominate LLM response streaming, and they solve slightly
+different problems:
+
+- **Server-Sent Events (SSE)** — a simple, one-directional stream over plain
+  HTTP. The server pushes events (tokens); the client just listens. This is
+  the default choice for most chat completion APIs because it's simple,
+  works over standard HTTP infrastructure (proxies, load balancers), and
+  the client doesn't need to send anything back mid-stream.
+- **WebSockets** — a full-duplex connection where both sides can send
+  messages at any time. Needed when the client must send data *while* the
+  server is still streaming a response — voice AI (streaming audio in both
+  directions) and collaborative/interactive agents are common cases.
+
+<Mermaid client:visible code={`flowchart TB
+  Client["Client"] -->|HTTP request| Server["Inference server"]
+  Server -->|"event: token\\ndata: {...}"| Client
+  Server -->|"event: token\\ndata: {...}"| Client
+  Server -->|"event: done"| Client`} />
+
+```python
+# Minimal SSE streaming endpoint (FastAPI-style)
+from fastapi.responses import StreamingResponse
+
+async def stream_tokens(prompt: str):
+    async for token in model.generate_stream(prompt):
+        yield f"event: token\ndata: {json.dumps({'text': token})}\n\n"
+    yield "event: done\ndata: {}\n\n"
+
+@app.post("/chat")
+async def chat(prompt: str):
+    return StreamingResponse(stream_tokens(prompt), media_type="text/event-stream")
+```
+
+## What has to change on the server side
+
+Streaming isn't just a client-side rendering trick — the inference server
+has to be built to emit partial output as it's produced, not buffer the
+whole response and return it at the end. This affects the serving
+framework's design (continuous batching engines are built around producing
+tokens incrementally per request) and how errors are handled: a failure
+partway through generation means the client has already received a partial
+response, so the protocol needs an explicit way to signal "this response was
+cut short" rather than the client just seeing a connection drop and
+guessing.
+
+## Backpressure and slow clients
+
+If a client (or the network between server and client) can't consume tokens
+as fast as the model produces them, the server needs somewhere to put the
+tokens in the meantime, or it has to slow down generation. Unbounded
+per-connection output buffers are dangerous at scale — a handful of slow
+clients can quietly consume a large amount of server memory. Production
+systems bound these buffers and apply backpressure (pausing generation
+briefly, or in the worst case, terminating a connection that's stalled too
+long) rather than buffering without limit.
+
+## Client-side reassembly and cancellation
+
+The client has real work to do too: reassembling a token stream into
+correctly rendered text (careful with multi-byte characters and markdown
+that spans multiple tokens, like a code block's opening and closing
+backticks arriving in different chunks), and supporting **cancellation** —
+if the user navigates away or clicks "stop," the client should close the
+connection and the server should stop generating (and billing) immediately,
+not keep computing tokens nobody will see.
+
+## Streaming beyond plain text
+
+The same pattern extends to structured and multi-modal output: streaming
+JSON (emitting a partial, eventually-valid object as fields complete),
+streaming function/tool calls (so a UI can show "calling search..." before
+the call finishes), and streaming audio for voice AI (see the "Voice AI"
+case study in this phase) all reuse the same core idea — send usable partial
+output the moment it exists, rather than waiting for a fully-formed final
+result.

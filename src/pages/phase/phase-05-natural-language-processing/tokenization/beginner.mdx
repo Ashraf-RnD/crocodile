@@ -1,0 +1,90 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Tokenization"
+level: beginner
+phaseSlug: "phase-05-natural-language-processing"
+phaseName: "Natural Language Processing"
+topicSlug: "tokenization"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "Hugging Face — Tokenizers summary"
+    url: "https://huggingface.co/docs/transformers/tokenizer_summary"
+  - type: video
+    title: "Andrej Karpathy — Let's build the GPT Tokenizer"
+    url: "https://www.youtube.com/watch?v=zduSFxRajkE"
+---
+
+## Why a model can't just read text
+
+Neural networks only understand numbers. Before any text reaches a model, it has to be
+chopped into pieces and converted into integers. That process is called
+**tokenization**, and each piece is called a **token**. A token might be a whole word,
+part of a word, or even a single character — it depends on the tokenizer.
+
+Think of it like a vending machine that only accepts coins, not bills. Tokenization is
+the "change machine" that breaks your sentence (a bill) into accepted coins (tokens)
+before the model can use it.
+
+### A simple example
+
+The most basic tokenizer just splits on whitespace and punctuation:
+
+```python
+text = "Don't stop believing!"
+tokens = text.replace("!", " !").replace("'", " '").split()
+print(tokens)
+# ["Don", "'t", "stop", "believing", "!"]
+```
+
+Real tokenizers (like the ones used by GPT or BERT) are smarter. They break rare or
+made-up words into smaller sub-word chunks so the model never encounters a word it has
+literally never seen:
+
+```python
+from transformers import AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+tokens = tokenizer.tokenize("Tokenization is fascinating")
+print(tokens)
+# ['token', '##ization', 'is', 'fascinating']
+```
+
+Notice `"Tokenization"` became two tokens: `token` and `##ization`. The `##` means
+"this continues the previous token" — that's how the model handles a word it hasn't
+memorized as a single unit.
+
+### From tokens to numbers
+
+Each token maps to an integer ID via a fixed vocabulary:
+
+```python
+ids = tokenizer.convert_tokens_to_ids(tokens)
+print(ids)
+# [19204, 3989, 2003, 17160]
+```
+
+That list of integers is what actually gets fed into the model. Every model card on
+Hugging Face specifies which tokenizer it expects — you always load the tokenizer and
+model together, as a matched pair.
+
+## Try it yourself
+
+Using `AutoTokenizer.from_pretrained("bert-base-uncased")`, tokenize the word
+`"unbelievable"` and predict how many sub-word pieces it will split into before running
+the code.
+
+<details>
+<summary>Solution</summary>
+
+```python
+from transformers import AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+print(tokenizer.tokenize("unbelievable"))
+# ['unbelievable']  -- it's common enough to be a single token in BERT's vocab!
+# Try a rarer word like "unbelievability" to see it split into
+# ['unbelievable', '##ity'] or similar sub-word pieces.
+```
+
+</details>

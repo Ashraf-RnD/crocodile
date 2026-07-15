@@ -1,0 +1,90 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Re-ranking"
+level: expert
+phaseSlug: "phase-08-retrieval-augmented-generation"
+phaseName: "Retrieval-Augmented Generation"
+topicSlug: "re-ranking"
+estReadTime: 12
+resources:
+  - type: article
+    title: "ColBERT: Efficient and Effective Passage Search via Contextualized Late Interaction"
+    url: "https://arxiv.org/abs/2004.12832"
+  - type: docs
+    title: "Cohere — Rerank best practices"
+    url: "https://docs.cohere.com/docs/reranking-best-practices"
+---
+
+## Reranking is where retrieval's speed/accuracy compromise gets paid back
+
+Bi-encoder retrieval trades accuracy for the ability to precompute document
+representations independent of any future query — an architectural necessity for
+searching millions of documents in milliseconds. Every accuracy loss from that
+compromise (ambiguous similarity scores, no query-document interaction) is a debt that
+reranking exists to pay back, on a small enough candidate set that the accuracy-first,
+speed-second cross-encoder becomes affordable. Understanding reranking well means
+understanding it as *specifically* recovering the interaction signal bi-encoders
+discard, not as a generically "better" search step.
+
+## The interaction spectrum: bi-encoders, ColBERT, cross-encoders
+
+| Architecture | Query/document interaction | Precompute documents? | Relative accuracy | Relative speed |
+|---|---|---|---|---|
+| Bi-encoder (dense retrieval) | None — independent encodings compared post-hoc | Yes, fully | Lowest | Fastest — single ANN lookup |
+| Late interaction (ColBERT) | Per-token embeddings compared at query time via MaxSim, but token encodings still precomputed independently | Yes (token-level), query-time step is comparison not encoding | Middle | Middle — more compute than bi-encoder ANN, far less than cross-encoder |
+| Cross-encoder | Full — query and document tokens attend to each other jointly | No — must encode the pair together at query time | Highest | Slowest — one full forward pass per (query, candidate) pair |
+
+**ColBERT**'s late-interaction design is the interesting middle ground: it keeps
+per-token (not just per-document) embeddings, precomputed independently at indexing
+time, and only computes a lightweight "MaxSim" comparison between query and document
+token embeddings at query time. This recovers much of the fine-grained matching
+cross-encoders provide, without paying the full cost of a joint forward pass per
+candidate — at the cost of a much larger index (token-level vectors, not one vector
+per document).
+
+## Reranking cost scales with candidate count — pick k deliberately
+
+Reranking cost is `O(candidates)` cross-encoder forward passes per query, unlike
+retrieval's `O(log n)`-ish ANN lookup cost. This makes the retrieval-stage `k` (how
+many candidates you pass into reranking) a direct, linear latency/cost lever — doubling
+`k` from 25 to 50 roughly doubles reranking latency and cost, with diminishing recall
+returns past the point where the retriever's own recall@k has already saturated (i.e.
+past the point where a larger `k` mostly adds candidates the retriever was already
+confident weren't relevant). Tuning this number against a labeled eval set — the
+smallest `k` that doesn't measurably hurt final recall — is a routine but easily
+skipped cost-control step.
+
+## Reranker miscalibration and score interpretation
+
+Cross-encoder relevance scores are useful for *ranking* within a single query's
+candidate set, but are frequently **not well-calibrated across queries** — a score of
+0.8 for one query and 0.8 for a different query don't necessarily mean the same
+underlying relevance. This matters if you're tempted to use a fixed reranker-score
+threshold as a relevance cutoff (e.g. "only pass chunks scoring above 0.5 to the LLM")
+— such a threshold can silently behave inconsistently across query types, admitting
+noise for some queries and dropping genuinely relevant results for others. A rank-based
+cutoff (top-n) is generally safer than a score-based threshold unless the specific
+reranker has been explicitly validated as calibrated for your query distribution.
+
+## Reranking and chunking interact non-trivially
+
+Aggressive chunking (many small, near-duplicate chunks covering the same underlying
+answer) inflates the number of near-identical high-scoring candidates a reranker sees,
+which can crowd the final top-n with redundant restatements of the same point rather
+than diverse, complementary information — a real failure mode distinct from the
+retrieval-quality question chunking is usually evaluated against. Some production
+systems add a deduplication or diversity step (e.g. Maximal Marginal Relevance) after
+reranking specifically to counter this, trading off strict relevance-ranking purity for
+better coverage of distinct information in the final context sent to the LLM.
+
+## When reranking isn't worth the latency
+
+Reranking adds a synchronous model call (hosted API round-trip, or a local GPU
+forward pass) directly in the query critical path — for latency-sensitive
+applications (autocomplete-style search, sub-200ms SLAs), this cost can be the
+dominant contributor to end-to-end latency, sometimes exceeding the LLM generation
+step itself. Whether reranking is worth it is an empirical question specific to a
+system's precision requirements and latency budget — high-stakes, low-QPS use cases
+(legal/medical research assistants) usually justify it easily; high-QPS,
+latency-sensitive use cases sometimes don't, and improving chunking or the base
+retriever's embedding model is a better return on the same latency budget.

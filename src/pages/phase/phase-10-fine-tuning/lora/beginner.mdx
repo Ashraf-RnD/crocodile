@@ -1,0 +1,110 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "LoRA"
+level: beginner
+phaseSlug: "phase-10-fine-tuning"
+phaseName: "Fine-tuning"
+topicSlug: "lora"
+estReadTime: 7
+resources:
+  - type: docs
+    title: "Hugging Face PEFT — LoRA conceptual guide"
+    url: "https://huggingface.co/docs/peft/conceptual_guides/lora"
+  - type: article
+    title: "Understanding LoRA — a visual guide"
+    url: "https://sebastianraschka.com/blog/2023/llm-finetuning-lora.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The sticky-note analogy
+
+Imagine a giant textbook (the pretrained model) with millions of pages of knowledge
+already in it. You want to teach it a new skill — say, replying in a particular
+customer-support tone. You have two options:
+
+1. **Rewrite the whole textbook.** Extremely thorough, extremely expensive, and you
+   risk messing up things it already knew.
+2. **Stick small sticky notes on a few key pages** with corrections and additions.
+   Cheap, fast, reversible, and the original book stays untouched underneath.
+
+**LoRA (Low-Rank Adaptation)** is the sticky-note approach for neural networks. Instead
+of updating all of a model's billions of weights, LoRA freezes the original weights
+completely and trains a tiny pair of new matrices next to them. Those small matrices
+learn "the correction," and at inference time their output is just added on top of the
+frozen model's output.
+
+<Mermaid client:visible code={`flowchart LR
+  X[Input] --> W["Frozen pretrained weight W (huge, untouched)"]
+  X --> AB["Small trainable matrices A and B (tiny)"]
+  W --> Sum["+"]
+  AB --> Sum
+  Sum --> Out[Output]`} />
+
+### Why this actually works
+
+A full 7-billion-parameter model has, well, 7 billion trainable numbers. LoRA typically
+adds less than 1% of that — often just a few million trainable parameters — because the
+two small matrices (`A` and `B`) are "low-rank": their inner dimension is much smaller
+than the original layer's size. Multiplied together, `A @ B` produces a full-size
+update, but it only takes a fraction of the parameters to describe.
+
+### A tiny worked example
+
+```python
+import torch
+
+# Original frozen weight: 1024 x 1024 = ~1,000,000 parameters
+d_in, d_out = 1024, 1024
+W = torch.randn(d_in, d_out)  # frozen, never updated
+
+# LoRA adapter with rank r=8
+r = 8
+A = torch.randn(d_in, r) * 0.01   # trainable
+B = torch.zeros(r, d_out)          # trainable, starts at zero
+
+x = torch.randn(1, d_in)
+
+# Original model's output
+base_output = x @ W
+
+# LoRA's correction, added on top
+lora_output = base_output + (x @ A) @ B
+```
+
+Here, `A` and `B` together have `1024*8 + 8*1024 = 16,384` trainable parameters —
+versus the frozen weight's ~1,000,000. `B` starts at all zeros so that, before any
+training happens, the adapter contributes nothing and the model behaves exactly like
+the original.
+
+### Why people use it
+
+- **Cheap to train**: far less GPU memory since you don't need optimizer state for
+  billions of frozen parameters.
+- **Cheap to store**: a LoRA adapter for a 7B model is often just tens of megabytes,
+  versus tens of gigabytes for a full fine-tuned copy.
+- **Swappable**: you can keep one frozen base model and hot-swap different LoRA
+  adapters for different tasks or customers.
+
+## Try it yourself
+
+Given a frozen weight of shape `(512, 512)` and a LoRA rank of `r = 4`, how many
+trainable parameters do `A` and `B` add together? Compare that to the `512*512`
+parameters in the frozen weight.
+
+<details>
+<summary>Solution</summary>
+
+```python
+d_in, d_out, r = 512, 512, 4
+lora_params = d_in * r + r * d_out
+frozen_params = d_in * d_out
+
+print(lora_params)    # 4096
+print(frozen_params)  # 262144
+print(lora_params / frozen_params)  # ~1.6% of the original size
+```
+
+LoRA adds roughly 1.6% as many trainable parameters as the frozen layer has —
+this ratio is why LoRA fine-tuning is so much cheaper than full fine-tuning.
+
+</details>

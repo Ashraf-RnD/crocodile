@@ -1,0 +1,90 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Mixture of Experts"
+level: intermediate
+phaseSlug: "phase-14-research-literacy"
+phaseName: "Research Literacy"
+topicSlug: "mixture-of-experts"
+estReadTime: 10
+resources:
+  - type: article
+    title: "Outrageously Large Neural Networks: The Sparsely-Gated Mixture-of-Experts Layer"
+    url: "https://arxiv.org/abs/1701.06538"
+  - type: article
+    title: "Switch Transformers: Scaling to Trillion Parameter Models"
+    url: "https://arxiv.org/abs/2101.03961"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Top-k gating
+
+At the core of an MoE layer is a small learned **gating network** that maps
+each input token to a score for every expert, then keeps only the top-k
+highest-scoring experts (commonly k=1 or k=2). Each selected expert's output
+is weighted by its gate score and summed:
+
+```python
+import torch
+import torch.nn.functional as F
+
+def moe_layer(x, experts, gate_weights, k=2):
+    gate_logits = x @ gate_weights          # (num_experts,)
+    topk_vals, topk_idx = torch.topk(gate_logits, k)
+    topk_weights = F.softmax(topk_vals, dim=-1)
+
+    output = torch.zeros_like(x)
+    for weight, idx in zip(topk_weights, topk_idx):
+        output += weight * experts[idx](x)  # only k experts actually run
+    return output
+```
+
+Critically, experts that aren't selected for a given token do **no
+computation at all** for it — the sparsity is structural, not just a
+weighting scheme, which is what keeps per-token compute low even as total
+expert count (and therefore total parameter count) grows.
+
+## Load balancing: the practical problem MoE training must solve
+
+Without intervention, a gating network tends to collapse toward using only a
+handful of "favorite" experts, since experts that get more traffic early in
+training receive more gradient signal and improve faster, attracting even
+more traffic — a rich-get-richer feedback loop that leaves most experts
+undertrained and defeats the purpose of having many of them. The original
+paper addresses this with an **auxiliary load-balancing loss** that penalizes
+uneven routing, added to the main training loss to encourage the gate to
+spread tokens roughly evenly across experts.
+
+```python
+def load_balance_loss(gate_probs, expert_assignment_counts, num_experts):
+    # Encourages both usage (counts) and gate confidence (probs) to be
+    # uniform across experts — the two together resist trivial "cheats"
+    # like assigning tokens evenly but with low confidence.
+    fraction_tokens = expert_assignment_counts / expert_assignment_counts.sum()
+    fraction_prob = gate_probs.mean(dim=0)
+    return num_experts * (fraction_tokens * fraction_prob).sum()
+```
+
+<Mermaid client:visible code={`flowchart LR
+  X["Input token"] --> Gate["Gating network: score each expert"]
+  Gate --> TopK["Select top-k experts"]
+  TopK --> E1["Expert A"]
+  TopK --> E2["Expert B"]
+  E1 --> Combine["Weighted sum"]
+  E2 --> Combine
+  Combine --> Y["Layer output"]
+  Gate -.also feeds.-> Balance["Load-balancing auxiliary loss"]`} />
+
+## Switch Transformer: simplifying to top-1 routing
+
+The Switch Transformer (2021) later simplified the original paper's typical
+top-2-or-more gating down to **top-1** — routing each token to exactly one
+expert — showing this simpler, cheaper routing scheme could still scale to
+over a trillion parameters while being easier to train stably and more
+efficient to distribute across hardware than the original's denser gating.
+
+## Where MoE layers live in a Transformer
+
+MoE layers typically replace the dense feed-forward sub-layer in a
+Transformer block, leaving the attention sub-layers dense (shared across all
+tokens) — this is the standard pattern used by nearly every modern MoE
+language model, including several covered elsewhere in this phase.

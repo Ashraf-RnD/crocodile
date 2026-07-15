@@ -1,0 +1,127 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Airflow"
+level: intermediate
+phaseSlug: "phase-12-mlops"
+phaseName: "MLOps"
+topicSlug: "airflow"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "Airflow — TaskFlow API"
+    url: "https://airflow.apache.org/docs/apache-airflow/stable/tutorial/taskflow.html"
+  - type: docs
+    title: "Airflow — Sensors and Triggers"
+    url: "https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/sensors.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The TaskFlow API: less boilerplate
+
+Modern Airflow DAGs use the `@dag`/`@task` decorators instead of manually
+wiring `PythonOperator` and `>>` chains — dependencies are inferred from how
+you pass return values between functions:
+
+```python
+from airflow.decorators import dag, task
+from datetime import datetime
+
+@dag(schedule="0 2 * * *", start_date=datetime(2024, 1, 1), catchup=False)
+def retrain_pipeline():
+
+    @task
+    def extract():
+        return "s3://bucket/raw-data.parquet"
+
+    @task
+    def train(data_path: str):
+        # ... train using data_path ...
+        return {"run_id": "abc123", "accuracy": 0.94}
+
+    @task.branch
+    def promote_if_better(train_result: dict):
+        if train_result["accuracy"] > 0.90:
+            return "register_model"
+        return "skip_promotion"
+
+    @task
+    def register_model(train_result: dict):
+        import mlflow
+        mlflow.register_model(f"runs:/{train_result['run_id']}/model", "fraud-detector")
+
+    @task
+    def skip_promotion():
+        print("Accuracy below threshold, not promoting")
+
+    data = extract()
+    result = train(data)
+    promote_if_better(result) >> [register_model(result), skip_promotion()]
+
+retrain_pipeline()
+```
+
+`task.branch` implements conditional logic in a DAG — a common production
+pattern where a model is only registered/promoted if it clears a quality gate.
+
+## Sensors: waiting on external conditions
+
+ML pipelines often need to wait for something outside Airflow's control — a
+new file landing in S3, an upstream table finishing its own load. **Sensors**
+poll for a condition instead of running on a fixed schedule:
+
+```python
+from airflow.providers.amazon.aws.sensors.s3 import S3KeySensor
+
+wait_for_data = S3KeySensor(
+    task_id="wait_for_daily_extract",
+    bucket_name="data-lake",
+    bucket_key="raw/{{ ds }}/events.parquet",
+    poke_interval=300,   # check every 5 minutes
+    timeout=60 * 60 * 6, # give up after 6 hours
+    mode="reschedule",   # free the worker slot between pokes
+)
+```
+
+`mode="reschedule"` matters at scale — a `poke` mode sensor holds a worker
+slot the entire time it's waiting, which can starve other tasks in a busy
+Airflow deployment; `reschedule` releases the slot between checks.
+
+<Mermaid client:visible code={`flowchart LR
+  A["S3KeySensor — waits for new data"] -->|file appears| B["extract"]
+  B --> C["train"]
+  C --> D{"accuracy > threshold?"}
+  D -->|yes| E["register_model"]
+  D -->|no| F["skip_promotion + alert"]`} />
+
+## Retries, SLAs, and alerting
+
+Production DAGs are rarely just the happy path — failure handling is where
+most of the configuration lives:
+
+```python
+default_args = {
+    "retries": 3,
+    "retry_delay": timedelta(minutes=5),
+    "retry_exponential_backoff": True,
+    "on_failure_callback": send_slack_alert,
+    "sla": timedelta(hours=2),   # alert if the task takes longer than this
+}
+```
+
+Combined with `catchup=False` (don't backfill every missed historical run on
+deploy) and sensible `retries`, this is what makes an Airflow DAG resilient
+to the transient failures (a flaky S3 read, a momentarily overloaded DB) that
+are routine in any real production pipeline rather than exceptional.
+
+## Where Airflow fits in an MLOps stack
+
+Airflow orchestrates *when* and *in what order* things run — it doesn't train
+models or track experiments itself. A typical retraining DAG calls out to:
+
+- A training script that logs to **MLflow/W&B** (experiment tracking)
+- **DVC** or a feature store to pull versioned data
+- The **model registry** to conditionally promote a new model
+- A CI/CD pipeline or Kubernetes deployment to actually roll out the model
+
+Airflow is the glue connecting these tools into one scheduled, observable
+pipeline — not a replacement for any of them.

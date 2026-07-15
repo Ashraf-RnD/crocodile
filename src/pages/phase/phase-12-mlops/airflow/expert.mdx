@@ -1,0 +1,102 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Airflow"
+level: expert
+phaseSlug: "phase-12-mlops"
+phaseName: "MLOps"
+topicSlug: "airflow"
+estReadTime: 12
+resources:
+  - type: docs
+    title: "Airflow — Executor Comparison (Celery, Kubernetes, Local)"
+    url: "https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/executor/index.html"
+  - type: article
+    title: "Airflow vs. Dagster vs. Prefect for ML pipelines"
+    url: "https://towardsdatascience.com/comparing-workflow-orchestration-tools"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The executor decision shapes everything downstream
+
+Airflow's scheduling logic is decoupled from *how* tasks actually execute —
+that's the **executor's** job, and the choice has major operational
+consequences for ML workloads specifically:
+
+- **LocalExecutor**: tasks run as subprocesses on the scheduler's machine.
+  Fine for small teams, but a single GPU-hungry training task can starve the
+  scheduler itself — never use this for real training workloads.
+- **CeleryExecutor**: tasks distribute across a fixed pool of Celery workers.
+  Good throughput for many small/medium tasks, but workers are provisioned
+  statically — you pay for idle GPU workers between training runs unless you
+  separately autoscale the worker pool.
+- **KubernetesExecutor**: each task runs in its own pod, scaled up on demand
+  and torn down after. This is the dominant choice for ML pipelines because
+  a training task can request a GPU node pool just for its duration and
+  release it immediately after — Celery's static pool can't do this
+  efficiently.
+
+<Mermaid client:visible code={`flowchart TB
+  subgraph Celery["CeleryExecutor"]
+    W1["Worker (idle, GPU billed)"] 
+    W2["Worker (idle, GPU billed)"]
+  end
+  subgraph K8s["KubernetesExecutor"]
+    P1["Pod spun up for training task"] -->|task done| P2["Pod terminated, GPU released"]
+  end`} />
+
+## The scheduler is a single point of contention, not compute
+
+A common misconception: Airflow "runs" your pipelines. It doesn't — the
+scheduler only decides *when* a task is eligible to run and hands it to the
+executor; actual compute happens elsewhere (a Celery worker, a K8s pod). But
+the scheduler itself is a shared, stateful component (backed by its own
+metadata database, typically Postgres) that all DAGs funnel through. At scale
+— thousands of DAGs, each with dozens of tasks, on tight schedules — the
+metadata database becomes a real bottleneck: too many DAG files or too-short
+scheduling intervals cause "scheduler lag," where tasks are eligible to run
+but sit queued because the scheduler can't parse and schedule fast enough.
+Mitigations (fewer, more tightly-scoped DAGs; increasing
+`min_file_process_interval`; splitting into multiple schedulers in Airflow 2.x)
+are operational tuning most teams don't discover until they hit this wall.
+
+## Idempotency is the pipeline author's responsibility, not Airflow's
+
+Airflow retries failed tasks and can backfill (`catchup=True`) historical
+runs — but it has no way to know whether your task's *side effects* are safe
+to repeat. A task that appends a row to a database on every run will
+duplicate data on retry; a task that does an idempotent `UPSERT` keyed on the
+DAG run's logical date will not. This matters enormously for ML pipelines
+specifically: a retraining task that unconditionally registers a new model
+version on every retry will pollute the model registry with duplicate
+versions from transient failures. The fix is architectural, not
+configuration — design each task around Airflow's `{{ ds }}` (logical
+execution date) as a natural idempotency key, and make "did this already
+run successfully for this date" a check the task performs itself.
+
+## Backfills and the "logical date is not run time" trap
+
+Airflow's `execution_date` (now `logical_date`) represents the period a DAG
+run is *for*, not when it actually executed — a DAG scheduled daily and run
+on Monday for `logical_date=Sunday` is processing Sunday's data, even though
+it's running Monday. This is intentional (it enables backfilling historical
+periods) but trips up engineers building ML pipelines who assume "now" —
+using `datetime.now()` inside a task instead of the DAG's logical date
+silently breaks backfills and reproducibility, since rerunning the same
+logical date later would fetch different "current" data than the original run.
+
+## Trade-offs vs. Dagster and Prefect for ML specifically
+
+| Concern | Airflow | Dagster | Prefect |
+|---|---|---|---|
+| Data-awareness (asset lineage) | Bolt-on (Datasets, added later) | Native — assets are first-class | Bolt-on |
+| Local dev experience | Heavier (needs scheduler/webserver/DB) | Lighter, better local testing | Lightest |
+| Ecosystem maturity | Largest, most integrations/providers | Smaller but growing fast | Smaller |
+| Dynamic task mapping | Supported but clunky (Airflow 2.3+) | Native, cleaner API | Native, cleanest API |
+| ML-specific fit | General-purpose, proven at scale | Strong for data/ML asset lineage | Good for lightweight Python-native pipelines |
+
+Airflow's dominance in ML orchestration is less "best fit for ML" and more
+"already the org's standard orchestrator" — most ML teams inherit Airflow
+because data engineering already runs on it, and the cost of introducing a
+second orchestrator for ML-specific pipelines rarely justifies Dagster's or
+Prefect's cleaner data-asset abstractions, except in ML-native platform teams
+building from scratch.

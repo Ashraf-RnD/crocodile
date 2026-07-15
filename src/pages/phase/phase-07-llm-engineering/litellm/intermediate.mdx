@@ -1,0 +1,113 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "LiteLLM"
+level: intermediate
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "litellm"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "LiteLLM — Router (Load Balancing / Fallbacks)"
+    url: "https://docs.litellm.ai/docs/routing"
+  - type: docs
+    title: "LiteLLM Proxy Server"
+    url: "https://docs.litellm.ai/docs/simple_proxy"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The Router: fallbacks and load balancing across providers
+
+Beyond single calls, LiteLLM's `Router` handles the operational reality of running on
+LLM APIs at any real volume: providers have outages, rate limits, and cost/latency
+differences worth actively routing around.
+
+```python
+from litellm import Router
+
+router = Router(model_list=[
+    {"model_name": "primary", "litellm_params": {"model": "gpt-4o", "api_key": OPENAI_KEY}},
+    {"model_name": "primary", "litellm_params": {"model": "claude-sonnet-4-5", "api_key": ANTHROPIC_KEY}},
+], fallbacks=[{"primary": ["primary"]}])
+
+response = router.completion(
+    model="primary",
+    messages=[{"role": "user", "content": "Summarize this contract."}],
+)
+```
+
+If the first configured model for `"primary"` fails (rate limited, times out, errors),
+the router automatically retries against the next one in the list — your application
+code never needs to know a fallback happened.
+
+<Mermaid client:visible code={`flowchart LR
+  Req[Request] --> Router[LiteLLM Router]
+  Router --> A{Primary provider OK?}
+  A -->|Yes| Resp[Return response]
+  A -->|Rate limited / error| B[Fallback provider]
+  B --> Resp`} />
+
+## Unified cost and usage tracking across providers
+
+Every provider bills differently and reports usage differently in raw API responses.
+LiteLLM normalizes this too, computing an estimated cost per call using its built-in
+pricing tables:
+
+```python
+from litellm import completion, completion_cost
+
+response = completion(model="gpt-4o-mini", messages=messages)
+cost = completion_cost(completion_response=response)
+print(f"This call cost ${cost:.6f}")
+```
+
+At scale, this is what lets a team build a single cost dashboard across every provider
+in use, rather than reconciling separate billing exports from OpenAI, Anthropic, and
+whoever else — a real operational pain point once an application uses more than one
+provider.
+
+## The LiteLLM Proxy: a provider-agnostic gateway
+
+For teams with multiple applications or services calling LLMs, running the **LiteLLM
+Proxy** as a standalone gateway centralizes provider credentials, rate limiting, and
+routing policy in one place instead of duplicating that logic into every service:
+
+```yaml
+# litellm_config.yaml
+model_list:
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: claude-sonnet
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+```bash
+litellm --config litellm_config.yaml
+```
+
+Once running, any service in your organization can call `http://localhost:4000` using
+the standard OpenAI SDK format, regardless of which underlying provider actually
+handles the request — the proxy exposes an OpenAI-compatible endpoint over any
+configured backend, so existing OpenAI-SDK-based code needs no changes, just a
+different `base_url`.
+
+## Caching identical requests
+
+LiteLLM supports response caching (in-memory, Redis, or other backends) keyed on
+request parameters, so identical repeated calls (common in development, testing, or
+workloads with repeated queries) skip the actual API call entirely:
+
+```python
+import litellm
+litellm.cache = litellm.Cache(type="redis", host="localhost", port=6379)
+
+response = completion(model="gpt-4o-mini", messages=messages, caching=True)
+```
+
+This is a meaningful cost lever for any workload with query repetition — common in
+demos, automated test suites hitting the same prompts repeatedly, and certain
+production patterns like FAQ-style bots.

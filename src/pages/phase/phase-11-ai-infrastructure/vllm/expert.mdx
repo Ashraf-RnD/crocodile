@@ -1,0 +1,81 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "vLLM"
+level: expert
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "vllm"
+estReadTime: 11
+resources:
+  - type: article
+    title: "Efficient Memory Management for Large Language Model Serving with PagedAttention"
+    url: "https://arxiv.org/abs/2309.06180"
+  - type: docs
+    title: "vLLM Documentation — Speculative Decoding"
+    url: "https://docs.vllm.ai/en/latest/features/spec_decode.html"
+---
+
+## What PagedAttention actually costs you
+
+PagedAttention isn't free — it trades a small amount of per-step overhead for large
+memory-efficiency gains. Because KV-cache blocks are non-contiguous, attention kernels
+must do an extra layer of indirection (a block table lookup) to gather the right
+blocks for each sequence, versus a single contiguous memory read in naive serving.
+vLLM's custom CUDA kernels keep this overhead small (a few percent of step time), but
+it's real — the win only pays off because the *memory* savings let you run a batch
+large enough that the throughput gain massively outweighs the per-step kernel cost.
+For workloads that are latency-bound with only 1-2 concurrent requests (not throughput
+bound), the memory-efficiency advantage matters far less.
+
+## Prefix caching: the other big lever
+
+Beyond PagedAttention, vLLM supports **automatic prefix caching**
+(`--enable-prefix-caching`): if two requests share an identical prompt prefix (a long
+system prompt, a shared few-shot example block), vLLM reuses the already-computed KV
+cache blocks for that prefix instead of recomputing them. This is the same underlying
+idea SGLang's RadixAttention formalizes as its central design — vLLM added it as a
+feature on top of PagedAttention rather than as the architecture's core organizing
+principle.
+
+## Speculative decoding for latency
+
+`--speculative-model` lets vLLM run a small "draft" model to propose several tokens
+ahead, which the large target model then verifies in a single forward pass — accepting
+correct guesses and only falling back to standard decoding on mismatches. This reduces
+per-token latency for workloads where output tends to be predictable (code completion,
+templated text), at the cost of extra GPU work for the draft model and gains that
+shrink for highly unpredictable generation.
+
+## Comparison: vLLM vs the other serving engines
+
+| Axis | vLLM | TensorRT-LLM | SGLang | Triton Inference Server |
+|---|---|---|---|---|
+| Ease of setup | High — pip install, single CLI command | Low — requires engine compilation per model/GPU | High — similar CLI ergonomics to vLLM | Medium — general-purpose, more config |
+| Raw throughput (large batch) | Very high | Highest on NVIDIA hardware (hand-tuned kernels) | Very high, especially with shared prefixes | Depends entirely on backend used |
+| KV-cache reuse | Prefix caching (added feature) | Limited/manual | RadixAttention (core architecture) | Backend-dependent |
+| Speculative decoding | Yes | Yes | Yes | Backend-dependent |
+| Hardware support | NVIDIA, AMD ROCm, Intel, TPU (growing) | NVIDIA only | NVIDIA primarily, AMD support growing | Any (it's a router over backends) |
+| Best fit | General-purpose production serving, fastest to deploy | Max raw performance on fixed NVIDIA fleet, worth the compile step | Workloads with heavy prompt/prefix reuse (agents, few-shot, chat) | Multi-model / multi-framework serving infra |
+
+## Where vLLM actually loses
+
+TensorRT-LLM, despite its much higher setup cost (ahead-of-time engine compilation
+tied to a specific GPU architecture and model shape), typically wins on raw
+tokens/sec/GPU for a fixed, well-known deployment — because it hand-fuses kernels and
+tunes for the exact hardware in a way a general Python-orchestrated server can't fully
+match. Teams pick TensorRT-LLM when they run one model at massive fixed scale on
+homogeneous NVIDIA hardware and the engineering cost of compilation/maintenance is
+worth an extra 10-20% throughput. vLLM wins when iteration speed matters — swapping
+models, adjusting flags, deploying same-day — which is most teams, most of the time.
+
+## GPU memory accounting in practice
+
+At startup, vLLM's memory profile is roughly: model weights (fixed, determined by
+parameter count and dtype) + activation memory (small, transient) + KV-cache pool
+(everything left over, scaled by `--gpu-memory-utilization`). A common production
+mistake is setting `--gpu-memory-utilization` too high on a shared or multi-process
+node — vLLM measures *free* memory at launch, so if another process later grows its
+own allocation, vLLM's pre-reserved block pool doesn't shrink to make room, and you'll
+hit OOM in the *other* process instead of getting a clean rejection from vLLM. In
+multi-tenant GPU nodes, leave real headroom (0.85-0.90, not 0.95+) rather than tuning
+for the theoretical maximum.

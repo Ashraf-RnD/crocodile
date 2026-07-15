@@ -1,0 +1,120 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "DBSCAN"
+level: intermediate
+phaseSlug: "phase-03-machine-learning"
+phaseName: "Machine Learning"
+topicSlug: "dbscan"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "scikit-learn: DBSCAN clustering"
+    url: "https://scikit-learn.org/stable/modules/clustering.html#dbscan"
+  - type: article
+    title: "DBSCAN original paper (Ester et al., 1996)"
+    url: "https://www.aaai.org/Papers/KDD/1996/KDD96-037.pdf"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Core, border, and noise points
+
+DBSCAN classifies every point relative to two parameters:
+
+- **`eps`** — the radius of a point's neighborhood.
+- **`min_samples`** — how many points (including itself) must fall within
+  that radius for the point to count as "dense."
+
+Given those, every point in the dataset gets one of three roles:
+
+- **Core point** — has at least `min_samples` points within `eps` of it.
+  Core points are the backbone of a cluster.
+- **Border point** — has fewer than `min_samples` neighbors itself, but
+  falls within `eps` of a core point. It joins that core point's cluster but
+  doesn't extend it further.
+- **Noise point** — not a core point and not within `eps` of any core point.
+  Labeled `-1` in scikit-learn's output.
+
+<Mermaid client:visible code={`flowchart TD
+  A[Point p] --> B{At least min_samples\npoints within eps?}
+  B -->|Yes| C[Core point]
+  B -->|No| D{Within eps of\na core point?}
+  D -->|Yes| E[Border point]
+  D -->|No| F[Noise point -1]
+  C --> G[Cluster grows by chaining\nreachable core points]`} />
+
+A cluster is formed by chaining together core points that are within `eps`
+of each other, then attaching any border points on the edges. Because
+clusters grow by following connected dense regions rather than distance to a
+single center, DBSCAN naturally traces **arbitrarily shaped** clusters
+(crescents, spirals, elongated blobs) that K-Means cannot, and it never
+forces a far-away point into a cluster — it just gets labeled noise.
+
+```python
+import numpy as np
+from sklearn.cluster import DBSCAN
+from sklearn.datasets import make_moons
+from sklearn.preprocessing import StandardScaler
+
+X, _ = make_moons(n_samples=300, noise=0.06, random_state=1)
+X = StandardScaler().fit_transform(X)  # DBSCAN is distance-based -- scale first
+
+db = DBSCAN(eps=0.3, min_samples=5)
+labels = db.fit_predict(X)
+
+core_mask = np.zeros(len(X), dtype=bool)
+core_mask[db.core_sample_indices_] = True
+
+n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+n_noise = list(labels).count(-1)
+print(f"clusters: {n_clusters}, noise points: {n_noise}")
+```
+
+## Choosing `eps` with a k-distance plot
+
+`min_samples` is usually set from domain knowledge or a rule of thumb
+(`min_samples >= dimensions + 1`, often `2 * dimensions` for noisy data).
+`eps` is harder to guess, so a standard technique is the **k-distance plot**:
+
+1. For each point, compute the distance to its `k`-th nearest neighbor
+   (`k = min_samples`).
+2. Sort those distances in ascending order and plot them.
+3. Look for the "elbow" — the point where distances start increasing
+   sharply. That distance is a reasonable `eps`: below it, points sit in
+   dense regions; above it, you're already reaching into sparser space.
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.neighbors import NearestNeighbors
+
+min_samples = 5
+neighbors = NearestNeighbors(n_neighbors=min_samples).fit(X)
+distances, _ = neighbors.kneighbors(X)
+
+k_distances = np.sort(distances[:, -1])  # distance to the k-th neighbor
+plt.plot(k_distances)
+plt.xlabel("points sorted by distance")
+plt.ylabel(f"distance to {min_samples}-th nearest neighbor")
+plt.title("k-distance plot -- eps ~= the elbow")
+plt.show()
+```
+
+## Common pitfalls
+
+- **`eps`/`min_samples` sensitivity.** Small changes can merge clusters that
+  should be separate or shatter one cluster into many. Always sanity-check
+  results across a small grid of values, not just one run.
+- **Varying density across clusters.** DBSCAN uses a single global `eps`.
+  If one cluster is tight and another is spread out, one `eps` value that
+  works for one will misclassify the other (either merging the sparse
+  cluster into noise, or merging two dense clusters together). This is
+  DBSCAN's biggest structural limitation — see the expert lesson for how
+  HDBSCAN addresses it.
+- **Unscaled features.** Because DBSCAN relies on a distance metric, a
+  feature on a 0-10000 scale will dominate one on a 0-1 scale. Always run
+  `StandardScaler` (or another appropriate scaler) before fitting, unless
+  your features are already on comparable scales.
+- **High-dimensional data.** As dimensionality grows, distances between
+  points become less discriminative (everything looks "far"), which makes
+  choosing a meaningful `eps` harder. Consider dimensionality reduction
+  first for high-dimensional inputs like embeddings.

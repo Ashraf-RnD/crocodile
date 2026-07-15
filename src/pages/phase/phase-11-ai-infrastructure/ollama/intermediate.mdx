@@ -1,0 +1,90 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Ollama"
+level: intermediate
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "ollama"
+estReadTime: 8
+resources:
+  - type: docs
+    title: "Ollama Documentation — Modelfile Reference"
+    url: "https://github.com/ollama/ollama/blob/main/docs/modelfile.md"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Model management: pull, list, run
+
+```bash
+ollama pull mistral:7b        # download without running
+ollama list                   # see what's stored locally
+ollama run mistral:7b "Summarize the plot of Hamlet in two sentences."
+ollama rm mistral:7b          # free disk space
+```
+
+Models are pulled by tag (`llama3.1:8b`, `llama3.1:70b`, `mistral:7b`) which lets you
+pick a specific size/quantization trade-off for your hardware without touching config
+files.
+
+## Customizing a model with a Modelfile
+
+The **Modelfile** is Ollama's equivalent of a Dockerfile — a declarative recipe for
+creating a customized model variant from a base model, without any fine-tuning:
+
+```dockerfile
+FROM llama3.1:8b
+
+# Sampling behavior
+PARAMETER temperature 0.3
+PARAMETER num_ctx 8192
+PARAMETER stop "<|eot_id|>"
+
+# Baked-in system prompt — every request to this model starts here
+SYSTEM """
+You are a terse code-review assistant. Point out bugs and security issues only.
+Do not comment on style unless asked.
+"""
+```
+
+```bash
+ollama create code-reviewer -f ./Modelfile
+ollama run code-reviewer "Review this function: def add(a,b): return a+b"
+```
+
+This is how teams package "personas" — a fixed system prompt plus tuned sampling
+params — as a reusable named model, shareable across a team without re-typing the
+system prompt in every client.
+
+## How models are stored: layers and manifests
+
+Ollama borrows Docker's content-addressable layer model. Pulling `llama3.1:8b`
+actually pulls several separate layers — the GGUF weights blob, a layer for the
+default parameters, a layer for the template/system prompt — tracked by a manifest
+file. Creating `code-reviewer` from `llama3.1:8b` via a Modelfile reuses the *same*
+underlying weights layer on disk and only adds new, small layers for your overrides —
+so customizing a model doesn't duplicate the multi-gigabyte weights file.
+
+<Mermaid client:visible code={`flowchart TB
+  W["Weights layer (GGUF, shared, several GB)"] --> M1["llama3.1:8b manifest"]
+  W --> M2["code-reviewer manifest"]
+  M2 --> P["+ custom PARAMETER layer"]
+  M2 --> S["+ custom SYSTEM layer"]`} />
+
+## Calling the API with conversation state
+
+The `/api/chat` endpoint (distinct from `/api/generate`) manages multi-turn message
+history the way OpenAI's chat API does:
+
+```bash
+curl http://localhost:11434/api/chat -d '{
+  "model": "code-reviewer",
+  "messages": [
+    {"role": "user", "content": "Review this function: def add(a,b): return a+b"}
+  ],
+  "stream": false
+}'
+```
+
+Set `"stream": true` (the default) to get incremental tokens back as newline-delimited
+JSON — the same pattern used by every production streaming chat UI, just running
+entirely on your own machine.

@@ -1,0 +1,89 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Poetry"
+level: beginner
+phaseSlug: "phase-01-python-for-ai"
+phaseName: "Python for AI"
+topicSlug: "poetry"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "Poetry — Official documentation"
+    url: "https://python-poetry.org/docs/"
+  - type: video
+    title: "Poetry Crash Course — ArjanCodes"
+    url: "https://www.youtube.com/watch?v=0f3moPe_bhk"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## pip installs packages; Poetry manages your whole project
+
+With plain pip, you juggle a virtual environment, a `requirements.txt`, and manual
+version pinning yourself. **Poetry** bundles all of that into one tool: it creates
+and manages the virtual environment for you, tracks your dependencies in one config
+file, and — critically — writes a **lock file** that pins the exact versions
+everyone on the project gets, automatically.
+
+```bash
+poetry new my-project      # scaffolds a new project with the right structure
+cd my-project
+poetry add numpy pandas    # adds + installs a dependency, updates config + lock file
+poetry install             # installs everything from an existing project (e.g. after cloning)
+poetry run python train.py # runs a command inside the project's virtual environment
+```
+
+You never manually run `python -m venv` or `activate` — Poetry creates and manages
+the environment behind the scenes.
+
+### `pyproject.toml`: the one file that describes your project
+
+```toml
+[tool.poetry]
+name = "my-project"
+version = "0.1.0"
+description = "A small ML project"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+numpy = "^1.26"
+pandas = "^2.2"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+```
+
+This single file replaces `requirements.txt`, `setup.py`, and manual version
+bookkeeping — everything about the project lives in one place.
+
+<Mermaid client:visible code={`flowchart LR
+  A["poetry add numpy"] --> B["Updates pyproject.toml"]
+  B --> C["Resolves full dependency tree"]
+  C --> D["Writes poetry.lock — exact pinned versions"]
+  D --> E["Installs into managed virtualenv"]`} />
+
+### The lock file is what makes it reproducible
+
+`poetry.lock` records the *exact* version of every package, including transitive
+dependencies, that was resolved. Commit it to git, and `poetry install` on any
+other machine installs precisely the same versions — no "works on my machine"
+surprises.
+
+## Try it yourself
+
+You're starting a new ML project that needs `scikit-learn`. What two Poetry
+commands take you from nothing to a working project with `scikit-learn` installed?
+
+<details>
+<summary>Solution</summary>
+
+```bash
+poetry new ml-project
+cd ml-project
+poetry add scikit-learn
+```
+
+`poetry add` both installs the package and records it (with a resolved, pinned
+version) in `pyproject.toml` and `poetry.lock`.
+
+</details>

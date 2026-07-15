@@ -1,0 +1,101 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "ChatGPT"
+level: intermediate
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "chatgpt"
+estReadTime: 9
+resources:
+  - type: article
+    title: "OpenAI Engineering — Scaling ChatGPT: Five Real-World Engineering Challenges"
+    url: "https://openai.com/index/scaling-chatgpt/"
+  - type: docs
+    title: "OpenAI Platform — Streaming API responses (SSE)"
+    url: "https://platform.openai.com/docs/api-reference/streaming"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## A realistic system design breakdown
+
+Treat ChatGPT as a layered system: **ingestion/auth**, **context assembly**,
+**generation**, and **serving/delivery**. The interesting engineering is
+mostly in how these layers talk to each other under load, not in any single
+box.
+
+<Mermaid client:visible code={`flowchart TB
+  Client["Browser / mobile / API client"] --> GW["API Gateway<br/>authn, rate limiting, request routing"]
+  GW --> Ctx["Context Assembly<br/>fetch conversation history, memory, tool results"]
+  Ctx --> Router["Model Router<br/>picks model tier, checks quota/plan"]
+  Router --> InSafety["Input moderation<br/>policy classifier"]
+  InSafety --> Inference["Inference cluster<br/>GPU pool running the LLM"]
+  Inference --> OutSafety["Streaming output moderation"]
+  OutSafety --> SSE["SSE / WebSocket stream back to client"]
+  Ctx -.-> Store[("Conversation store")]
+  Inference -.-> Store
+  Router -.-> Quota[("Usage / billing store")]`} />
+
+## Ingestion and context assembly
+
+Before the model ever runs, the request has to be turned into a prompt:
+
+- **Auth & rate limiting** happen at the gateway, keyed by user/API key, often
+  with a token-bucket limiter (see the "Rate Limiting" topic in this phase).
+- **Conversation history** is fetched from a datastore and truncated/
+  summarized to fit the model's context window — full history is rarely sent
+  verbatim once a conversation grows long.
+- **System prompt and tool definitions** (browsing, code execution, memory)
+  are injected around the user's actual message.
+- **Custom instructions / memory** (persistent user preferences) get merged
+  in, which is why ChatGPT can "remember" things across sessions even though
+  the model itself is stateless per request.
+
+## Generation and serving
+
+The inference cluster is a pool of GPU-backed model servers behind a load
+balancer that's aware of **which requests are still streaming** — this isn't
+a stateless HTTP load balancer, because a single conversation turn can hold a
+GPU-attached connection open for many seconds. Two details matter in
+practice:
+
+- **Batching**: many concurrent users' requests are processed together on the
+  same GPUs (continuous/dynamic batching) to keep utilization high, since a
+  single request rarely saturates a GPU's compute.
+- **Streaming delivery**: tokens are pushed to the client over Server-Sent
+  Events or a WebSocket as soon as they're generated, rather than waiting for
+  the full response — this is what makes time-to-first-token, not just total
+  latency, a first-class metric.
+
+```python
+# Simplified shape of a streaming chat endpoint
+async def chat_completion(request):
+    context = await assemble_context(request.conversation_id, request.message)
+    if not await input_moderation.check(context):
+        return reject("policy violation")
+
+    async for token in model.generate_stream(context):
+        if not await output_moderation.check_incremental(token):
+            yield "[response stopped by policy]"
+            break
+        yield token
+
+    await conversation_store.append(request.conversation_id, full_response)
+```
+
+## Model routing
+
+"ChatGPT" isn't one model — free-tier, Plus, and API traffic get routed to
+different model tiers/sizes, and requests can be routed to smaller/faster
+models for simple queries and larger models for complex ones. This routing
+decision happens before inference and is itself a cost/latency/quality
+trade-off, not just a plan-tier check.
+
+## Failure handling
+
+- If the safety classifier flags mid-stream output, the stream is cut and a
+  policy message is substituted — the response the model was generating is
+  discarded, which is wasted GPU work that has to be accounted for in
+  capacity planning.
+- If a model server crashes mid-stream, the client sees a truncated response;
+  well-behaved clients detect the dropped connection and can resume against
+  saved partial state rather than restarting the whole generation.

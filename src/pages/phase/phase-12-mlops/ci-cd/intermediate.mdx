@@ -1,0 +1,126 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "CI/CD"
+level: intermediate
+phaseSlug: "phase-12-mlops"
+phaseName: "MLOps"
+topicSlug: "ci-cd"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "GitHub Actions — Building and Testing Python"
+    url: "https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python"
+  - type: article
+    title: "CI/CD for Machine Learning (ml-ops.org)"
+    url: "https://ml-ops.org/content/end-to-end-ml-workflow"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## CT: Continuous Training as a third pipeline
+
+Standard CI/CD has two stages: integrate (test code) and deploy (ship it).
+ML systems need a third: **Continuous Training (CT)** — automatically
+retraining and validating a model when data or code changes, since a model
+can go stale even when no code changes at all.
+
+```yaml
+# .github/workflows/retrain.yml
+name: Continuous Training
+on:
+  schedule:
+    - cron: "0 3 * * 1"        # weekly retrain
+  workflow_dispatch: {}         # allow manual trigger too
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install -r requirements.txt
+      - name: Pull latest data
+        run: dvc pull
+      - name: Train
+        run: python train.py
+      - name: Evaluate against current production model
+        run: python evaluate_and_gate.py
+```
+
+<Mermaid client:visible code={`flowchart LR
+  A["Code change"] --> B["CI: unit tests + lint"]
+  C["New data available"] --> D["CT: scheduled retrain"]
+  B --> E["CD: deploy code"]
+  D --> F{"Beats production baseline?"}
+  F -->|yes| G["CD: promote + deploy model"]
+  F -->|no| H["Block promotion, alert team"]`} />
+
+## Gating deployment on model quality, not just tests passing
+
+A green CI pipeline (tests pass, code lints) says nothing about whether a
+newly trained model is actually *good*. Production ML pipelines add a
+model-quality gate before deployment:
+
+```python
+# evaluate_and_gate.py
+import mlflow, sys
+
+client = mlflow.MlflowClient()
+new_run = mlflow.active_run()
+new_metrics = mlflow.get_run(new_run.info.run_id).data.metrics
+
+prod_version = client.get_model_version_by_alias("fraud-detector", "production")
+prod_metrics = client.get_run(prod_version.run_id).data.metrics
+
+if new_metrics["f1_score"] < prod_metrics["f1_score"] - 0.01:
+    print("New model underperforms production — blocking deploy")
+    sys.exit(1)   # non-zero exit fails the CI job, blocking the next step
+
+print("New model passes quality gate")
+```
+
+Exiting non-zero here means the deployment job never runs — the same
+mechanism CI uses to block a merge on a failing unit test, applied to a
+model-quality regression instead of a code bug.
+
+## Testing data and pipelines, not just model code
+
+ML CI pipelines test more than function correctness — they validate data and
+pipeline behavior that traditional software CI has no equivalent for:
+
+```python
+# tests/test_data_quality.py
+import great_expectations as ge
+
+def test_no_nulls_in_critical_columns():
+    df = ge.read_csv("data/latest_batch.csv")
+    result = df.expect_column_values_to_not_be_null("user_id")
+    assert result["success"]
+
+def test_feature_distribution_within_range():
+    df = ge.read_csv("data/latest_batch.csv")
+    result = df.expect_column_mean_to_be_between("transaction_amount", min_value=0, max_value=10000)
+    assert result["success"]
+```
+
+Wiring this into CI means a pipeline breaks loudly on a bad data batch —
+before it ever reaches a training job — rather than silently training a
+model on corrupted or out-of-range data.
+
+## Deployment strategies for models specifically
+
+Because a model can be wrong in ways a code bug usually isn't (subtly worse
+predictions, not a crash), teams favor gradual rollout strategies over
+all-at-once deployment:
+
+- **Shadow deployment**: the new model runs alongside production, scoring
+  the same requests, but its predictions aren't served — only logged for
+  comparison
+- **Canary rollout**: the new model serves a small percentage of live
+  traffic (5%), with automated rollback if error rates or key business
+  metrics regress
+- **Blue/green**: two full environments, traffic switches atomically once
+  the new one is validated
+
+CI/CD pipelines for ML typically automate the *promotion* through these
+stages, but the actual traffic-shifting logic usually lives in the serving
+infrastructure (a service mesh, a feature-flag system) rather than the CI
+tool itself.

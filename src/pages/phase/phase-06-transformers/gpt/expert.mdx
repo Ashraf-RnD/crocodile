@@ -1,0 +1,101 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "GPT"
+level: expert
+phaseSlug: "phase-06-transformers"
+phaseName: "Transformers"
+topicSlug: "gpt"
+estReadTime: 12
+resources:
+  - type: article
+    title: "Scaling Laws for Neural Language Models"
+    url: "https://arxiv.org/abs/2001.08361"
+  - type: article
+    title: "Training language models to follow instructions with human feedback (InstructGPT)"
+    url: "https://arxiv.org/abs/2203.02155"
+---
+
+## Scaling laws: the finding that reshaped the field's priorities
+
+Kaplan et al. (2020) showed that GPT-style language model loss follows a remarkably
+smooth power-law relationship with model size, dataset size, and compute — largely
+independent of many specific architectural choices. This finding reoriented much of
+the field's research priorities: rather than searching for clever architectural
+tricks, a large fraction of subsequent progress came from scaling known-good
+architectures with more data and compute, guided by these power laws to predict
+optimal allocation between model size and data before spending the compute.
+
+**Chinchilla** (Hoffmann et al., 2022) refined this further, showing that many
+earlier large models (including the original GPT-3) were meaningfully
+**undertrained relative to their size** — for a fixed compute budget, a smaller
+model trained on more data often outperforms a larger model trained on less data.
+This directly changed how subsequent model families (LLaMA, and most open-weight
+models since) allocate compute: favoring more tokens per parameter rather than
+maximizing parameter count alone.
+
+## Emergent in-context learning: still not fully explained
+
+GPT-3's headline capability — solving new tasks from a handful of examples placed in
+the prompt, with no gradient updates — was not explicitly optimized for during
+pretraining, which is pure next-token prediction. The mechanistic explanation
+remains an active research area, but the leading account (partially supported by
+Anthropic's induction-head research) is that certain attention head circuits learned
+during pretraining implement a general "complete-the-pattern" computation that,
+scaled up, generalizes to genuinely novel in-context tasks. This matters practically:
+in-context learning quality is not something you can currently engineer directly —
+it's an emergent consequence of scale and data diversity, which is part of why
+prompt engineering remains empirical rather than fully principled.
+
+## From base model to assistant: SFT, RLHF, and DPO
+
+A raw pretrained GPT-style model completes text plausibly but has no notion of
+"being helpful" or "following instructions" — it will complete a question with more
+questions if that's statistically likely, rather than answering it. Turning a base
+model into an assistant requires additional stages:
+
+1. **Supervised fine-tuning (SFT)** — fine-tune on curated instruction/response
+   pairs to bias the model toward an assistant-like response format.
+2. **Reward modeling** — train a separate model to score response quality based on
+   human preference comparisons.
+3. **RLHF (PPO)** — use the reward model to further fine-tune the policy (the
+   assistant model) via reinforcement learning, optimizing for human-preferred
+   outputs.
+4. **DPO (Direct Preference Optimization)** — a more recent, simpler alternative
+   that optimizes directly on preference pairs without a separate reward model or
+   RL loop, achieving comparable alignment quality with substantially less
+   infrastructure complexity.
+
+This pipeline is why "GPT" as a research architecture and "ChatGPT-style assistant"
+as a product are distinct things — the architecture is necessary but nowhere near
+sufficient for the behavior users experience; alignment training contributes as much
+to the end product's usefulness as the base pretraining does.
+
+## Inference cost asymmetry: prefill vs. decode
+
+Serving a GPT-style model splits into two distinct compute regimes: **prefill**
+(processing the full prompt in one parallel forward pass — compute-bound, GPU-FLOP
+limited) and **decode** (generating each subsequent token one at a time — memory
+bandwidth-bound, limited by how fast the KV cache can be read, not by FLOPs
+available). This asymmetry is why serving frameworks (vLLM, TensorRT-LLM) treat
+prefill and decode as separate scheduling problems, and why techniques like
+speculative decoding specifically target the decode phase — prefill is already
+efficient by virtue of full parallelism, while decode's sequential nature is the
+actual latency bottleneck for long generations.
+
+## Trade-off summary
+
+| Design lever | Effect | Production relevance |
+|---|---|---|
+| Model size vs. data (Chinchilla-optimal ratio) | Fixed-compute quality ceiling | Guides pretraining budget allocation |
+| SFT only vs. SFT + RLHF/DPO | Instruction-following vs. genuinely preference-aligned behavior | Determines assistant quality, safety behavior |
+| Greedy vs. sampling decoding | Deterministic/precise vs. diverse/creative output | Task-dependent (code generation vs. creative writing) |
+| Full fine-tuning vs. LoRA/QLoRA | Maximum adaptation vs. memory-efficient adaptation | Determines feasible fine-tuning infra/cost |
+
+## The practical engineering takeaway
+
+Most of what makes a modern "GPT-style" product good — helpfulness, safety, format
+adherence — comes from post-pretraining alignment stages, not from the base
+next-token-prediction architecture itself. Understanding GPT purely as "a decoder
+stack trained on next-token prediction" explains its raw language modeling
+capability, but explains almost none of what distinguishes a well-aligned production
+assistant from a merely fluent, unaligned base model.

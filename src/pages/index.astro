@@ -1,0 +1,25 @@
+---
+import Base from "../layouts/Base.astro";
+import Sidebar from "../components/Sidebar.astro";
+import PhaseProgressBar from "../components/PhaseProgressBar.tsx";
+import nav from "../data/roadmap-nav.json";
+---
+<Base>
+  <div class="app-shell">
+    <Sidebar />
+    <main class="main" style="max-width: 1000px;">
+      <h1>{nav.title}</h1>
+      <p style="color: var(--text-muted);">Target role: {nav.targetRole}</p>
+
+      <div class="phase-grid">
+        {nav.phases.map((phase) => (
+          <div class="phase-card">
+            <h3><a href={`/phase/${phase.slug}/`}>{phase.id}. {phase.name}</a></h3>
+            {phase.objective && <p>{phase.objective}</p>}
+            <PhaseProgressBar client:visible phaseSlug={phase.slug} topicSlugs={phase.topics.map((t) => t.slug)} />
+          </div>
+        ))}
+      </div>
+    </main>
+  </div>
+</Base>

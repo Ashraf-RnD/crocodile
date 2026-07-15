@@ -1,0 +1,141 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Decision Trees"
+level: expert
+phaseSlug: "phase-03-machine-learning"
+phaseName: "Machine Learning"
+topicSlug: "decision-trees"
+estReadTime: 12
+resources:
+  - type: docs
+    title: "scikit-learn: Decision Trees — Algorithms (CART)"
+    url: "https://scikit-learn.org/stable/modules/tree.html#tree-algorithms-id3-c4-5-c5-0-and-cart"
+  - type: article
+    title: "Breiman et al., Classification and Regression Trees (CART)"
+    url: "https://www.routledge.com/Classification-and-Regression-Trees/Breiman-Friedman-Stone-Olshen/p/book/9780412048418"
+---
+
+## Expert: Decision Trees
+
+## Bias-variance framing
+
+A single decision tree, grown to reasonable depth, is a **low-bias, high-variance**
+estimator. It can represent arbitrarily complex, nonlinear, non-monotonic decision
+boundaries (low bias — it can fit almost anything given enough depth), but the exact
+structure it converges to is extremely sensitive to the training sample (high variance —
+a different draw from the same distribution produces a structurally different tree).
+
+This variance is not a footnote; it's the central fact that explains why trees are almost
+never deployed alone in production and why they are the default base learner for ensemble
+methods:
+
+- **Bagging (Random Forest)** averages many high-variance, low-bias trees trained on
+  bootstrap resamples with randomized feature subsets at each split. Averaging reduces
+  variance without increasing bias, because the trees' errors are decorrelated.
+- **Boosting (Gradient Boosted Trees, XGBoost, LightGBM)** goes the other direction:
+  it uses shallow, high-bias/low-variance trees (stumps or depth 3-6) and additively
+  reduces bias by fitting each new tree to the residual error of the ensemble so far.
+
+A tree's instability — the same property that looks like a weakness in isolation — is
+exactly the raw material ensembling needs: decorrelated, individually-plausible learners
+to average or boost.
+
+## Greedy, axis-aligned splitting is a heuristic, not an optimum
+
+CART (the algorithm scikit-learn implements) builds trees via **recursive binary
+splitting**: at each node it exhaustively searches every feature and every threshold for
+the single split that most reduces impurity *right now*, then commits to it and never
+reconsiders. Finding the globally optimal decision tree (minimizing total leaves or total
+misclassification for a fixed depth) is NP-hard, so every practical implementation —
+scikit-learn included — uses this greedy local-search heuristic.
+
+Practical implications:
+
+- **No lookahead.** A pair of features whose *interaction* is informative but whose
+  individual marginal splits look weak can be systematically missed, because the algorithm
+  never asks "what if I split on B first, then A?" — it only ever asks "what's the best
+  single split right now?" A different split order, or a non-greedy method (oblique trees,
+  exhaustive search, genetic approaches), could find a smaller and more accurate tree from
+  the same data.
+- **Axis-aligned boundaries only.** Every split is `feature_i <= threshold`, so decision
+  boundaries are unions of axis-aligned rectangles. A diagonal linear boundary needs many
+  small staircase splits to approximate, which costs depth and hurts sample efficiency.
+  This is a real disadvantage relative to linear models when the true boundary is close to
+  linear.
+- **Splits are threshold search, not distance computation.** Because the split rule only
+  compares a feature to a threshold, the specific split chosen is invariant to any
+  strictly monotonic transform of that feature — decision trees genuinely do not need
+  feature scaling or standardization, unlike distance-based or gradient-based models. But
+  monotonicity is not the same as irrelevance to structure: a poor discretization
+  (heavily skewed or heavy-tailed features) can still starve the greedy search of good
+  candidate thresholds early in training, indirectly affecting which interactions get
+  discovered later.
+- **Categorical handling and cardinality bias.** `feature_importances_` (impurity-based)
+  is biased toward high-cardinality and continuous features, since they offer more
+  candidate split points to search over — a feature can look "important" purely because it
+  gave the greedy search more chances to find a good threshold, not because it's causally
+  meaningful. Permutation importance (`sklearn.inspection.permutation_importance`) is a
+  more reliable alternative when this bias matters.
+
+```python
+from sklearn.inspection import permutation_importance
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.datasets import load_breast_cancer
+from sklearn.model_selection import train_test_split
+
+X, y = load_breast_cancer(return_X_y=True)
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.25, random_state=0, stratify=y
+)
+
+clf = DecisionTreeClassifier(max_depth=5, min_samples_leaf=10, random_state=0)
+clf.fit(X_train, y_train)
+
+result = permutation_importance(clf, X_test, y_test, n_repeats=20, random_state=0)
+# compare result.importances_mean against clf.feature_importances_ — they often disagree
+```
+
+## Trade-off summary
+
+| Property | Decision Tree | Random Forest | Gradient Boosted Trees | Linear Model |
+|---|---|---|---|---|
+| Bias | Low (deep tree) | Low | Very low (after boosting) | High (unless features engineered) |
+| Variance | High | Low (averaging decorrelated trees) | Moderate (controlled via learning rate/shrinkage) | Low |
+| Interpretability | High — single rule path per prediction, true "glass box" | Low — hundreds of trees, needs SHAP/importance summaries | Low — same as forest, needs SHAP | High — coefficients are directly interpretable |
+| Training cost | Low, single pass | Moderate, parallelizable across trees | Higher, sequential (trees depend on prior residuals) | Very low |
+| Handles nonlinearity/interactions | Yes, natively, but greedy/local | Yes, well, and more robustly than a single tree | Yes, typically best raw predictive accuracy of the three | No, needs manual feature engineering |
+| Sensitivity to small data changes | High (unstable splits) | Low (averaged out) | Moderate | Low |
+| Needs feature scaling | No | No | No | Usually yes (for regularized/gradient-based solvers) |
+
+## Production concerns
+
+**Interpretability as a regulatory asset.** In domains with explainability requirements
+(credit decisions, medical triage, some insurance underwriting), a shallow single decision
+tree is one of the few model families a regulator or auditor can read directly: each
+prediction traces to one path of human-readable conditions. Ensembles lose this — a
+500-tree random forest requires post-hoc explanation tools (SHAP, LIME) that approximate
+rather than reveal the actual decision logic. This is the main scenario where a standalone
+tree is chosen deliberately over a more accurate ensemble.
+
+**Instability under data perturbation is a production risk, not just a training-time
+curiosity.** Because the greedy search recomputes the "best" split from scratch, a single
+new training row — especially near an existing split boundary, or introducing a new
+extreme value — can change which feature is selected at or near the root, restructuring
+large parts of the tree below it. This matters for:
+
+- **Retraining pipelines** — two models trained on nearly identical data (e.g. one day of
+  new events) can produce meaningfully different rule structures, which breaks trust in
+  "the model changed for no reason" from stakeholders reading exported rules.
+- **Reproducibility debugging** — `random_state` alone doesn't fully explain drift between
+  two training runs if the underlying dataset shifted even slightly; look at the data diff
+  before assuming a bug in the training code.
+
+**Why trees are almost always base learners, not standalone, in production ML.** Given the
+variance problem above, the default engineering choice is: use a single tree only when
+interpretability is a hard requirement and accept the accuracy cost; otherwise, treat a
+decision tree as a building block (`n_estimators` trees in a forest, or successive stumps
+in a boosted ensemble) where the ensemble's aggregation is what actually delivers
+production-grade robustness. Libraries like scikit-learn's `RandomForestClassifier`,
+`GradientBoostingClassifier`, and external `xgboost`/`lightgbm`/`catboost` are the practical
+default; a bare `DecisionTreeClassifier` in production is the exception that needs
+justification, not the norm.

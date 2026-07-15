@@ -1,0 +1,99 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "SGLang"
+level: intermediate
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "sglang"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "SGLang Documentation — Structured Outputs"
+    url: "https://docs.sglang.ai/backend/structured_outputs.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Launching with production flags
+
+```bash
+python -m sglang.launch_server \
+  --model-path meta-llama/Llama-3.1-70B-Instruct \
+  --port 30000 \
+  --tp-size 4 \
+  --mem-fraction-static 0.85 \
+  --schedule-policy lpm
+```
+
+- `--tp-size 4` — tensor parallelism across 4 GPUs, same purpose as vLLM's
+  `--tensor-parallel-size`, needed when the model doesn't fit on one GPU.
+- `--mem-fraction-static 0.85` — fraction of GPU memory reserved up front for weights
+  plus the RadixAttention KV-cache pool.
+- `--schedule-policy lpm` — "longest prefix match" scheduling: SGLang can reorder the
+  request queue to group requests with shared prefixes together, maximizing cache hits
+  rather than serving strictly first-in-first-out.
+
+## The `sgl` frontend language for multi-step programs
+
+SGLang isn't just a server — it ships a Python-embedded DSL for writing programs that
+involve multiple LLM calls, branches, and constraints, where the *engine* understands
+the structure and can optimize execution (like caching the shared prefix across
+branches automatically):
+
+```python
+import sglang as sgl
+
+@sgl.function
+def multi_turn_qa(s, question):
+    s += sgl.system("You are a terse, factual assistant.")
+    s += sgl.user(question)
+    s += sgl.assistant(sgl.gen("answer", max_tokens=128))
+    s += sgl.user("Now give a one-sentence summary of that answer.")
+    s += sgl.assistant(sgl.gen("summary", max_tokens=32))
+
+state = multi_turn_qa.run(question="Why is the sky blue?")
+print(state["answer"], state["summary"])
+```
+
+Because `s` (the program state) threads through both generation calls, SGLang's
+runtime knows the second call's prompt shares a prefix with the first call's full
+context — and reuses that cached KV state instead of recomputing it, even within a
+single multi-step program.
+
+<Mermaid client:visible code={`flowchart LR
+  Sys["System prompt (cached)"] --> Q1["+ user question"]
+  Q1 --> A1["gen: answer"]
+  A1 --> Q2["+ summarize request (reuses cache up to here)"]
+  Q2 --> A2["gen: summary"]`} />
+
+## Constrained decoding for structured output
+
+A common production need: force the model's output to be valid JSON matching a schema,
+not just "probably JSON." SGLang supports this natively via grammar/schema-constrained
+decoding:
+
+```python
+import sglang as sgl
+from pydantic import BaseModel
+
+class Extraction(BaseModel):
+    name: str
+    order_id: int
+    is_urgent: bool
+
+@sgl.function
+def extract(s, ticket_text):
+    s += sgl.user(f"Extract fields from this support ticket: {ticket_text}")
+    s += sgl.assistant(sgl.gen("result", json_schema=Extraction.model_json_schema()))
+```
+
+Under the hood, SGLang restricts the token sampler at each step to only tokens that
+keep the output a valid continuation of the JSON schema — eliminating the
+"the model almost produced valid JSON but added a trailing comma" class of bugs
+entirely, rather than retrying on parse failure.
+
+## Where prefix reuse pays off in real deployments
+
+Agentic workflows — where a single user task triggers many LLM calls sharing a long,
+identical system/tool-definition prompt — are the textbook case where RadixAttention's
+automatic caching turns into a large, measurable throughput win versus a server with
+no prefix awareness, without any special-casing in your application code.

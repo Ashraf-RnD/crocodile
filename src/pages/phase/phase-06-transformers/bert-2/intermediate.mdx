@@ -1,0 +1,97 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "BERT"
+level: intermediate
+phaseSlug: "phase-06-transformers"
+phaseName: "Transformers"
+topicSlug: "bert-2"
+estReadTime: 9
+resources:
+  - type: article
+    title: "BERT: Pre-training of Deep Bidirectional Transformers (original paper)"
+    url: "https://arxiv.org/abs/1810.04805"
+  - type: docs
+    title: "Hugging Face — BERT model docs"
+    url: "https://huggingface.co/docs/transformers/en/model_doc/bert"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The paper's two pretraining objectives
+
+The BERT paper trains a single Transformer encoder on two simultaneous tasks:
+
+<Mermaid client:visible code={`flowchart TB
+  Corpus["Unlabeled text corpus (BooksCorpus + English Wikipedia)"] --> MLM["Masked Language Modeling: predict ~15% masked tokens"]
+  Corpus --> NSP["Next Sentence Prediction: is sentence B really next?"]
+  MLM --> Pretrain["Pretrained BERT checkpoint"]
+  NSP --> Pretrain
+  Pretrain --> FT1["Fine-tune: classification"]
+  Pretrain --> FT2["Fine-tune: NER"]
+  Pretrain --> FT3["Fine-tune: question answering"]`} />
+
+1. **Masked Language Modeling (MLM)** — 15% of input tokens are selected; of those,
+   80% become `[MASK]`, 10% are replaced with a random token, and 10% are left
+   unchanged. The model predicts the original token at every selected position using
+   bidirectional context.
+2. **Next Sentence Prediction (NSP)** — given sentence pairs, 50% are genuine
+   consecutive sentences from the corpus and 50% are a random pairing; the model
+   predicts which case it's looking at, using the `[CLS]` token's final
+   representation.
+
+## What the paper compared against, and by how much
+
+The paper's headline empirical result was a sweep across the **GLUE benchmark** (a
+suite of nine sentence-understanding tasks), **SQuAD** (extractive question
+answering), and **SWAG** (commonsense inference) — BERT-large improved GLUE's
+average score by several points over the prior best published results at the time,
+and pushed SQuAD 1.1 past human-level performance on the paper's leaderboard
+metric. Critically, the paper reports these as a **single pretrained checkpoint**
+fine-tuned separately per task with only a small task-specific output layer added —
+not per-task custom architectures, which was the norm before this paper.
+
+```python
+# Reproducing the paper's fine-tuning pattern for GLUE-style classification
+from transformers import BertTokenizer, BertForSequenceClassification
+import torch
+
+tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
+model = BertForSequenceClassification.from_pretrained("bert-base-uncased", num_labels=2)
+
+inputs = tokenizer("This movie was fantastic!", return_tensors="pt")
+with torch.no_grad():
+    logits = model(**inputs).logits
+print(torch.softmax(logits, dim=-1))
+```
+
+## The paper's ablation study: which pieces actually mattered
+
+A notable strength of the paper is its own ablation section, testing what happens if
+you remove NSP, or replace bidirectional MLM pretraining with a left-to-right-only
+objective while keeping everything else fixed. The paper's own results already
+showed NSP contributed less than MLM to downstream quality — a finding later
+confirmed and extended by RoBERTa (which dropped NSP entirely and still improved
+results through more data and compute). This is a useful case study in reading
+papers critically: even the introducing paper's own ablations sometimes foreshadow
+which design choices won't survive follow-up scrutiny.
+
+## Two model sizes, one clear scaling signal
+
+The paper releases both BERT-base (110M parameters, 12 layers) and BERT-large (340M
+parameters, 24 layers), and shows BERT-large consistently outperforms BERT-base
+across nearly every benchmark — an early, clear data point (predating the later
+formalized scaling laws literature) that simply scaling up an already-good
+architecture and pretraining recipe reliably improves downstream results.
+
+## Comparison to what came immediately before
+
+| | ELMo (2018) | GPT-1 (2018) | BERT (2018) |
+|---|---|---|---|
+| Context direction | Shallow bidirectional (concatenated separate LSTMs) | Left-to-right only | Deep, jointly bidirectional |
+| Base architecture | BiLSTM | Transformer decoder | Transformer encoder |
+| How it's used downstream | Frozen features fed into a task-specific model | Fine-tuned end-to-end | Fine-tuned end-to-end |
+| Bidirectionality mechanism | Two separate unidirectional LSTMs, concatenated | None | Masked language modeling |
+
+BERT's core architectural insight over GPT-1 (released the same year) was choosing
+an encoder and a masking-based objective specifically to enable *true* joint
+bidirectionality, rather than ELMo's shallower approach of just concatenating two
+independently-trained directional models.

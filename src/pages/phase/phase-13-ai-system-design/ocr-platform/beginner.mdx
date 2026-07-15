@@ -1,0 +1,76 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "OCR Platform"
+level: beginner
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "ocr-platform"
+estReadTime: 6
+resources:
+  - type: article
+    title: "AWS — What is Optical Character Recognition (OCR)?"
+    url: "https://aws.amazon.com/what-is/ocr/"
+  - type: docs
+    title: "Google Cloud Document AI — Overview"
+    url: "https://cloud.google.com/document-ai/docs/overview"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Turning a photo of text into actual text
+
+An OCR (Optical Character Recognition) platform takes an image — a scanned
+receipt, a photo of an ID card, a PDF invoice — and turns the text in it into
+structured data your software can actually use: strings, numbers, dates,
+fields with labels like "total" or "date of birth." The hard part isn't
+reading clean printed text (that's been mostly solved for decades); it's
+handling messy real-world input — a crumpled receipt, a blurry phone photo, a
+handwritten form, a table with merged cells.
+
+<Mermaid client:visible code={`flowchart LR
+  Upload["User uploads a photo/scan"] --> Preprocess["Clean up: deskew, denoise, crop"]
+  Preprocess --> Detect["Find where the text is on the page"]
+  Detect --> Recognize["Read the text in each region"]
+  Recognize --> Structure["Map text into fields<br/>e.g. 'total', 'date', 'vendor'"]
+  Structure --> Output["Structured data returned to the app"]`} />
+
+## Two very different sub-problems
+
+OCR is really two steps stacked together, and it helps to keep them separate
+in your head:
+
+1. **Text detection** — finding *where* on the page there's text at all
+   (drawing boxes around words or lines), independent of what the text says.
+2. **Text recognition** — reading what's actually written inside each of
+   those detected boxes.
+
+A document with tiny, rotated, or overlapping text can fail at detection
+before recognition even gets a chance — you can't read text you never found.
+
+## Why "structured" output matters more than raw text
+
+Getting a wall of raw text out of a receipt isn't that useful by itself — an
+app usually wants to know specifically "the total was $42.17" and "the date
+was March 3rd," not just that those characters appeared somewhere on the
+page. Modern OCR platforms add a layer on top of raw text recognition that
+maps recognized text to meaningful fields, often using the layout of the
+document itself as a clue (the number near the word "Total" is probably the
+total).
+
+## Try it yourself
+
+Why do you think a blurry phone photo of a receipt taken in a dark restaurant
+is harder for an OCR system than a flatbed scan of the same receipt?
+
+<details>
+<summary>Solution</summary>
+
+The photo has lower and less consistent image quality: motion blur, uneven
+lighting, shadows, and perspective distortion (the receipt isn't perfectly
+flat/aligned to the camera) all make individual characters harder to isolate
+and recognize correctly, whereas a flatbed scan produces a flat, evenly lit,
+high-resolution image. This is exactly why real OCR platforms invest heavily
+in the preprocessing step — deskewing, denoising, and correcting perspective
+— before recognition ever runs; better input quality reduces errors far more
+cheaply than trying to make the recognition model itself robust to every kind
+of bad photo.
+</details>

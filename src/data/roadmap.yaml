@@ -1,0 +1,329 @@
+roadmap:
+  title: AI Engineering Roadmap
+  target_role: Production AI Engineer
+  estimated_duration: "6-9 months (core), 12-18 months (advanced)"
+  prerequisites:
+    - Python
+    - Backend Engineering
+    - APIs
+    - Docker
+    - Cloud
+    - Linux
+
+  phases:
+    - id: 1
+      name: Python for AI
+      duration: 1 week
+      objective: Learn the Python ecosystem used in AI development.
+      topics:
+        - Python Advanced
+        - NumPy
+        - Pandas
+        - Matplotlib
+        - Jupyter Notebook
+        - uv
+        - pip
+        - Poetry
+      projects:
+        - Dataset analysis
+        - FastAPI AI service
+
+    - id: 2
+      name: Mathematics
+      duration: 2-3 weeks
+      objective: Learn only the math required for ML and DL.
+      topics:
+        linear_algebra:
+          - Vectors
+          - Matrices
+          - Matrix Multiplication
+          - Eigenvalues
+          - Eigenvectors
+        probability:
+          - Probability
+          - Conditional Probability
+          - Bayes Theorem
+          - Distributions
+        calculus:
+          - Derivatives
+          - Partial Derivatives
+          - Gradient Descent
+        optimization:
+          - SGD
+          - Momentum
+          - Adam
+      resources:
+        - 3Blue1Brown
+        - StatQuest
+
+    - id: 3
+      name: Machine Learning
+      duration: 3 weeks
+      framework: Scikit-learn
+      topics:
+        supervised_learning:
+          - Linear Regression
+          - Logistic Regression
+          - Decision Trees
+          - Random Forest
+          - XGBoost
+        unsupervised_learning:
+          - K-Means
+          - DBSCAN
+          - PCA
+        evaluation:
+          - Accuracy
+          - Precision
+          - Recall
+          - F1 Score
+          - ROC-AUC
+          - Confusion Matrix
+      projects:
+        - House Price Prediction
+        - Fraud Detection
+        - Customer Churn Prediction
+
+    - id: 4
+      name: Deep Learning
+      duration: 4 weeks
+      framework: PyTorch
+      topics:
+        fundamentals:
+          - Tensors
+          - GPU Computing
+          - Autograd
+          - Backpropagation
+        neural_networks:
+          - Dense Networks
+          - CNN
+          - RNN
+          - LSTM
+          - GRU
+        regularization:
+          - Batch Normalization
+          - Dropout
+      projects:
+        - MNIST Digit Classifier
+        - CIFAR-10 Image Classifier
+
+    - id: 5
+      name: Natural Language Processing
+      duration: 2 weeks
+      topics:
+        - Tokenization
+        - Text Cleaning
+        - Word2Vec
+        - FastText
+        - BPE
+        - Sentence Embeddings
+      libraries:
+        - Hugging Face Transformers
+        - spaCy
+      projects:
+        - Sentiment Analysis
+        - Text Classification
+
+    - id: 6
+      name: Transformers
+      duration: 3 weeks
+      topics:
+        - Attention
+        - Self-Attention
+        - Multi-Head Attention
+        - Positional Encoding
+        - Encoder
+        - Decoder
+        - BERT
+        - GPT
+        - T5
+      papers:
+        - Attention Is All You Need
+        - BERT
+        - GPT-2
+      projects:
+        - Fine-tune BERT
+
+    - id: 7
+      name: LLM Engineering
+      duration: 4 weeks
+      topics:
+        - Prompt Engineering
+        - Function Calling
+        - Structured Output
+        - Tool Calling
+        - MCP
+        - Memory
+        - Context Management
+        - AI Agents
+        - Multi-Agent Systems
+      frameworks:
+        - LangGraph
+        - LlamaIndex
+        - LangChain
+        - OpenAI SDK
+        - LiteLLM
+      projects:
+        - AI Coding Assistant
+        - Customer Support Bot
+        - Document Q&A
+
+    - id: 8
+      name: Retrieval-Augmented Generation
+      short_name: RAG
+      duration: 3 weeks
+      topics:
+        - Chunking
+        - Embeddings
+        - Retrieval
+        - Hybrid Search
+        - Re-ranking
+      vector_databases:
+        - Qdrant
+        - Milvus
+        - Weaviate
+        - pgvector
+      projects:
+        - Enterprise Knowledge Base
+        - PDF Chatbot
+        - Legal Document Search
+
+    - id: 9
+      name: Multimodal AI
+      duration: 3 weeks
+      vision:
+        - OCR
+        - PaddleOCR
+        - YOLO
+        - Segment Anything
+      speech:
+        - Whisper
+        - Gemini Speech
+        - ElevenLabs
+        - Kokoro TTS
+      image_generation:
+        - Stable Diffusion
+        - FLUX
+      projects:
+        - OCR API
+        - Voice Assistant
+        - Image Search Engine
+
+    - id: 10
+      name: Fine-tuning
+      duration: 2 weeks
+      topics:
+        - LoRA
+        - QLoRA
+        - PEFT
+        - Supervised Fine-Tuning
+        - RLHF Concepts
+        - DPO
+      tools:
+        - TRL
+        - Unsloth
+        - Axolotl
+      projects:
+        - Fine-tune Llama
+
+    - id: 11
+      name: AI Infrastructure
+      duration: 4 weeks
+      inference:
+        - vLLM
+        - SGLang
+        - Ollama
+        - TensorRT-LLM
+        - Triton Inference Server
+      deployment:
+        - FastAPI
+        - Docker
+        - Kubernetes
+        - Ray Serve
+      optimization:
+        - CUDA Basics
+        - Quantization
+        - GGUF
+        - GPTQ
+        - AWQ
+        - KV Cache
+      projects:
+        - Self-hosted LLM API
+        - High-throughput Inference Server
+
+    - id: 12
+      name: MLOps
+      duration: 3 weeks
+      tools:
+        - MLflow
+        - Weights & Biases
+        - DVC
+        - Airflow
+        - Kubeflow
+      topics:
+        - Experiment Tracking
+        - Model Registry
+        - Feature Store
+        - CI/CD
+        - Monitoring
+        - Drift Detection
+
+    - id: 13
+      name: AI System Design
+      duration: 3 weeks
+      case_studies:
+        - ChatGPT
+        - GitHub Copilot
+        - Perplexity
+        - Cursor
+        - OCR Platform
+        - Voice AI
+        - Multi-Agent Platform
+      focus:
+        - Scalability
+        - Streaming
+        - Caching
+        - Cost Optimization
+        - Rate Limiting
+        - Security
+        - Observability
+        - Multi-Region Deployment
+
+    - id: 14
+      name: Research Literacy
+      duration: Ongoing
+      papers:
+        - Attention Is All You Need
+        - BERT
+        - GPT-3
+        - LLaMA
+        - LoRA
+        - QLoRA
+        - RAG
+        - DPO
+        - Mixture of Experts
+        - DeepSeek-V3
+        - Kimi K2
+
+  portfolio:
+    - OCR Platform
+    - Voice Assistant
+    - Enterprise RAG System
+    - AI Code Reviewer
+    - Meeting Summarizer
+    - Resume Screening System
+    - Vision Document Processor
+    - Multi-Agent Platform
+    - Self-hosted LLM Cluster
+    - AI Observability Dashboard
+
+  recommended_path_for_backend_engineers:
+    - PyTorch
+    - Transformers
+    - Hugging Face
+    - LLM Engineering
+    - RAG
+    - AI Agents
+    - Multimodal AI
+    - AI Infrastructure
+    - MLOps
+    - Fine-tuning

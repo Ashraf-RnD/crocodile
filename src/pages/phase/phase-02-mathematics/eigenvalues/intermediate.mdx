@@ -1,0 +1,64 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Eigenvalues"
+level: intermediate
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "eigenvalues"
+estReadTime: 8
+resources:
+  - type: docs
+    title: "NumPy — linalg.eig / linalg.eigh"
+    url: "https://numpy.org/doc/stable/reference/generated/numpy.linalg.eig.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Eigendecomposition
+
+Any diagonalizable matrix `A` can be rewritten as `A = V Λ V⁻¹`, where `V`'s columns
+are the eigenvectors and `Λ` is a diagonal matrix of eigenvalues. This decomposition
+is why "which directions matter, and by how much" is a well-posed question for any
+square matrix — it separates a transformation into pure directions and pure scaling.
+
+<Mermaid client:visible code={`flowchart LR
+  A["Matrix A"] --> D["A = V · Λ · V⁻¹"]
+  D --> V1["V: eigenvector directions"]
+  D --> V2["Λ: eigenvalue scaling factors"]`} />
+
+```python
+import numpy as np
+A = np.array([[4, 1],
+              [2, 3]])
+eigenvalues, V = np.linalg.eig(A)
+Lambda = np.diag(eigenvalues)
+reconstructed = V @ Lambda @ np.linalg.inv(V)
+print(np.allclose(A, reconstructed))  # True
+```
+
+## PCA: eigenvalues of the covariance matrix
+
+Principal Component Analysis computes the covariance matrix of your (centered) data,
+then finds its eigenvectors and eigenvalues. The eigenvector with the largest
+eigenvalue is the direction of maximum variance — the first principal component.
+Sorting eigenvalues descending and keeping the top-k eigenvectors is literally how you
+reduce a 768-dimension embedding to, say, 2 dimensions for visualization.
+
+```python
+X = X - X.mean(axis=0)              # center the data
+cov = np.cov(X, rowvar=False)        # covariance matrix
+eigvals, eigvecs = np.linalg.eigh(cov)  # eigh: for symmetric matrices
+top_k = eigvecs[:, -2:]               # top 2 eigenvectors (largest eigenvalues last)
+X_reduced = X @ top_k                  # project data into 2D
+```
+
+Note `eigh` instead of `eig` — covariance matrices are always symmetric, and `eigh`
+is faster and numerically more stable for that special case.
+
+## Eigenvalues tell you about stability
+
+For iterative processes (`x_{t+1} = A x_t`, similar in spirit to some RNN dynamics),
+whether the process converges, explodes, or oscillates is determined entirely by
+whether the eigenvalues of `A` have magnitude less than, greater than, or equal to 1.
+This is one of the underlying reasons vanilla RNNs suffer from vanishing/exploding
+gradients — the repeated matrix multiplication compounds eigenvalue effects across
+time steps.

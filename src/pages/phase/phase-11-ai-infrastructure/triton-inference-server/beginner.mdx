@@ -1,0 +1,81 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Triton Inference Server"
+level: beginner
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "triton-inference-server"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "NVIDIA Triton Inference Server — Documentation"
+    url: "https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/index.html"
+---
+
+## A model server vs a bespoke API
+
+If you've built a FastAPI app that loads a model and exposes a `/predict` endpoint,
+you've built the simplest possible "model server" — and you've also signed up to
+hand-build everything a production serving system needs: batching requests together
+for GPU efficiency, handling multiple model versions, exposing metrics, and supporting
+whatever framework each new model happens to use (PyTorch today, ONNX tomorrow).
+
+**Triton Inference Server** (from NVIDIA) is a general-purpose server that does this
+for you. You don't write inference code — you drop a trained model into a specific
+directory layout with a small config file, point Triton at it, and it exposes
+HTTP/gRPC endpoints, batches incoming requests automatically, and can serve many
+models — even from different frameworks — side by side in one process.
+
+## Why not just keep writing FastAPI apps?
+
+A hand-rolled FastAPI server works fine for one model, low traffic, and no need to
+combine multiple frameworks. It starts to hurt once you have: several models each in
+a different framework (PyTorch, ONNX, TensorRT), a need for automatic request
+batching to use the GPU efficiently, or multiple teams each shipping models that all
+need consistent monitoring and versioning. Triton solves those as platform features
+you configure, rather than application code you write and maintain per model.
+
+## The basic mental model
+
+```
+model_repository/
+└── my_classifier/
+    ├── config.pbtxt        # how to run this model: inputs, outputs, batching
+    └── 1/                  # version 1 of the model
+        └── model.onnx      # the actual model file
+```
+
+You start Triton pointed at `model_repository/`, and it loads every model it finds,
+each becoming an independently callable endpoint — no per-model server code required.
+
+```bash
+docker run --gpus all --rm -p 8000:8000 -p 8001:8001 \
+  -v $(pwd)/model_repository:/models \
+  nvcr.io/nvidia/tritonserver:24.09-py3 \
+  tritonserver --model-repository=/models
+```
+
+```python
+import requests
+
+resp = requests.post(
+    "http://localhost:8000/v2/models/my_classifier/infer",
+    json={"inputs": [{"name": "INPUT", "shape": [1, 10], "datatype": "FP32", "data": [0.1] * 10}]},
+)
+print(resp.json())
+```
+
+## Try it yourself
+
+You have three models built with three different frameworks (PyTorch, ONNX,
+TensorRT) and want them all served from one place with consistent monitoring. What's
+the downside of instead writing three separate FastAPI apps, one per framework?
+
+<details>
+<summary>Solution</summary>
+
+You'd maintain three separate serving codebases, each needing its own batching logic,
+health checks, metrics, and versioning setup — and none of that logic is reusable
+across them since each framework has different inference APIs. Triton's whole premise
+is collapsing that into one server with per-model *config*, not per-model *code*.
+</details>

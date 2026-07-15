@@ -1,0 +1,96 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "GPT-2"
+level: intermediate
+phaseSlug: "phase-06-transformers"
+phaseName: "Transformers"
+topicSlug: "gpt-2"
+estReadTime: 9
+resources:
+  - type: article
+    title: "Language Models are Unsupervised Multitask Learners (GPT-2 paper)"
+    url: "https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf"
+  - type: docs
+    title: "Hugging Face — GPT2LMHeadModel"
+    url: "https://huggingface.co/docs/transformers/en/model_doc/gpt2"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## What actually changed from GPT-1 to GPT-2
+
+The architecture change between GPT-1 and GPT-2 is smaller than most people assume
+— the paper's real contribution is scale plus a few specific stabilizing tweaks:
+
+<Mermaid client:visible code={`flowchart LR
+  GPT1["GPT-1: 117M params, BookCorpus, post-LN"] --> Changes["Move LayerNorm to input of each sublayer (pre-LN); add final LayerNorm; larger vocabulary; scale up 10x"]
+  Changes --> GPT2["GPT-2: up to 1.5B params, WebText, pre-LN"]
+  GPT2 --> Result["Strong zero-shot performance across many tasks, no fine-tuning"]`} />
+
+- **Pre-LN instead of post-LN** — moving LayerNorm to the input of each sublayer
+  (rather than after the residual addition) improved training stability at the
+  larger scales the paper targeted, a change later adopted as the near-universal
+  default across the field.
+- **An additional LayerNorm after the final self-attention block** — added to keep
+  the final residual stream well-scaled before the language modeling head.
+- **Modified weight initialization** that accounts for the accumulation effect of
+  residual connections across depth, scaling initialization by `1/sqrt(N)` where `N`
+  is the number of layers.
+- **A larger vocabulary** (~50,257 tokens via byte-level BPE) and **larger context
+  window** (1024 tokens, up from 512).
+- **Scale**: four model sizes were released, from 117M (same as GPT-1) up to 1.5B
+  parameters — at the time, notably large for a publicly discussed language model.
+
+None of these are radical architectural departures — the paper's real experiment is
+"take a known-good recipe, scale it up substantially, and evaluate zero-shot
+transfer rigorously across many benchmark types," which is a different kind of
+contribution than introducing a new mechanism.
+
+## Reproducing the paper's zero-shot evaluation pattern
+
+```python
+from transformers import GPT2LMHeadModel, GPT2Tokenizer
+import torch
+
+tokenizer = GPT2Tokenizer.from_pretrained("gpt2-medium")
+model = GPT2LMHeadModel.from_pretrained("gpt2-medium")
+model.eval()
+
+# Zero-shot summarization, exactly as evaluated in the paper —
+# appending "TL;DR:" as an implicit instruction, without any fine-tuning
+article = "Scientists have discovered a new species of frog in the Amazon rainforest..."
+prompt = article + "\nTL;DR:"
+
+inputs = tokenizer(prompt, return_tensors="pt")
+with torch.no_grad():
+    output_ids = model.generate(**inputs, max_new_tokens=30, do_sample=False)
+print(tokenizer.decode(output_ids[0][inputs["input_ids"].shape[1]:]))
+```
+
+The `"TL;DR:"` trick is directly from the paper — the authors found that appending
+this specific string (which appears naturally before human-written summaries all
+over the internet) elicits reasonable zero-shot summarization behavior, without
+any explicit summarization training or fine-tuning.
+
+## The staged release: a genuinely new kind of decision for the field
+
+Unusually for a research paper at the time, OpenAI did not release the full 1.5B
+parameter model immediately, citing concerns about potential misuse for generating
+convincing fake text (disinformation, spam, impersonation). Instead, they released
+progressively larger checkpoints (117M, then 345M, then 762M) over several months
+while studying misuse potential, before eventually releasing the full model. This
+staged-release approach was controversial within the research community at the time
+— some viewed it as responsible, others as generating hype disproportionate to the
+actual model's capability — but it set an early precedent for treating language
+model releases as a topic requiring deliberate safety consideration, a practice that
+became standard for subsequent frontier model releases across the industry.
+
+## Benchmark results the paper reported
+
+The paper evaluates GPT-2 zero-shot across reading comprehension (CoQA), translation,
+summarization (CNN/DailyMail), and question answering, comparing against models
+specifically trained/fine-tuned for each task. GPT-2 didn't beat dedicated
+fine-tuned state-of-the-art systems on most of these tasks — the point wasn't
+"GPT-2 is the best summarizer," it was "a single model trained on nothing but raw
+text prediction shows non-trivial zero-shot competence at tasks it was never
+explicitly trained on," which was a meaningfully different and more surprising
+result than raw benchmark supremacy.

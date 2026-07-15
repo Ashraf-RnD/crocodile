@@ -1,0 +1,107 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Matplotlib"
+level: expert
+phaseSlug: "phase-01-python-for-ai"
+phaseName: "Python for AI"
+topicSlug: "matplotlib"
+estReadTime: 11
+resources:
+  - type: docs
+    title: "Matplotlib — Backends explained"
+    url: "https://matplotlib.org/stable/users/explain/figure/backends.html"
+  - type: article
+    title: "Matplotlib — Performance tips for large datasets"
+    url: "https://matplotlib.org/stable/users/explain/performance.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Backends: why headless servers need `Agg`
+
+Matplotlib separates *what* to draw from *how to render it* via a **backend**.
+Interactive backends (`Qt5Agg`, `TkAgg`, `MacOSX`) need a display; the non-interactive
+`Agg` backend rasterizes straight to a file with no display dependency at all. On a
+remote training server or in a CI pipeline (no X server, no display), importing
+matplotlib without forcing `Agg` first can crash or silently hang.
+
+```python
+import matplotlib
+matplotlib.use("Agg")   # must happen before importing pyplot
+import matplotlib.pyplot as plt
+
+fig, ax = plt.subplots()
+ax.plot([1, 2, 3], [4, 5, 6])
+fig.savefig("output.png")   # works headless — no display required
+```
+
+In practice, most training scripts set `MPLBACKEND=Agg` as an environment variable
+rather than calling `matplotlib.use()` in code, since it needs to happen before any
+other module imports `pyplot` — a common bug is some third-party import pulling in
+`pyplot` first and locking in an interactive backend before your own `use()` call
+runs.
+
+<Mermaid client:visible code={`flowchart TB
+  Env["Headless server / CI / Docker"] --> Check{"Display available?"}
+  Check -->|No| Agg["Backend: Agg — rasterize to file"]
+  Check -->|Yes, notebook| Inline["Backend: inline / interactive"]
+  Agg --> Save["fig.savefig()"]
+  Inline --> Show["plt.show()"]`} />
+
+## Memory: closing figures in loops
+
+Every `plt.subplots()` or `plt.figure()` call keeps the figure alive in Matplotlib's
+internal state (`pyplot`'s global figure manager) until explicitly closed. In a loop
+that generates many plots — e.g. saving one visualization per epoch, or per item in
+a large evaluation set — this leaks memory steadily until the process is killed.
+
+```python
+# Leaks memory: each fig stays registered with pyplot's global state
+for i in range(1000):
+    fig, ax = plt.subplots()
+    ax.plot(data[i])
+    fig.savefig(f"plot_{i}.png")
+    # fig is never released
+
+# Correct: close explicitly after saving
+for i in range(1000):
+    fig, ax = plt.subplots()
+    ax.plot(data[i])
+    fig.savefig(f"plot_{i}.png")
+    plt.close(fig)
+```
+
+`plt.close(fig)` (or `plt.close("all")`) is mandatory in any batch-generation loop —
+this is a very common cause of OOM kills in long-running evaluation scripts that
+save one diagnostic plot per example.
+
+## Rendering performance on large datasets
+
+Plotting millions of points with the default vector renderer is slow and produces
+enormous, sluggish output files (each point is a separate vector primitive).
+
+```python
+# Slow + huge file: every one of 1M points is a vector object
+ax.scatter(x_million_points, y_million_points, s=1)
+
+# Faster: rasterize just this artist's layer, keep axes/text as vector
+ax.scatter(x_million_points, y_million_points, s=1, rasterized=True)
+
+# Or better for genuinely dense data: 2D histogram / density instead of raw scatter
+ax.hexbin(x_million_points, y_million_points, gridsize=50, cmap="viridis")
+```
+
+`rasterized=True` converts just that one artist to a bitmap inside an otherwise
+vector (e.g. PDF/SVG) output — you keep crisp vector text and axes but avoid
+choking the renderer (and the file size) on millions of individual point objects.
+For genuinely large point clouds, switching from `scatter` to `hexbin`/`hist2d`
+(a density estimate) is usually the right call entirely, both for speed and for
+actually being readable.
+
+## Trade-off summary
+
+| Decision | Gains | Costs |
+|---|---|---|
+| `Agg` backend on servers/CI | Headless-safe, no display crash | No interactive zoom/pan |
+| `plt.close(fig)` after each plot | Prevents memory leak in loops | One extra line to remember every time |
+| `rasterized=True` on dense artists | Much smaller files, faster render | Rasterized layer loses vector crispness when zoomed |
+| `hexbin`/`hist2d` over raw `scatter` | Readable and fast on millions of points | Loses per-point precision |

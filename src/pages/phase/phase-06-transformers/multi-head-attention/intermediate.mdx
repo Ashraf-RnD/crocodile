@@ -1,0 +1,104 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Multi-Head Attention"
+level: intermediate
+phaseSlug: "phase-06-transformers"
+phaseName: "Transformers"
+topicSlug: "multi-head-attention"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "PyTorch — torch.nn.MultiheadAttention"
+    url: "https://pytorch.org/docs/stable/generated/torch.nn.MultiheadAttention.html"
+  - type: article
+    title: "The Annotated Transformer (Harvard NLP)"
+    url: "https://nlp.seas.harvard.edu/annotated-transformer/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Implementing multi-head attention from scratch
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class MultiHeadAttention(nn.Module):
+    def __init__(self, d_model, num_heads, causal=False):
+        super().__init__()
+        assert d_model % num_heads == 0
+        self.num_heads = num_heads
+        self.d_head = d_model // num_heads
+        self.causal = causal
+
+        self.qkv_proj = nn.Linear(d_model, 3 * d_model)
+        self.out_proj = nn.Linear(d_model, d_model)
+
+    def forward(self, x):
+        batch, seq_len, d_model = x.shape
+        qkv = self.qkv_proj(x)                         # (batch, seq, 3*d_model)
+        q, k, v = qkv.chunk(3, dim=-1)
+
+        # split d_model into (num_heads, d_head) and move heads to their own dim
+        def split_heads(t):
+            return t.view(batch, seq_len, self.num_heads, self.d_head).transpose(1, 2)
+
+        q, k, v = split_heads(q), split_heads(k), split_heads(v)
+        # shapes now: (batch, num_heads, seq_len, d_head)
+
+        attn_out = F.scaled_dot_product_attention(q, k, v, is_causal=self.causal)
+
+        # merge heads back
+        attn_out = attn_out.transpose(1, 2).contiguous().view(batch, seq_len, d_model)
+        return self.out_proj(attn_out)
+
+mha = MultiHeadAttention(d_model=512, num_heads=8)
+x = torch.randn(2, 10, 512)
+out = mha(x)
+print(out.shape)  # torch.Size([2, 10, 512])
+```
+
+In practice you'll usually reach for the built-in layer instead of hand-rolling this:
+
+```python
+mha = nn.MultiheadAttention(embed_dim=512, num_heads=8, batch_first=True)
+out, attn_weights = mha(x, x, x, need_weights=True, average_attn_weights=False)
+# attn_weights: (batch, num_heads, seq_len, seq_len) — one weight matrix per head
+```
+
+<Mermaid client:visible code={`flowchart LR
+  X["Input X"] --> Split["Project to Q,K,V then split into H heads"]
+  Split --> H1["Head 1 attention"]
+  Split --> H2["Head 2 attention"]
+  Split --> H3["... Head H attention"]
+  H1 --> Concat["Concatenate all heads"]
+  H2 --> Concat
+  H3 --> Concat
+  Concat --> Proj["Output projection W_o"]`} />
+
+## What heads actually learn in practice
+
+Interpretability studies on trained models (e.g. BERT) consistently find heads that
+specialize:
+
+- Some heads attend almost entirely to the **next or previous token** (local
+  positional patterns).
+- Some heads track **syntactic dependencies** (verb ↔ its subject/object).
+- Some heads implement **coreference-like** behavior (pronoun ↔ its antecedent).
+- Some heads are largely redundant — pruning studies (Michel et al., "Are Sixteen
+  Heads Really Better than One?") show many heads can be removed post-training with
+  minimal accuracy loss, meaning the model doesn't always use its full head capacity.
+
+This is why multi-head attention isn't just "more parameters" — it's specifically
+structured so the model *can* learn diverse relationship types simultaneously, even
+though not every head ends up being equally useful.
+
+## Where this shows up in production
+
+Every major Transformer-based model (BERT, GPT, T5, LLaMA) uses multi-head attention
+as the standard building block for every attention sublayer. What varies in modern
+LLMs is not *whether* to use multiple heads but *how key/value heads are shared*:
+standard multi-head attention gives every query head its own key/value head, while
+**Grouped-Query Attention** (used in LLaMA 2/3, Mistral) shares key/value heads
+across groups of query heads to cut the KV cache size — a memory optimization
+covered in more depth at the expert level.

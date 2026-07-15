@@ -1,0 +1,64 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Kokoro TTS"
+level: beginner
+phaseSlug: "phase-09-multimodal-ai"
+phaseName: "Multimodal AI"
+topicSlug: "kokoro-tts"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "Kokoro-82M on Hugging Face"
+    url: "https://huggingface.co/hexgrad/Kokoro-82M"
+  - type: docs
+    title: "Kokoro GitHub repository"
+    url: "https://github.com/hexgrad/kokoro"
+---
+
+## A TTS model small enough to run yourself
+
+Most high-quality text-to-speech is a cloud API call away — you send text, pay per
+character, get audio back. **Kokoro** is different: it's a small (82M parameter),
+open-weight TTS model you can download and run entirely on your own machine, with
+surprisingly good voice quality for its size.
+
+Think of it as a compact voice engine you keep in your own toolbox instead of renting
+one — no internet connection or per-character billing required once it's downloaded.
+
+### Your first local speech generation
+
+```python
+from kokoro import KPipeline
+import soundfile as sf
+
+pipeline = KPipeline(lang_code="a")  # "a" = American English
+
+generator = pipeline("Hello, this is Kokoro speaking.", voice="af_heart")
+
+for i, (graphemes, phonemes, audio) in enumerate(generator):
+    sf.write(f"output_{i}.wav", audio, 24000)
+```
+
+That's it — no API key, no network call. `voice="af_heart"` selects one of Kokoro's
+built-in voice packs (it ships several, covering different accents and genders).
+
+## Try it yourself
+
+Kokoro supports multiple languages via `lang_code`. Look up how to generate speech in
+British English instead of American English.
+
+<details>
+<summary>Solution</summary>
+
+```python
+pipeline = KPipeline(lang_code="b")  # "b" = British English
+generator = pipeline("Hello, this is Kokoro speaking.", voice="bf_emma")
+
+for i, (graphemes, phonemes, audio) in enumerate(generator):
+    sf.write(f"output_{i}.wav", audio, 24000)
+```
+
+Changing `lang_code` (and picking a matching voice pack) switches both the phoneme
+model and available voices.
+
+</details>

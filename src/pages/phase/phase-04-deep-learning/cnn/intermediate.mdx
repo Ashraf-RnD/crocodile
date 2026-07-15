@@ -1,0 +1,92 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "CNN"
+level: intermediate
+phaseSlug: "phase-04-deep-learning"
+phaseName: "Deep Learning"
+topicSlug: "cnn"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "PyTorch — torchvision.models (pretrained CNNs)"
+    url: "https://pytorch.org/vision/stable/models.html"
+  - type: docs
+    title: "CS231n — Convolutional Neural Networks"
+    url: "https://cs231n.github.io/convolutional-networks/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## A real CNN architecture
+
+Production CNNs interleave convolution, activation, and pooling, then flatten into
+dense layers for the final classification:
+
+```python
+import torch.nn as nn
+
+class SimpleCNN(nn.Module):
+    def __init__(self, num_classes=10):
+        super().__init__()
+        self.features = nn.Sequential(
+            nn.Conv2d(3, 32, kernel_size=3, padding=1), nn.ReLU(),
+            nn.MaxPool2d(2),                                    # 32x32 -> 16x16
+            nn.Conv2d(32, 64, kernel_size=3, padding=1), nn.ReLU(),
+            nn.MaxPool2d(2),                                    # 16x16 -> 8x8
+        )
+        self.classifier = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(64 * 8 * 8, 128), nn.ReLU(),
+            nn.Linear(128, num_classes),
+        )
+
+    def forward(self, x):
+        x = self.features(x)
+        return self.classifier(x)
+```
+
+<Mermaid client:visible code={`flowchart LR
+  Img["Image (3, 32, 32)"] --> C1["Conv 3->32 + ReLU"]
+  C1 --> P1["MaxPool /2 -> (32, 16, 16)"]
+  P1 --> C2["Conv 32->64 + ReLU"]
+  C2 --> P2["MaxPool /2 -> (64, 8, 8)"]
+  P2 --> Flat["Flatten -> Linear -> logits"]`} />
+
+## Stride and padding control output size
+
+`padding` keeps spatial dimensions unchanged when `kernel_size=3` and `padding=1`;
+`stride` skips positions to downsample directly inside the convolution instead of a
+separate pooling layer — many modern architectures (ResNet) use strided convolutions
+instead of `MaxPool` for this reason:
+
+```python
+downsample_conv = nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1)
+```
+
+## Transfer learning: reusing pretrained CNNs
+
+Training a CNN from scratch needs a lot of labeled data. In practice, most computer
+vision work starts from a model pretrained on ImageNet and fine-tunes only the last
+layers — the early layers already learned generic features (edges, textures) that
+transfer across almost any vision task:
+
+```python
+import torchvision.models as models
+
+model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+
+for param in model.parameters():
+    param.requires_grad = False   # freeze pretrained feature extractor
+
+model.fc = nn.Linear(model.fc.in_features, num_classes=5)  # replace the head
+# only model.fc's parameters will be updated during training
+```
+
+This pattern — freeze the backbone, retrain a small new head — is the default
+starting point for almost any image classification task with limited data, and is
+far cheaper than training a CNN from random initialization.
+
+## Batch normalization is nearly always present
+
+Real CNNs place `BatchNorm2d` after each convolution and before the activation,
+stabilizing training and allowing higher learning rates — its absence in a modern
+CNN architecture is unusual enough to be worth noticing.

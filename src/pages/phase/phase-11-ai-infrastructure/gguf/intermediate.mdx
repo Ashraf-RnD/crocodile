@@ -1,0 +1,89 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "GGUF"
+level: intermediate
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "gguf"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "llama.cpp — GGUF format documentation"
+    url: "https://github.com/ggml-org/llama.cpp/blob/master/docs/gguf.md"
+  - type: docs
+    title: "llama.cpp — quantize tool README"
+    url: "https://github.com/ggml-org/llama.cpp/tree/master/tools/quantize"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Decoding the naming scheme
+
+GGUF quantization names look cryptic but follow a consistent pattern, e.g.
+`Q4_K_M`:
+
+- **`Q4`** — roughly 4 bits per weight on average (some tensors, like embeddings
+  or output layers, are often kept at higher precision even in a "Q4" file)
+- **`K`** — uses the "k-quant" method (`_K` suffix), which quantizes in blocks
+  with mixed precision, rather than the older simple/legacy scheme (`Q4_0`,
+  `Q4_1` without `_K`)
+- **`M`** — the size/quality variant within that k-quant family: `S` (small,
+  most compressed), `M` (medium, the common default), `L` (large, closer to
+  original quality, largest file)
+
+So `Q5_K_M` is 5-bit k-quant, medium variant — bigger and more accurate than
+`Q4_K_M`, smaller and slightly less accurate than `Q6_K` or `Q8_0` (which is
+close to lossless relative to full precision, used when quality matters more
+than size).
+
+## Converting a Hugging Face model to GGUF
+
+The pipeline goes through an intermediate full-precision GGUF before
+quantizing down:
+
+<Mermaid client:visible code={`flowchart LR
+  A["HF model (safetensors + tokenizer.json + config)"] --> B["convert_hf_to_gguf.py"]
+  B --> C["model-f16.gguf (or f32, unquantized)"]
+  C --> D["llama-quantize"]
+  D --> E["model-Q4_K_M.gguf (quantized, ready to run)"]`} />
+
+```bash
+# 1. Convert the HF checkpoint to an unquantized GGUF (f16)
+python convert_hf_to_gguf.py ./llama-3.1-8b-instruct --outfile model-f16.gguf --outtype f16
+
+# 2. Quantize the f16 GGUF down to 4-bit k-quant
+llama-quantize model-f16.gguf model-q4_k_m.gguf Q4_K_M
+```
+
+The first step is mostly a format/layout translation (safetensors + tokenizer
+metadata → GGUF's single-file layout) — no precision is lost yet. All the
+compression happens in the second step, and it's fast (usually a few minutes for
+a 7-8B model on CPU) since it's a direct numerical transform, not a training or
+calibration process by default.
+
+## Why so many quantization levels exist
+
+Different deployment targets have different constraints, and GGUF's granularity
+lets you pick a point on the size/quality curve rather than a single fixed
+trade-off:
+
+| Level | Approx. bits/weight | Typical use |
+|---|---|---|
+| `Q4_K_M` | ~4.5 | Default "good enough" choice for most local use |
+| `Q5_K_M` | ~5.5 | Noticeably better quality, still reasonably compact |
+| `Q6_K` | ~6.5 | Close to full quality, larger file |
+| `Q8_0` | ~8.5 | Near full-precision fidelity, mainly for benchmarking/quality-critical local use |
+
+`Q4_K_M` is the community's de facto default because it lands in the sweet spot
+most people want: dramatically smaller than the original while remaining close
+enough in quality for chat/assistant use cases.
+
+## Running the quantized model
+
+```bash
+llama-cli -m model-q4_k_m.gguf -p "Summarize the tradeoffs of quantization:" -n 200
+```
+
+`-n 200` caps the response at 200 tokens. Add `-ngl 20` to offload 20 transformer
+layers to a GPU if one's available (partial GPU offload — CPU handles the rest),
+which is common on machines with a modest GPU that can't hold the full model in
+VRAM but can still meaningfully speed up generation.

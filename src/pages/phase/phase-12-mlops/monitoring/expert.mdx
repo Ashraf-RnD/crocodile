@@ -1,0 +1,114 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Monitoring"
+level: expert
+phaseSlug: "phase-12-mlops"
+phaseName: "MLOps"
+topicSlug: "monitoring"
+estReadTime: 12
+resources:
+  - type: article
+    title: "Observability for Machine Learning (O'Reilly report)"
+    url: "https://www.oreilly.com/library/view/introducing-mlops/9781492083283/"
+  - type: docs
+    title: "Google SRE Book — Monitoring Distributed Systems"
+    url: "https://sre.google/sre-book/monitoring-distributed-systems/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Logging every prediction is a cost and privacy decision, not a default
+
+Naively logging full feature vectors and predictions for every inference
+request scales linearly with traffic — at high QPS this becomes a real
+storage and processing cost, and for models consuming PII (health records,
+financial data), full-fidelity logging creates a genuine compliance
+liability (data retention, right-to-deletion obligations under GDPR/CCPA
+extending to monitoring logs, not just primary data stores). Production
+monitoring systems typically make deliberate trade-offs here:
+
+- **Sampling**: log 100% of predictions for latency/error metrics (cheap,
+  aggregatable) but only a sampled subset (e.g. 1-5%) of full feature
+  vectors for deep drift/debugging analysis
+- **Feature hashing/redaction**: log statistical summaries or hashed
+  representations of sensitive features rather than raw values, preserving
+  drift-detection utility while reducing compliance exposure
+- **Tiered retention**: aggregate metrics retained indefinitely, raw
+  prediction logs retained only long enough to support root-cause analysis
+  (e.g. 30-90 days), enforced by an automated deletion policy rather than
+  manual cleanup
+
+Treating "log everything forever" as the safe default is actually the
+riskier choice once compliance and cost are accounted for — the disciplined
+default is minimum-necessary logging with an explicit retention policy.
+
+## Silent failures: monitoring what doesn't obviously fail
+
+The hardest production ML incidents aren't the ones that throw errors —
+they're the ones where the system reports healthy while producing wrong
+answers. Common silent-failure patterns that standard service monitoring
+misses entirely:
+
+- **Feature pipeline degradation returning defaults**: an upstream feature
+  service timing out and falling back to a default/null value doesn't throw
+  an error at the model layer — it just silently feeds the model
+  systematically wrong inputs. This requires monitoring the *rate of
+  default-value usage* per feature as its own signal, not just service
+  uptime.
+- **Schema-compatible but semantically wrong data**: a column rename or unit
+  change upstream (e.g. a price field switching from cents to dollars)
+  passes schema validation (still a float) while completely breaking model
+  semantics — schema validation alone is necessary but not sufficient;
+  range/distribution checks catch what schema checks can't.
+- **Correlated feature staleness**: a batch job silently failing to refresh
+  means a "feature" is technically present and well-formed, just frozen at
+  its last successful value — invisible unless you explicitly monitor
+  feature *freshness* (time since last update) as a first-class metric.
+
+<Mermaid client:visible code={`flowchart TB
+  A["Feature pipeline times out"] --> B["Falls back to default value"]
+  B --> C["Service reports healthy — no error thrown"]
+  C --> D["Model receives systematically wrong input"]
+  D --> E["Predictions degrade silently"]
+  F["Monitoring gap: no default-value-rate metric"] -.blind spot.-> E`} />
+
+## Observability vs. monitoring: a real distinction for ML debugging
+
+Monitoring answers pre-defined questions ("is latency above threshold").
+**Observability** is the capacity to answer *new, unanticipated* questions
+about system behavior after an incident, without having predicted you'd need
+to ask them. For ML systems this distinction matters because failure modes
+are numerous and often novel — you can't pre-define a dashboard panel for
+every possible way a feature pipeline can silently corrupt data. Practically,
+this means production ML systems benefit from structured, queryable
+prediction logs (not just aggregated metrics) that let an engineer
+investigating an incident slice by arbitrary dimensions after the fact —
+"show me all predictions where feature X was null AND confidence was low AND
+the request came from region Y" — a query no pre-built dashboard anticipated
+but that structured logging makes possible.
+
+## The cost of false alerting is organizational, not just technical
+
+An alerting threshold set too sensitively doesn't just create noise — it
+trains the on-call rotation to distrust and eventually ignore alerts
+(alert fatigue), which means the one alert that matters gets missed along
+with the dozens that didn't. This is a genuine organizational failure mode,
+not a technical one, and the mitigation is process as much as configuration:
+alerts should be tied to actionable runbooks (what should the on-call
+engineer actually *do*), reviewed and tuned based on false-positive rate
+over time, and distinguished by severity (page vs. log vs. dashboard-only)
+so the response burden scales with actual risk.
+
+## Trade-offs in monitoring system design
+
+| Concern | Lightweight (logs + dashboards) | Full observability stack (structured logs + tracing + drift + alerting) |
+|---|---|---|
+| Setup cost | Low | High — multiple integrated systems |
+| Debugging novel incidents | Limited to pre-built dashboards | Strong — arbitrary post-hoc queries |
+| Storage/compliance cost | Lower (aggregate metrics mostly) | Higher (raw structured logs at scale) |
+| Time-to-detect silent failures | Slow — relies on someone noticing | Faster — feature freshness/default-rate metrics surface issues early |
+| Best fit | Small teams, low-stakes models | High-stakes models, regulated domains, large-scale traffic |
+
+As with drift detection, the right monitoring investment tracks the blast
+radius of a silent failure — a low-traffic internal tool can get by on basic
+dashboards, while a model making decisions that affect real users or money
+needs monitoring built to catch problems that never throw an error.

@@ -1,0 +1,109 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Security"
+level: expert
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "security"
+estReadTime: 12
+resources:
+  - type: docs
+    title: "OWASP — Top 10 for Large Language Model Applications"
+    url: "https://owasp.org/www-project-top-10-for-large-language-model-applications/"
+  - type: article
+    title: "Simon Willison — The lethal trifecta for AI agents"
+    url: "https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/"
+---
+
+## Prompt injection has no complete solution — only defense in depth
+
+Unlike SQL injection, where parameterized queries provide a near-complete
+fix, prompt injection has no equivalent clean solution, because the model
+is fundamentally interpreting natural language where "instruction" and
+"data" aren't syntactically distinguishable the way code and data are in a
+parameterized query. Instruction-tuning models to resist injection helps
+but is empirically incomplete — adversarial prompts continue to be found
+against every generation of these defenses. The realistic posture is
+**defense in depth**: reduce the model's ability to cause harm even if
+injection succeeds, rather than trying to make injection impossible. This
+reframes the security question from "how do we stop injection" to "what's
+the worst outcome if injection succeeds, and have we bounded it."
+
+## The "lethal trifecta" for agentic systems
+
+A widely-referenced framing (Simon Willison) identifies three conditions
+that, together, make prompt injection genuinely dangerous rather than just
+embarrassing: (1) the agent processes untrusted input (web content, emails,
+documents), (2) the agent has access to sensitive data or systems, and (3)
+the agent can take external actions (send data, call APIs, execute code).
+Any one or two of these alone is comparatively low-risk; all three together
+means an attacker who can inject instructions into content the agent reads
+can potentially exfiltrate sensitive data or trigger real-world actions,
+entirely through text. System design should treat any agent satisfying all
+three conditions as high-risk by default and require deliberate,
+justified sign-off — the mitigation isn't a single control but architecting
+to break one leg of the trifecta wherever possible (e.g., an agent that
+reads untrusted web content should not simultaneously hold credentials to
+send arbitrary outbound requests).
+
+## Tool-call authorization must be enforced outside the model's control
+
+The model's own judgment about whether an action is appropriate cannot be
+the security boundary — it's exactly what prompt injection targets.
+Authorization has to be enforced in code the model cannot influence:
+validate that a requested tool call is in an explicit allow-list for the
+current context, check the *actual* requesting user's permissions (not a
+broad service-level credential shared across all agent sessions) against
+the specific action, and require out-of-band confirmation for
+irreversible or high-value actions (payments, deletions, external
+communications) regardless of how confidently the model requests them.
+This is a straightforward application of least-privilege and
+capability-based security to a new class of caller (an LLM), not a novel
+security primitive.
+
+## Data exfiltration via indirect channels
+
+A model with both access to sensitive data and the ability to construct
+output that gets rendered or fetched (e.g., generating a markdown image
+with a URL, or content that triggers a subsequent web request) can
+potentially be manipulated into exfiltrating data through side channels
+that don't look like a typical "leak" — embedding sensitive data in a URL
+that gets auto-fetched, for instance. Defenses include stripping or
+sandboxing potentially-active content in model output before rendering
+(no auto-fetched images/links from untrusted-influenced output), and
+auditing what the model's context actually contains before granting it any
+output channel that reaches outside the current session.
+
+## Multi-tenant isolation for embeddings and retrieval
+
+In systems serving multiple customers/tenants from shared retrieval
+infrastructure (a common RAG architecture), a subtle and serious failure
+mode is cross-tenant data leakage through retrieval — if access control
+isn't enforced at the retrieval layer itself (filtering by tenant before
+the vector search even runs, not just checking permissions after documents
+are returned), one tenant's query can surface another tenant's private
+documents into the LLM's context. This is a data-layer security bug that's
+easy to introduce when a RAG system is built without security review, since
+retrieval "just works" functionally without tenant filtering — it silently
+fails to be secure rather than failing to function.
+
+## Evaluating and red-teaming as an ongoing practice, not a launch gate
+
+Because prompt injection defenses degrade as attackers discover new
+techniques and as the underlying model changes (a model update can change
+which injection patterns work), security posture for AI systems needs
+continuous adversarial testing — automated red-teaming against known
+injection patterns run regularly, not just once before launch — treated
+more like a live threat-intelligence problem than a one-time security
+checklist.
+
+## Trade-off summary
+
+| Concern | Weak posture | Defense-in-depth posture | Cost |
+|---|---|---|---|
+| Prompt injection | Trust the model to resist injected instructions | Bound blast radius regardless of whether injection succeeds | Requires redesigning what the model is trusted to do |
+| Tool authorization | Model output directly triggers actions | Explicit allow-list + user-scoped permission check in code | Extra authorization layer, added latency per action |
+| Agentic risk | Broad, flexible tool access by default | Least-privilege scoping, break the "lethal trifecta" | Less flexible agents, more design upfront |
+| Output handling | Render/execute model output directly | Sanitize and sandbox before rendering or executing | Engineering effort, some feature constraints |
+| Multi-tenant retrieval | Filter after retrieval | Enforce tenant scoping at the retrieval/query layer | Retrieval architecture must be security-reviewed |
+| Ongoing assurance | One-time security review at launch | Continuous automated red-teaming | Ongoing security engineering investment |

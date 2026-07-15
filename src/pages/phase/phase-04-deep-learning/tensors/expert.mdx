@@ -1,0 +1,90 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Tensors"
+level: expert
+phaseSlug: "phase-04-deep-learning"
+phaseName: "Deep Learning"
+topicSlug: "tensors"
+estReadTime: 11
+resources:
+  - type: docs
+    title: "PyTorch Internals — storage, strides, and views"
+    url: "https://pytorch.org/docs/stable/notes/autograd.html"
+  - type: article
+    title: "Edward Yang — PyTorch internals blog post"
+    url: "http://blog.ezyang.com/2019/05/pytorch-internals/"
+---
+
+## Storage, strides, and why "contiguous" matters
+
+A PyTorch tensor is a thin metadata wrapper (shape, dtype, device, strides) around a
+flat, contiguous block of memory called `Storage`. **Strides** tell PyTorch how many
+elements to skip in storage to move one step along each dimension. This is what makes
+operations like `.transpose()`, `.view()`, and slicing essentially free — they only
+rewrite the metadata, not the underlying bytes.
+
+```python
+import torch
+
+x = torch.arange(6).reshape(2, 3)
+print(x.stride())          # (3, 1) — move 3 elements to go down a row, 1 across a col
+
+y = x.t()                  # transpose: shares storage, new strides
+print(y.stride())          # (1, 3)
+print(y.is_contiguous())   # False — memory layout no longer matches row-major order
+```
+
+Many kernels (some convolution and BLAS calls, `.view()`) require contiguous memory
+and will either raise or silently insert a copy via `.contiguous()`. Silent copies are
+a real performance trap in hot training loops — profiling tools will show unexpected
+`copy_` kernels that trace back to a `.transpose()` followed by a `.view()`.
+
+## Memory format: channels-last for conv-heavy models
+
+For CNN workloads, PyTorch supports **channels-last** memory format
+(`torch.channels_last`), which reorders storage so channels are the fastest-varying
+dimension instead of width. On tensor-core GPUs this can noticeably speed up
+convolutions because it matches the memory access pattern cuDNN's fused kernels
+expect, especially combined with mixed precision:
+
+```python
+model = model.to(memory_format=torch.channels_last)
+x = x.to(memory_format=torch.channels_last)
+```
+
+This is purely a storage-layout optimization — the logical shape and values are
+identical, only the physical byte ordering changes, which is why it's a nearly
+free win when supported.
+
+## Autograd's relationship to tensors
+
+Every tensor with `requires_grad=True` carries a `grad_fn` pointing back into the
+autograd graph. In-place operations mutate a version counter (`._version`) that
+autograd uses to detect if a tensor needed for the backward pass was modified after
+the forward pass recorded it — triggering the infamous
+`RuntimeError: one of the variables needed for gradient computation has been modified
+by an inplace operation`. This is the mechanism, not just a style warning: PyTorch is
+protecting the correctness of the backward pass, not just discouraging a pattern.
+
+## Sparse and quantized tensor layouts
+
+Dense tensors aren't the only representation. Production systems reach for
+alternatives when the access pattern or memory budget demands it:
+
+| Layout | Memory model | Typical use | Trade-off |
+|---|---|---|---|
+| Dense (`torch.strided`) | Contiguous block, strides | Default for almost everything | Wastes memory on sparse data |
+| Sparse COO/CSR | Only nonzero indices + values stored | Graph neural nets, huge embedding tables | Slower/limited op coverage, harder to debug |
+| Quantized (`torch.qint8`) | Fixed-point ints + scale/zero-point | Edge/mobile inference | 4x smaller, faster on supported kernels, accuracy loss |
+| `channels_last` dense | Same dense storage, reordered strides | CNN inference/training on GPU | Faster on tensor cores, layout bugs if mixed with `channels_first` ops |
+
+## Practical performance implications
+
+- **Avoid Python-level loops over tensor elements.** Each `tensor[i]` access
+  synchronizes with the GPU and creates Python-object overhead; vectorized ops
+  dispatch a single kernel launch for the whole tensor.
+- **Watch `.item()` and `.cpu()` calls inside training loops** — both force a
+  CPU/GPU synchronization point, stalling the async CUDA queue and silently
+  slowing down otherwise well-pipelined training code.
+- **Prefer `torch.empty` over `torch.zeros`** when you're about to overwrite every
+  element anyway (e.g., pre-allocating a buffer) — it skips the zero-fill kernel.

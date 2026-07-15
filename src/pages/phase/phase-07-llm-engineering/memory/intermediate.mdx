@@ -1,0 +1,105 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Memory"
+level: intermediate
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "memory"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "LangGraph — Persistence and Memory"
+    url: "https://langchain-ai.github.io/langgraph/concepts/persistence/"
+  - type: article
+    title: "Mem0 — Long-Term Memory for AI Agents"
+    url: "https://docs.mem0.ai/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Short-term vs. long-term memory
+
+Two distinct problems get called "memory" and they need different solutions:
+
+- **Short-term (working) memory** — the current conversation's message history.
+  Bounded by the context window; solved by simply appending to a list, with
+  summarization/trimming once it gets long.
+- **Long-term memory** — facts that should persist *across* separate conversations
+  and sessions ("the user prefers metric units," "the user's project uses Python
+  3.12"). This can't just live in one conversation's message list — it needs its own
+  storage, retrieval, and write strategy.
+
+<Mermaid client:visible code={`flowchart LR
+  A[User message] --> B[Short-term: current conversation buffer]
+  A --> C[Retrieve relevant long-term memories]
+  C --> D[Inject into system/context]
+  B --> E[Model call]
+  D --> E
+  E --> F[Response]
+  F --> G[Extract new facts worth remembering]
+  G --> H[(Long-term memory store)]`} />
+
+## Summarizing history instead of truncating it
+
+Naively dropping old messages when the context gets long loses information silently.
+A better pattern: periodically ask the model to summarize the older portion of the
+conversation, then replace those messages with the summary:
+
+```python
+def maybe_summarize(messages, max_messages=20):
+    if len(messages) <= max_messages:
+        return messages
+
+    old, recent = messages[:-10], messages[-10:]
+    summary_prompt = [
+        {"role": "system", "content": "Summarize this conversation concisely, keeping key facts and decisions."},
+        {"role": "user", "content": str(old)},
+    ]
+    summary = client.chat.completions.create(model="gpt-4o-mini", messages=summary_prompt)
+    return [
+        {"role": "system", "content": f"Earlier conversation summary: {summary.choices[0].message.content}"},
+        *recent,
+    ]
+```
+
+This is exactly the strategy behind LangChain's `ConversationSummaryBufferMemory` and
+similar utilities in other frameworks: keep recent turns verbatim (fresh, precise
+context), summarize everything older (bounded token cost).
+
+## Long-term memory as retrieval, not a flat list
+
+For long-term memory across sessions, the standard production pattern is: store facts
+as embedded chunks in a vector store (or a structured key-value/graph store for
+well-defined fact types), and retrieve only the relevant subset for the current
+message — the same retrieval pattern used in RAG, just applied to "facts about this
+user/agent" instead of documents.
+
+```python
+import chromadb
+
+memory_db = chromadb.Client().create_collection("user_memory")
+
+def remember(user_id, fact):
+    memory_db.add(documents=[fact], ids=[f"{user_id}-{hash(fact)}"], metadatas=[{"user_id": user_id}])
+
+def recall(user_id, query, k=3):
+    results = memory_db.query(query_texts=[query], where={"user_id": user_id}, n_results=k)
+    return results["documents"][0]
+
+# On a new conversation:
+relevant_facts = recall(user_id="alex", query="what are the user's coding preferences?")
+system_prompt = f"Known facts about this user: {relevant_facts}"
+```
+
+This is the pattern products like ChatGPT's persistent memory and libraries like
+Mem0 implement: after each conversation (or periodically during one), an extraction
+step decides which facts are worth persisting, and future conversations retrieve only
+what's relevant rather than replaying the entire history of every past interaction.
+
+## Deciding what's worth remembering
+
+Not every message is worth persisting long-term — most conversational turns are
+transient. A common pattern is a lightweight "memory extraction" pass after each
+conversation, using the model itself to judge what's durable and salient (stable
+preferences, project facts, explicit corrections) versus what's ephemeral (small talk,
+one-off questions) — storing everything indiscriminately just adds retrieval noise
+later without adding useful signal.

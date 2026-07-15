@@ -1,0 +1,76 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Text Cleaning"
+level: beginner
+phaseSlug: "phase-05-natural-language-processing"
+phaseName: "Natural Language Processing"
+topicSlug: "text-cleaning"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "Python — re module (regular expressions)"
+    url: "https://docs.python.org/3/library/re.html"
+  - type: docs
+    title: "spaCy 101 — Linguistic features"
+    url: "https://spacy.io/usage/linguistic-features"
+---
+
+## Garbage in, garbage out
+
+Real text is messy: HTML tags left over from scraping, extra whitespace, emojis,
+inconsistent capitalization, typos. **Text cleaning** is the step where you scrub raw
+text into a consistent form before anything else (tokenization, embeddings, a model)
+touches it.
+
+Think of it like washing vegetables before cooking — the recipe (your model) works,
+but only if what goes in isn't covered in dirt.
+
+### A minimal cleaning pass
+
+```python
+import re
+
+def clean_text(text):
+    text = text.lower()                          # normalize case
+    text = re.sub(r"<[^>]+>", " ", text)          # strip HTML tags
+    text = re.sub(r"http\S+|www\.\S+", " ", text) # strip URLs
+    text = re.sub(r"[^a-z0-9\s]", " ", text)      # remove punctuation/symbols
+    text = re.sub(r"\s+", " ", text).strip()      # collapse whitespace
+    return text
+
+raw = "Check THIS out!! <b>Amazing</b> deal --> http://example.com  😍"
+print(clean_text(raw))
+# "check this out amazing deal"
+```
+
+Each line handles one specific kind of mess. In practice you build this function
+incrementally, printing before/after on real samples from your dataset until nothing
+surprising slips through.
+
+### Why lowercase isn't always right
+
+Lowercasing everything is common, but it destroys information: `"US"` (the country)
+and `"us"` (the pronoun) become identical, and `"Apple"` (the company) collides with
+`"apple"` (the fruit). Whether to lowercase depends entirely on the task — it's usually
+fine for search or topic classification, but risky for named entity recognition, where
+capitalization is itself a strong signal that a word is a proper noun.
+
+## Try it yourself
+
+Write a function that removes all digits from a string while keeping everything else
+unchanged, e.g. `"Room 42B is ready"` becomes `"Room B is ready"`.
+
+<details>
+<summary>Solution</summary>
+
+```python
+import re
+
+def remove_digits(text):
+    return re.sub(r"\d+", "", text).replace("  ", " ").strip()
+
+print(remove_digits("Room 42B is ready"))
+# "Room B is ready"
+```
+
+</details>

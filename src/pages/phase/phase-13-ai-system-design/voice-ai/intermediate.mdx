@@ -1,0 +1,95 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Voice AI"
+level: intermediate
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "voice-ai"
+estReadTime: 9
+resources:
+  - type: article
+    title: "OpenAI — Introducing the Realtime API"
+    url: "https://openai.com/index/introducing-the-realtime-api/"
+  - type: article
+    title: "Deepgram — Voice AI latency: what actually matters"
+    url: "https://deepgram.com/learn"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## System design: the STT -> LLM -> TTS pipeline, made concurrent
+
+The naive design — wait for the full utterance, run STT, then LLM, then TTS,
+then play the whole audio clip — is far too slow for natural conversation.
+Production voice AI systems overlap every stage: streaming STT starts
+producing partial transcripts before you finish speaking, the LLM starts
+generating before the full transcript is final, and TTS starts synthesizing
+audio for the first sentence while the LLM is still generating the rest.
+
+<Mermaid client:visible code={`flowchart TB
+  Mic["Microphone audio stream"] --> VAD["Voice activity detection<br/>(streaming, low-latency)"]
+  VAD --> StreamSTT["Streaming STT<br/>emits partial + final transcripts"]
+  StreamSTT --> Turn{"End of turn detected?"}
+  Turn -->|not yet| StreamSTT
+  Turn -->|yes| LLM["LLM generates reply<br/>streamed token-by-token"]
+  LLM --> Chunker["Sentence chunker<br/>splits stream at sentence boundaries"]
+  Chunker --> StreamTTS["Streaming TTS<br/>synthesizes audio per sentence chunk"]
+  StreamTTS --> Playback["Audio streamed to caller/device"]
+  Playback -.->|caller interrupts| Barge["Barge-in: cancel TTS + LLM generation"]
+  Barge --> VAD`} />
+
+## The latency budget, stage by stage
+
+A natural-feeling voice assistant targets roughly 500ms-1s from end-of-speech
+to start-of-reply-audio. That budget gets split across stages, and every one
+of them has to be optimized:
+
+- **VAD + end-of-turn detection**: tens of milliseconds, running continuously
+  on the audio stream, not just at the end.
+- **STT**: streaming ASR models emit partial transcripts continuously and a
+  final transcript quickly after speech ends — waiting for a fully
+  post-processed, punctuated transcript before starting the LLM call wastes
+  precious time that isn't necessary for the LLM to start reasoning.
+- **LLM time-to-first-token**: this is where a lot of the latency budget goes;
+  smaller/faster models or aggressive prompt caching (see "Caching" in this
+  phase) are common levers.
+- **TTS time-to-first-audio-chunk**: streaming TTS starts producing playable
+  audio for the first few words almost immediately rather than waiting for
+  the whole sentence to be synthesized.
+
+## Sentence chunking between LLM and TTS
+
+Feeding the LLM's raw token stream into TTS one token at a time would produce
+choppy, unnatural audio and waste TTS calls on incomplete fragments.
+Production systems buffer LLM output and flush it to TTS at natural
+boundaries (sentence or clause breaks), trading a small amount of added
+latency for meaningfully better audio quality and fewer TTS invocations.
+
+```python
+# Simplified sentence-chunking between LLM stream and TTS
+buffer = ""
+async for token in llm.generate_stream(prompt):
+    buffer += token
+    if ends_at_sentence_boundary(buffer):
+        audio_chunk = await tts.synthesize_stream(buffer)
+        yield audio_chunk
+        buffer = ""
+```
+
+## Barge-in: handling interruptions
+
+Real conversations involve interruption — the caller starts talking while
+the assistant is still speaking. A voice AI system needs to detect this
+(VAD running continuously, even during playback) and **cancel** both the
+in-flight TTS audio and, if it hasn't finished, the LLM generation behind it
+— continuing to generate and speak a reply the user already interrupted
+wastes compute and feels broken. This requires the whole pipeline to support
+cancellation cleanly at every stage, not just the audio player.
+
+## Telephony and device integration
+
+For phone-based voice AI, the pipeline sits behind a telephony layer (SIP/
+PSTN integration) that handles call setup, audio codec conversion, and
+network jitter — audio arriving over a phone line is lower quality and less
+predictable than a clean microphone stream from a native app, which affects
+STT accuracy and forces the pipeline to be more tolerant of dropped or
+delayed audio packets.

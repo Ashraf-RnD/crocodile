@@ -1,0 +1,105 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "GitHub Copilot"
+level: intermediate
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "github-copilot"
+estReadTime: 9
+resources:
+  - type: article
+    title: "GitHub Blog — How GitHub Copilot is getting better at understanding your code"
+    url: "https://github.blog/ai-and-ml/github-copilot/how-github-copilot-is-getting-better-at-understanding-your-code/"
+  - type: article
+    title: "GitHub Blog — Inside GitHub: Working with the LLMs behind Copilot"
+    url: "https://github.blog/ai-and-ml/github-copilot/inside-github-working-with-the-llms-behind-github-copilot/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## System design: two very different request paths
+
+Copilot is really two products sharing infrastructure: **inline completions**
+(sub-second, high-volume, low-context) and **Copilot Chat / agent mode**
+(multi-second, lower-volume, high-context, tool-using). Designing this system
+means designing two different latency/quality trade-offs on the same
+platform.
+
+<Mermaid client:visible code={`flowchart TB
+  subgraph Editor
+    Cursor["Cursor position + nearby code"]
+    ChatBox["Chat sidebar prompt"]
+  end
+
+  Cursor --> Ctx1["Context builder<br/>current file + open tabs, truncated to fit budget"]
+  Ctx1 --> Cache1{"Prefix cache hit?"}
+  Cache1 -->|yes| FastReturn["Return cached suggestion"]
+  Cache1 -->|no| SmallModel["Small/fast completion model"]
+  SmallModel --> Ghost["Ghost text suggestion"]
+
+  ChatBox --> Ctx2["Context builder<br/>repo search, symbol index, open files, chat history"]
+  Ctx2 --> Retrieval["Retrieval over the repo<br/>(embeddings / code search)"]
+  Retrieval --> BigModel["Larger chat/agent model"]
+  BigModel --> ToolUse{"Needs a tool?<br/>(run tests, search, edit files)"}
+  ToolUse -->|yes| Tools["Execute tool, feed result back"]
+  Tools --> BigModel
+  ToolUse -->|no| Answer["Streamed chat answer"]`} />
+
+## Context assembly for inline completions
+
+For ghost-text suggestions, the context builder has a strict token budget and
+has to decide, in a few milliseconds, what to include:
+
+- The code immediately before and after the cursor (fill-in-the-middle, not
+  just "continue from here" — the model needs to produce code that also makes
+  sense with what follows).
+- A handful of other open files, often ranked by relevance (recently edited,
+  same language, imported by the current file).
+- Repo-level signal like the language/framework detected, sometimes a small
+  set of relevant symbols pulled from a local index — full semantic retrieval
+  over a large repo is generally too slow for this path.
+
+```python
+# Simplified inline-completion request shape
+def build_completion_context(cursor_file, cursor_pos, open_files, token_budget=2000):
+    prefix, suffix = split_at_cursor(cursor_file, cursor_pos)
+    context = [prefix]
+    for f in rank_by_relevance(open_files, cursor_file):
+        if remaining_budget(context, token_budget) <= 0:
+            break
+        context.append(truncate_to_fit(f, token_budget))
+    return {"prefix": prefix, "suffix": suffix, "extra_context": context}
+```
+
+## Caching is not optional
+
+Because completions fire on nearly every keystroke, a naive implementation
+would send a new model request every character you type. Practical systems
+**debounce** (wait for a short pause in typing before requesting) and **cache
+aggressively** — if you type one more character consistent with the last
+suggestion, the previous suggestion can often just be trimmed rather than
+regenerated. Prefix caching at the model-serving layer (reusing the computed
+attention state for a prompt prefix seen moments ago) also helps, since
+consecutive keystrokes share almost the entire prompt.
+
+## Retrieval for chat and agent mode
+
+Copilot Chat and agent-style flows (find this bug, implement this feature)
+need context that doesn't fit in a prompt: the whole repository. This is
+where retrieval comes in — an index (often embedding-based semantic search
+plus traditional code search/symbol lookup) finds the handful of files or
+functions actually relevant to the request, which then get inserted into the
+prompt alongside the user's message. Agent mode adds another layer: the model
+can call tools (read a file, run tests, apply an edit, search the repo) and
+loop over the results, which means the system also needs sandboxing and a
+budget on how many tool calls a single request is allowed to make.
+
+## Serving considerations
+
+- Inline completions are extremely high-volume and mostly discarded (you keep
+  typing past most suggestions), so infrastructure is optimized for **cheap,
+  fast, throwaway generations** — small models, aggressive caching, and
+  cancellation the instant a new keystroke invalidates the in-flight request.
+- Chat/agent requests are lower-volume but each one is more expensive
+  (bigger model, retrieval, possibly multiple tool-call round trips), so
+  they're routed to separate serving pools rather than competing with
+  inline-completion traffic for the same GPUs.

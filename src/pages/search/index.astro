@@ -1,0 +1,26 @@
+---
+import Base from "../../layouts/Base.astro";
+import Sidebar from "../../components/Sidebar.astro";
+---
+<Base title="Search">
+  <div class="app-shell">
+    <Sidebar />
+    <main class="main">
+      <h1>Search</h1>
+      <p style="color: var(--text-muted); font-size: 0.85rem;">
+        Search is built at production build time. Run <code>npm run build</code> and
+        <code>npm run preview</code> to try it — it's not available in <code>npm run dev</code>.
+      </p>
+      <div id="search"></div>
+    </main>
+  </div>
+  <link href="/pagefind/pagefind-ui.css" rel="stylesheet" />
+  <script is:inline src="/pagefind/pagefind-ui.js"></script>
+  <script is:inline>
+    window.addEventListener("DOMContentLoaded", () => {
+      if (typeof PagefindUI !== "undefined") {
+        new PagefindUI({ element: "#search", showSubResults: true });
+      }
+    });
+  </script>
+</Base>

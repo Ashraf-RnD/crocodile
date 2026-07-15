@@ -1,0 +1,67 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Momentum"
+level: beginner
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "momentum"
+estReadTime: 6
+resources:
+  - type: article
+    title: "Distill.pub — Why Momentum Really Works"
+    url: "https://distill.pub/2017/momentum/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## A ball rolling downhill, not teleporting
+
+Plain SGD moves in whatever direction the *current* gradient points, then forgets
+everything and recomputes from scratch next step — like teleporting a tiny distance
+each time. **Momentum** instead behaves like a heavy ball rolling downhill: it builds
+up speed in a consistent direction and keeps some of that speed even if the current
+gradient briefly points elsewhere.
+
+<Mermaid client:visible code={`flowchart LR
+  SGD["Plain SGD: reacts only to current step's gradient"] --> Zigzag["Zigzags in narrow valleys"]
+  Mom["Momentum: accumulates velocity over time"] --> Smooth["Smoother, faster path downhill"]`} />
+
+## The update rule
+
+```
+velocity = momentum * velocity + gradient
+weight = weight - learning_rate * velocity
+```
+
+`momentum` is usually around 0.9 — meaning 90% of the previous velocity carries over
+each step, plus the new gradient.
+
+```python
+def momentum_step(weight, gradient, velocity, lr=0.1, momentum=0.9):
+    velocity = momentum * velocity + gradient
+    weight = weight - lr * velocity
+    return weight, velocity
+
+w, v = 10.0, 0.0
+for step in range(5):
+    grad = 2 * w   # gradient of f(w) = w^2
+    w, v = momentum_step(w, grad, v)
+    print(f"step {step}: w={w:.3f}, velocity={v:.3f}")
+```
+
+## Why it's faster in practice
+
+In directions where the gradient consistently points the same way, momentum's
+velocity builds up, accelerating progress. In directions where the gradient keeps
+flipping sign (a common symptom of a narrow, steep valley), the accumulated velocity
+partially cancels out the oscillation instead of amplifying it — this is why momentum
+noticeably speeds up training on the kind of loss surfaces neural networks actually
+have.
+
+## In PyTorch
+
+```python
+optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
+```
+
+One keyword argument turns plain SGD into SGD with momentum — this is usually a free
+improvement, and `momentum=0.9` is a reasonable default to start from.

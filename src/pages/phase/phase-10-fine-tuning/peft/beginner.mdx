@@ -1,0 +1,95 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "PEFT"
+level: beginner
+phaseSlug: "phase-10-fine-tuning"
+phaseName: "Fine-tuning"
+topicSlug: "peft"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "Hugging Face PEFT — official documentation"
+    url: "https://huggingface.co/docs/peft/index"
+  - type: video
+    title: "Hugging Face — Parameter-Efficient Fine-Tuning explained"
+    url: "https://www.youtube.com/watch?v=Us5ZFp16PaU"
+---
+
+## The umbrella term you'll see everywhere
+
+**PEFT (Parameter-Efficient Fine-Tuning)** isn't one specific technique — it's the
+family name for *any* fine-tuning method that updates far fewer parameters than the
+full model. [LoRA](/phase/phase-10-fine-tuning/lora/beginner) and
+[QLoRA](/phase/phase-10-fine-tuning/qlora/beginner) are the two most popular members of
+this family, but the family also includes other approaches like prefix tuning, prompt
+tuning, and adapter layers.
+
+It's also the name of Hugging Face's Python library — `peft` — which gives you a
+single consistent API for applying any of these techniques to a model, so you don't
+need to hand-implement the matrix algebra yourself.
+
+### Why "full fine-tuning" isn't always the default
+
+Full fine-tuning updates every single weight in the model. For a 7-billion-parameter
+model, that means:
+
+- Storing gradients for 7 billion parameters
+- Storing optimizer state (Adam needs two extra numbers per parameter) for 7 billion
+  parameters
+- A full 7-billion-parameter copy of the model for every fine-tuned variant you keep
+
+PEFT methods instead freeze almost everything and train a small add-on, which is
+dramatically cheaper on all three counts.
+
+```python
+from transformers import AutoModelForCausalLM
+from peft import LoraConfig, get_peft_model
+
+model = AutoModelForCausalLM.from_pretrained("gpt2")
+config = LoraConfig(r=8, target_modules=["c_attn"])
+peft_model = get_peft_model(model, config)
+
+peft_model.print_trainable_parameters()
+# trainable params: 147,456 || all params: 124,587,264 || trainable%: 0.12%
+```
+
+Just three lines turn a normal Hugging Face model into a PEFT model where 99.88% of
+the weights are frozen and untouched.
+
+### The one-library, many-methods idea
+
+<details>
+<summary>Which methods live under the PEFT umbrella?</summary>
+
+The `peft` library supports several method families beyond LoRA, including:
+
+- **LoRA / QLoRA / DoRA** — low-rank adapter matrices (most widely used today)
+- **Prompt tuning** — learns a small set of continuous "virtual tokens" prepended to
+  the input, instead of touching model weights at all
+- **Prefix tuning** — similar idea, but injects learned vectors into every
+  transformer layer's attention, not just the input
+- **IA3** — learns tiny per-channel scaling vectors instead of full matrices
+
+All of them share the same core PEFT philosophy: freeze the giant pretrained model,
+train something small and cheap next to it.
+
+</details>
+
+## Try it yourself
+
+You have a 1-billion-parameter model. Full fine-tuning trains 100% of it. If a LoRA
+adapter trains 0.3% of the parameters instead, roughly how many parameters is that?
+
+<details>
+<summary>Solution</summary>
+
+```python
+total_params = 1_000_000_000
+lora_params = total_params * 0.003
+print(lora_params)  # 3,000,000
+```
+
+About 3 million trainable parameters instead of 1 billion — roughly 333x fewer
+parameters to store gradients and optimizer state for.
+
+</details>

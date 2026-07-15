@@ -1,0 +1,101 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Hybrid Search"
+level: beginner
+phaseSlug: "phase-08-retrieval-augmented-generation"
+phaseName: "Retrieval-Augmented Generation"
+topicSlug: "hybrid-search"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "Qdrant — Hybrid Queries"
+    url: "https://qdrant.tech/documentation/concepts/hybrid-queries/"
+  - type: article
+    title: "Elastic — What is hybrid search?"
+    url: "https://www.elastic.co/what-is/hybrid-search"
+---
+
+## Two different ways to search, combined
+
+Semantic (vector) search is great at matching *meaning* — "car" and "automobile" are
+close together even though they share no letters. But it can stumble on exact terms:
+product codes, error messages, acronyms, or someone's exact name, where what matters
+is the literal characters, not the meaning. **Keyword search** (like the classic
+algorithm BM25) is the opposite — it's excellent at exact-term matching but blind to
+synonyms and paraphrasing.
+
+**Hybrid search** runs both searches and combines their results, so you get the best
+of each: semantic understanding *and* exact-match precision.
+
+## Seeing the gap keyword-only search leaves
+
+```python
+documents = [
+    "Error code E-4021 indicates a network timeout during checkout.",
+    "If your payment fails, check your card details and try again.",
+]
+
+# A keyword search for "money not going through" would match neither document well —
+# no shared words with document 2's actual meaning, despite them being about the
+# same problem: a failed payment.
+query = "money not going through"
+```
+
+A pure keyword search here would likely miss document 2 entirely, because none of its
+words ("payment", "fails", "card") appear in the query. Semantic search catches this;
+keyword search alone does not.
+
+## Seeing the gap semantic-only search leaves
+
+```python
+documents = [
+    "Contact support and reference ticket ID QX-88291.",
+    "Please reach out to our help team about your issue.",
+]
+
+query = "QX-88291"
+```
+
+Here it's reversed: a semantic model sees `"QX-88291"` as a strange, meaningless token
+and may not confidently rank document 1 above document 2, even though document 1 is
+the *exact* match. Keyword search nails this instantly — it's the literal string. This
+is exactly the case where BM25 outperforms embeddings.
+
+## Combining both
+
+```python
+from rank_bm25 import BM25Okapi
+
+corpus = [
+    "Error code E-4021 indicates a network timeout during checkout.",
+    "If your payment fails, check your card details and try again.",
+]
+tokenized_corpus = [doc.lower().split() for doc in corpus]
+bm25 = BM25Okapi(tokenized_corpus)
+
+query = "payment issue"
+keyword_scores = bm25.get_scores(query.lower().split())
+# combine keyword_scores with your semantic (cosine similarity) scores,
+# e.g. by weighted sum, to get a single ranked list
+```
+
+Hybrid search isn't an either/or choice — it's running both signals and merging them,
+so a query benefits from meaning-matching *and* exact-matching at the same time.
+
+## Try it yourself
+
+A user searches an internal wiki for `"VPN not connecting error 619"`. Would keyword
+search or semantic search alone likely do better here, and why would hybrid search be
+the safer default?
+
+<details>
+<summary>Solution</summary>
+
+Keyword search alone would likely do better here, because `"error 619"` is a specific,
+literal code that a semantic model might not treat as meaningfully distinct from other
+error codes. But the surrounding phrase "VPN not connecting" is a natural-language
+description that benefits from semantic matching against differently-worded
+troubleshooting docs. Hybrid search is the safer default precisely because real
+queries often mix an exact-match component (an error code, product name) with a
+natural-language component (the actual problem) in the same sentence.
+</details>

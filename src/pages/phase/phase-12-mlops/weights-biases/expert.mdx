@@ -1,0 +1,94 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Weights & Biases"
+level: expert
+phaseSlug: "phase-12-mlops"
+phaseName: "MLOps"
+topicSlug: "weights-biases"
+estReadTime: 11
+resources:
+  - type: docs
+    title: "W&B Private Hosting / Self-Managed Deployment"
+    url: "https://docs.wandb.ai/guides/hosting/"
+  - type: article
+    title: "Bayesian Optimization Explained"
+    url: "https://distill.pub/2020/bayesian-optimization/"
+---
+
+## Logging overhead at high step frequency
+
+`wandb.log()` performs a network call (batched asynchronously in the background
+via a separate process, but still bounded by network throughput). For training
+loops logging every step at high frequency — common in RL or very fast
+iteration loops — this can introduce measurable overhead or backpressure if the
+local buffer fills faster than it can flush. The mitigation is the same
+pattern as MLflow: log every step in-memory for local debugging, but sample
+(e.g. every N steps, or use `wandb.log(..., commit=False)` batching) for the
+tracked run, especially at scale across hundreds of concurrent sweep agents
+hitting the same project.
+
+## Self-hosted vs. SaaS: the actual trade-off
+
+W&B's default mode sends run data to W&B's cloud. For regulated industries or
+data residency requirements, W&B offers self-managed deployment (Kubernetes-based)
+— but this changes the operational calculus significantly:
+
+- **SaaS**: zero infra to run, but training metadata (potentially including
+  data statistics, model architecture details) leaves your network boundary.
+  For most teams this is an acceptable trade for zero operational burden.
+- **Self-managed**: you now run and scale the same class of service you'd run
+  with MLflow — a stateful metadata store plus object storage — but keep the
+  richer sweep/report/artifact UX. This only pays off if the UX gap over
+  self-hosted MLflow justifies taking on hosting the equivalent infrastructure
+  yourself.
+
+The decision is rarely about features — both tools cover the same core
+tracking need — it's about whether your compliance posture forces
+self-hosting, because self-hosting erases W&B's main practical advantage
+(zero-ops SaaS convenience).
+
+## Sweep scaling: Bayesian search doesn't parallelize for free
+
+A common misunderstanding: launching more `wandb.agent()` workers doesn't
+proportionally speed up a Bayesian sweep the way it does grid search. Bayesian
+optimization is inherently sequential — each new trial's suggested config is
+informed by completed prior trials. With many parallel agents, several trials
+launch using the *same* prior information before any of them report back,
+degrading the search to something closer to random search during the parallel
+window. For a fixed trial budget, there's a real trade-off between wall-clock
+speed (more parallel agents) and sample efficiency (fewer, more-informed
+trials) — teams tuning expensive models (each trial = hours of GPU time)
+often deliberately cap parallelism to preserve Bayesian efficiency, while
+teams optimizing cheap models parallelize aggressively and treat sample
+inefficiency as an acceptable cost for speed.
+
+## Artifact lineage as an audit trail, not just convenience
+
+In regulated ML (finance, healthcare), being able to answer "exactly which
+data version, code commit, and hyperparameters produced the model currently
+serving predictions" isn't a nice-to-have — it's often a compliance
+requirement. W&B's artifact graph provides this automatically if — and only
+if — every pipeline stage actually calls `use_artifact`/`log_artifact`
+consistently. In practice this requires enforcing artifact logging in shared
+training library code (a decorator or base trainer class), not leaving it to
+individual data scientists to remember — an unenforced convention degrades
+into an incomplete lineage graph exactly when you need it most, during an
+incident postmortem.
+
+## Trade-offs vs. MLflow
+
+| Concern | Weights & Biases | MLflow (self-hosted) |
+|---|---|---|
+| Setup | Zero-ops SaaS (default) | You provision DB + object store |
+| Live streaming metrics | Native, real-time | Requires polling/refresh |
+| Hyperparameter sweeps | Built-in (Sweeps, Bayesian) | Requires external tool (Optuna, Ray Tune) |
+| Data residency / compliance | Requires self-managed tier | Full control by default |
+| Cost model | Per-seat/usage SaaS pricing | Infra cost only |
+| Vendor lock-in | Higher — proprietary UX/API | Lower — open format |
+| Artifact lineage graph | Native, visual | Manual convention via tags/params |
+
+Most orgs that adopt both do so for a reason: W&B for individual researcher
+velocity and rich visualization during experimentation, MLflow (or a registry
+built on open standards) for the system-of-record model registry that
+production deployment tooling depends on — decoupling "great experimentation
+UX" from "durable, portable production metadata."

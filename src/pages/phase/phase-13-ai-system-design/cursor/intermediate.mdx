@@ -1,0 +1,110 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Cursor"
+level: intermediate
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "cursor"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "Cursor Docs — Codebase Indexing"
+    url: "https://docs.cursor.com/context/codebase-indexing"
+  - type: article
+    title: "Cursor — How Cursor indexes codebases (blog)"
+    url: "https://cursor.com/blog"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## System design: three latency tiers on one product
+
+Like GitHub Copilot, Cursor really runs three different pipelines with
+different latency budgets under one UI: **Tab completions** (fastest, highest
+volume), **Chat/Ask** (seconds, higher context), and **Agent mode**
+(potentially minutes, multi-step, tool-using). Each needs a different
+context-assembly and serving strategy.
+
+<Mermaid client:visible code={`flowchart TB
+  subgraph Local["Local (editor)"]
+    Idx["Background indexer<br/>chunks + embeds the codebase incrementally"]
+    Cursor2["Cursor position + recent edits"]
+  end
+
+  Idx --> VecDB[("Vector index of codebase<br/>+ symbol/AST index")]
+
+  Cursor2 --> TabCtx["Tab: local diff context, tight budget"]
+  TabCtx --> TabModel["Fast completion model"]
+  TabModel --> TabOut["Multi-line suggested edit"]
+
+  ChatQ["Chat / Ask query"] --> Retrieve["Retrieve relevant chunks from vector index"]
+  Retrieve --> ChatModel["Larger chat model"]
+  ChatModel --> ChatOut["Answer or proposed diff"]
+
+  AgentReq["Agent task"] --> Plan["Plan steps"]
+  Plan --> ToolLoop["Tool loop: read file, edit, run terminal, run tests"]
+  ToolLoop --> Check{"Task complete or error?"}
+  Check -->|error| Plan
+  Check -->|complete| Review["Present full diff for user review"]`} />
+
+## Incremental codebase indexing
+
+Cursor maintains a local (and/or synced) index of the project: files are
+chunked, embedded, and stored in a vector index, alongside a more traditional
+symbol/AST-based index for exact lookups (function definitions, references).
+Two engineering details matter:
+
+- **Incremental updates**: re-indexing the whole repo on every keystroke is
+  infeasible. A file-watcher triggers re-embedding only for changed files/
+  chunks, keeping the index eventually consistent with the working tree
+  rather than always perfectly current.
+- **Privacy boundary**: because this index may include proprietary code,
+  where it's computed and stored (locally vs. a managed cloud service) is a
+  real architectural and trust decision, not just an implementation detail —
+  enterprise customers often require code never leaves their network for
+  indexing.
+
+## Context assembly for Tab completions
+
+Tab predictions need to be fast and often span more than the current line, so
+context assembly favors **structured, cheap-to-compute signals** over
+expensive retrieval:
+
+- Diff of your last few edits (what have you been changing, in what
+  direction) — a strong predictor of what you'll change next.
+- The immediate surrounding code (before/after cursor), similar to fill-in-
+  the-middle completion.
+- Optionally, a very fast, narrow lookup against the local index (e.g. "find
+  the definition of this symbol") rather than a full semantic search.
+
+```python
+# Simplified: Tab completion context is cheap and local
+def build_tab_context(file, cursor_pos, recent_edits):
+    prefix, suffix = split_at_cursor(file, cursor_pos)
+    return {
+        "prefix": prefix,
+        "suffix": suffix,
+        "recent_diff": summarize_recent_edits(recent_edits, max_lines=30),
+    }
+```
+
+## Context assembly for Chat and Agent
+
+Chat and agent requests have a larger latency budget, so they can afford a
+real retrieval step: embed the user's question, search the vector index for
+the most relevant chunks, and pull in full file contents for the top hits
+rather than isolated snippets when the model needs to reason about a whole
+function or class. Agent mode adds a **tool-use loop** on top: the model can
+request to read a file, apply an edit, or run a terminal command, observe the
+result (including compiler/test errors), and decide whether to continue or
+stop — this loop needs an explicit termination condition (task appears
+complete, or a max iteration count) so it can't run indefinitely.
+
+## Diffing and applying changes safely
+
+Before an agent's proposed edit is applied, it has to be turned into a
+precise diff against the *current* state of the file — which may have
+changed since the model last saw it, especially in a multi-step agent run.
+Systems typically re-fetch the current file content immediately before
+applying an edit and re-diff against that, rather than trusting a
+possibly-stale in-context copy, to avoid silently overwriting changes the
+model never saw (including the user's own concurrent edits).

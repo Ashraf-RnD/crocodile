@@ -1,0 +1,90 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "LSTM"
+level: intermediate
+phaseSlug: "phase-04-deep-learning"
+phaseName: "Deep Learning"
+topicSlug: "lstm"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "PyTorch — LSTM documentation"
+    url: "https://pytorch.org/docs/stable/generated/torch.nn.LSTM.html"
+  - type: article
+    title: "Understanding LSTM Networks (colah's blog)"
+    url: "https://colah.github.io/posts/2015-08-Understanding-LSTMs/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The three gates, intuitively
+
+An LSTM cell computes three gates from the current input and previous hidden state,
+each a sigmoid output between 0 and 1 acting like a dimmer switch:
+
+<Mermaid client:visible code={`flowchart LR
+  X["x_t, h_{t-1}"] --> F["forget gate: how much of old cell state to keep"]
+  X --> I["input gate: how much new info to add"]
+  X --> O["output gate: how much of cell state to expose as h_t"]
+  F --> C["cell state update"]
+  I --> C
+  C --> O
+  O --> H["h_t"]`} />
+
+- **Forget gate** — decides what fraction of the existing cell state to keep vs.
+  discard (near 0 = forget, near 1 = keep).
+- **Input gate** — decides how much new candidate information to write into the
+  cell state.
+- **Output gate** — decides how much of the (updated) cell state to expose as the
+  hidden state passed to the next layer/step.
+
+## Stacking and bidirectionality in production
+
+Real sequence models rarely use a single-layer, single-direction LSTM. Stacking
+layers builds hierarchical representations; bidirectional LSTMs read the sequence
+forward and backward simultaneously, useful whenever the full sequence is available
+upfront (not for real-time/streaming use cases, where only past context exists):
+
+```python
+import torch.nn as nn
+
+lstm = nn.LSTM(
+    input_size=128,
+    hidden_size=256,
+    num_layers=2,
+    batch_first=True,
+    bidirectional=True,
+    dropout=0.3,   # dropout between stacked layers (not within a single layer)
+)
+
+x = torch.randn(16, 50, 128)   # batch of 16, sequence length 50
+output, (hidden, cell) = lstm(x)
+print(output.shape)   # (16, 50, 512) -> 512 = 256 * 2 directions concatenated
+```
+
+## A sequence tagging head
+
+```python
+class BiLSTMTagger(nn.Module):
+    def __init__(self, vocab_size, embed_dim, hidden_dim, num_tags):
+        super().__init__()
+        self.embedding = nn.Embedding(vocab_size, embed_dim)
+        self.lstm = nn.LSTM(embed_dim, hidden_dim, batch_first=True, bidirectional=True)
+        self.classifier = nn.Linear(hidden_dim * 2, num_tags)
+
+    def forward(self, token_ids):
+        embedded = self.embedding(token_ids)
+        lstm_out, _ = self.lstm(embedded)
+        return self.classifier(lstm_out)   # a tag prediction per time step
+```
+
+## Where LSTMs still earn their keep
+
+Before transformers dominated NLP, LSTMs were the default for language modeling,
+translation, and tagging. Today they remain the practical choice for:
+
+- **Time series forecasting** with moderate sequence lengths and limited data,
+  where a transformer's data appetite isn't justified.
+- **Low-latency streaming inference** (speech, sensor streams) where constant
+  per-step memory beats a transformer's attention over a growing context.
+- **Smaller production footprints** — an LSTM is dramatically cheaper to run than
+  even a small transformer for comparable sequence-tagging tasks.

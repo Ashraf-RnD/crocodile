@@ -1,0 +1,99 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Observability"
+level: expert
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "observability"
+estReadTime: 12
+resources:
+  - type: docs
+    title: "OpenTelemetry — Generative AI semantic conventions"
+    url: "https://opentelemetry.io/docs/specs/semconv/gen-ai/"
+  - type: docs
+    title: "LangSmith Docs — Observability for LLM applications"
+    url: "https://docs.smith.langchain.com/observability"
+---
+
+## Quality observability is fundamentally different from uptime observability
+
+Traditional observability is built around a binary-ish notion of health:
+requests succeed or fail, latency is in or out of budget. LLM output
+quality is continuous, subjective, and context-dependent — there's no
+exception thrown when a response is subtly wrong, unhelpful, or off-tone.
+This means quality regressions are structurally invisible to
+error-rate-based alerting, and closing that gap requires building an
+entirely separate measurement pipeline (automated scoring against rubrics,
+sampled human review, user feedback aggregation) that most traditional
+observability stacks have no equivalent of. The hard engineering problem
+isn't collecting the data — it's designing scoring/rubric systems accurate
+and cheap enough to run continuously at production volume, since the most
+accurate quality signal (careful human review) doesn't scale to every
+request.
+
+## Logging full prompts/responses creates a real privacy and compliance surface
+
+Debugging AI systems effectively generally requires logging the actual
+prompt and response content, not just metadata — but this content routinely
+contains personal data, proprietary business information, or regulated
+data categories (health, financial). This turns the observability system
+itself into a sensitive data store requiring the same access controls,
+encryption, retention limits, and audit logging as the primary
+application's data — and in regulated industries or jurisdictions with data
+residency requirements, observability data may be subject to the exact same
+compliance constraints as production data (see "Multi-Region Deployment" in
+this phase). Redaction/PII-scrubbing before logging is a common mitigation,
+but it's imperfect (redaction can miss context-dependent sensitive
+information) and paying that trade-off against debuggability is a real
+design decision, not a solved problem.
+
+## Sampling strategy determines what you can actually debug later
+
+Logging every full prompt/response pair at scale is expensive (storage,
+and often the primary application's cost driver already dwarfs
+observability infra cost, but at high volume it's non-trivial). Naive
+random sampling of traces is cheap but can systematically miss rare,
+high-impact failure modes — a bug that occurs in 0.1% of requests may never
+appear in a 1% random sample with high enough frequency to investigate.
+Production systems often use **biased sampling**: always retain traces for
+requests with unusual latency, non-2xx status, low quality/confidence
+scores, or explicit user negative feedback, in addition to a random
+baseline sample — deliberately over-representing exactly the traces most
+likely to be needed for debugging, rather than treating all traces as
+equally worth keeping.
+
+## Attribution across multi-stage, multi-model pipelines
+
+When a pipeline chains retrieval, multiple LLM calls, and tool use, a bad
+final output could originate at any stage — a bad retrieval, a
+misinterpretation by an intermediate agent, a tool returning stale data.
+Effective root-causing requires the trace to preserve not just
+timing/success per stage but enough *content* at each stage boundary
+(what was retrieved, what each intermediate model produced) to actually
+diagnose where things went wrong — a trace that only records "stage 2
+completed in 400ms" without capturing what stage 2 actually produced is
+close to useless for debugging a quality issue, even though it's perfectly
+adequate for debugging a latency issue. This means AI observability
+requires deliberately richer per-span payloads than typical distributed
+tracing, with corresponding cost and privacy implications.
+
+## Model and prompt versioning as an observability dimension
+
+Because model behavior can shift silently (a provider updates a model
+version behind a stable API name, or an internal prompt change ships),
+quality regressions need to be attributable to a specific model/prompt
+version, not just a point in time. This requires logging model version and
+prompt/config version as first-class trace attributes and correlating
+quality-metric trends against version-change events — without this, a
+quality regression shows up as "things got worse sometime last week" with
+no way to connect it to the actual causal change.
+
+## Trade-off summary
+
+| Concern | Minimal approach | Production-grade approach | Cost |
+|---|---|---|---|
+| Quality visibility | Rely on error rate / uptime | Automated scoring + sampled human review + user feedback | Separate measurement pipeline to build and maintain |
+| Content logging | Log full prompts/responses always | Redact/scrub sensitive fields, apply retention limits | Some debuggability lost, but real compliance exposure avoided |
+| Sampling | Uniform random sampling | Biased sampling toward anomalies (errors, low scores, negative feedback) | Slightly more complex sampling logic, much better debug coverage |
+| Trace granularity | Timing/status per stage only | Content-rich spans capturing intermediate outputs | Higher storage cost, privacy surface, but enables real root-causing |
+| Version attribution | Assume behavior is stable over time | Log model/prompt version, correlate against quality trends | Requires disciplined versioning discipline across the team |

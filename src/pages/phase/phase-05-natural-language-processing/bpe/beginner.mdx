@@ -1,0 +1,92 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "BPE"
+level: beginner
+phaseSlug: "phase-05-natural-language-processing"
+phaseName: "Natural Language Processing"
+topicSlug: "bpe"
+estReadTime: 6
+resources:
+  - type: video
+    title: "Andrej Karpathy — Let's build the GPT Tokenizer"
+    url: "https://www.youtube.com/watch?v=zduSFxRajkE"
+  - type: docs
+    title: "Hugging Face NLP Course — Byte-Pair Encoding tokenization"
+    url: "https://huggingface.co/learn/nlp-course/chapter6/5"
+---
+
+## Building a vocabulary from scratch, by merging
+
+**Byte-Pair Encoding (BPE)** is the algorithm most modern tokenizers (GPT, RoBERTa,
+LLaMA) use to decide how to split words into pieces. Instead of a human deciding the
+rules, BPE *learns* which chunks of letters occur together often enough in a huge
+text corpus to deserve their own token.
+
+Think of it like inventing abbreviations for a group chat: if "lol" gets typed
+constantly, eventually everyone just treats it as one unit instead of three separate
+letters. BPE does exactly this, automatically, for the most frequent letter sequences
+in a training corpus.
+
+### The core idea, step by step
+
+Start with every word split into individual characters. Repeatedly find the *most
+frequent adjacent pair* of symbols and merge it into one new symbol. Repeat thousands
+of times.
+
+```python
+# Toy corpus (already split into characters, with </w> marking word end)
+word_freqs = {
+    "l o w </w>": 5,
+    "l o w e r </w>": 2,
+    "n e w e s t </w>": 6,
+    "w i d e s t </w>": 3,
+}
+
+# Step 1: count all adjacent symbol pairs across the corpus
+# most frequent pair might be ('e', 's') -- appears in "newest" and "widest"
+
+# Step 2: merge that pair everywhere it occurs
+# "n e w e s t" -> "n e w es t"
+
+# Repeat: the next most frequent pair might be ('es', 't') -> merge to "est"
+# "n e w es t" -> "n e w est"
+```
+
+After enough merges, common words like `"est"`, `"low"`, `"newest"` become single
+tokens, while rare or novel words stay split into smaller, still-meaningful pieces.
+
+### Seeing it with a real tokenizer
+
+```python
+from transformers import AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained("gpt2")  # GPT-2 uses byte-level BPE
+print(tokenizer.tokenize("lowest newer"))
+# ['low', 'est', ' newer']
+```
+
+Notice `"lowest"` splits into `"low"` + `"est"` — exactly the kind of merge our toy
+example built up. `"newer"` stays whole because it was common enough in GPT-2's
+training data to earn its own token.
+
+## Try it yourself
+
+Using `AutoTokenizer.from_pretrained("gpt2")`, tokenize the made-up word
+`"unbelievableness"` and see how many BPE pieces it breaks into.
+
+<details>
+<summary>Solution</summary>
+
+```python
+from transformers import AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained("gpt2")
+print(tokenizer.tokenize("unbelievableness"))
+# e.g. ['un', 'bel', 'iev', 'able', 'ness']
+# A rare, made-up word doesn't exist in the learned vocabulary as a
+# whole unit, so BPE falls back to smaller, more common sub-word
+# pieces it did learn during training -- this is exactly why BPE
+# never truly "fails" on an unseen word.
+```
+
+</details>

@@ -1,0 +1,92 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Chunking"
+level: beginner
+phaseSlug: "phase-08-retrieval-augmented-generation"
+phaseName: "Retrieval-Augmented Generation"
+topicSlug: "chunking"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "LangChain — Text Splitters"
+    url: "https://python.langchain.com/docs/concepts/text_splitters/"
+  - type: article
+    title: "Pinecone — Chunking Strategies for LLM Applications"
+    url: "https://www.pinecone.io/learn/chunking-strategies/"
+---
+
+## Why you can't just feed a whole book to the model
+
+A RAG system answers questions by finding relevant snippets of text and handing them
+to an LLM. But documents are too big to search as single units — if you embed an
+entire 50-page PDF as one vector, that vector is a blurry average of everything in it,
+and searching for "what's the refund policy?" won't reliably surface it. **Chunking**
+is splitting documents into smaller pieces *before* embedding them, so each piece
+represents one reasonably focused idea and can be matched precisely against a query.
+
+Think of it like indexing a cookbook: instead of one card that says "this book
+contains recipes," you make one index card per recipe. Now a search for "chocolate
+cake" can point straight at the right page instead of the whole book.
+
+## A first chunking pass
+
+```python
+def chunk_text(text, chunk_size=500, overlap=50):
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = start + chunk_size
+        chunks.append(text[start:end])
+        start = end - overlap  # step back so chunks share some context
+    return chunks
+
+document = "..." * 2000  # imagine a long article here
+pieces = chunk_text(document, chunk_size=500, overlap=50)
+print(len(pieces), "chunks")
+```
+
+Two knobs matter immediately:
+
+- **`chunk_size`** — how much text goes in each piece. Too small and a chunk loses
+  context (a sentence fragment without its paragraph); too large and it becomes
+  unfocused again, just like the whole-book problem.
+- **`overlap`** — repeating a little text between consecutive chunks so an idea that
+  spans a chunk boundary isn't cut off with no trace in either piece.
+
+## Splitting on structure, not just character count
+
+Cutting text every 500 characters can slice a sentence in half. A better default is
+to split on natural boundaries — paragraphs, then sentences, then words — only falling
+back to a hard cut when a single paragraph is still too long:
+
+```python
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+splitter = RecursiveCharacterTextSplitter(
+    chunk_size=500,
+    chunk_overlap=50,
+    separators=["\n\n", "\n", ". ", " ", ""],
+)
+chunks = splitter.split_text(document)
+```
+
+`RecursiveCharacterTextSplitter` tries each separator in order — paragraph breaks
+first, then lines, then sentences — so chunks stay as semantically coherent as
+possible while still respecting the size limit.
+
+## Try it yourself
+
+You have a FAQ document where each question-and-answer pair is separated by a blank
+line. Some pairs are one sentence, others are five paragraphs long. Would a fixed
+`chunk_size=500` with no attention to structure work well here? What would you try
+instead?
+
+<details>
+<summary>Solution</summary>
+
+A fixed size ignores the document's natural structure and will sometimes split a Q&A
+pair across two chunks (losing the answer's context from the question) or merge two
+unrelated Q&A pairs into one chunk (diluting relevance). Better: split on the blank
+line separator first, treating each Q&A pair as its own chunk regardless of length,
+and only apply a size limit as a fallback for the rare oversized pair.
+</details>

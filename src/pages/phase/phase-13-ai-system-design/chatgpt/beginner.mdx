@@ -1,0 +1,90 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "ChatGPT"
+level: beginner
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "chatgpt"
+estReadTime: 6
+resources:
+  - type: article
+    title: "OpenAI — How ChatGPT and our language models are developed"
+    url: "https://help.openai.com/en/articles/6783457-what-is-chatgpt"
+  - type: video
+    title: "OpenAI DevDay — Under the hood of ChatGPT (keynote)"
+    url: "https://www.youtube.com/watch?v=U9mJuUkhUzk"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## What ChatGPT actually is
+
+Strip away the chat bubble UI and ChatGPT is a **web app in front of a large
+language model**. You type a message, it gets turned into tokens, the model
+predicts the next token over and over, and those tokens get streamed back to
+your screen as words. The "intelligence" is entirely inside the model; almost
+everything else — accounts, chat history, rate limits, safety checks — is
+regular backend engineering wrapped around it.
+
+A useful mental model: ChatGPT is not one program, it's a **pipeline**. Your
+message passes through several stages before you see a reply, and several more
+happen while the reply is being generated.
+
+<Mermaid client:visible code={`flowchart LR
+  You["You type a message"] --> Safety1["Input safety check"]
+  Safety1 --> Model["LLM generates a reply, token by token"]
+  Model --> Stream["Tokens streamed to your browser"]
+  Stream --> Safety2["Output moderation, on the fly"]
+  Safety2 --> Screen["Words appear on screen"]`} />
+
+## Why it feels like it's "typing"
+
+The model doesn't generate the whole answer and then send it — it generates
+**one token at a time** (a token is roughly a word-piece) and each token is
+sent to your browser the moment it's ready. That's why you see text appear
+gradually instead of all at once. This also means the servers only need to
+hold a partial answer in memory at any moment, not the whole response.
+
+## Why it remembers your conversation
+
+Every time you send a new message, ChatGPT doesn't magically "recall" the
+earlier turns — the app resends the **entire conversation so far** (or a
+summarized/truncated version of it) back into the model along with your new
+message. The model has no persistent memory between requests; conversation
+history is just more text stuck in front of your question.
+
+```
+Request to the model on turn 3:
+[system instructions]
+[user: "What's the capital of France?"]
+[assistant: "Paris."]
+[user: "What's its population?"]   <- your new message
+```
+
+## The pieces behind the scenes
+
+- **Frontend** — the chat interface you type into.
+- **API gateway** — checks who you are, how many requests you've made, and
+  routes your message to a model server.
+- **Model server** — runs the LLM and produces tokens.
+- **Safety layer** — screens both what you type and what the model produces,
+  before and while it streams to you.
+- **Storage** — saves your conversation history so it can be resent on your
+  next message.
+
+## Try it yourself
+
+If ChatGPT resends your whole conversation history on every new message, what
+do you think happens to response time and cost as a conversation gets very
+long?
+
+<details>
+<summary>Solution</summary>
+
+Both increase. A longer conversation means more tokens have to be re-read by
+the model (this is called "prefill") before it can even start generating a
+reply, which adds latency, and since API pricing is per-token, longer
+histories cost more per turn even though you only typed one short question.
+This is exactly why production systems eventually summarize or truncate old
+turns instead of resending everything forever — you'll see this idea again
+under the "Caching" and "Cost Optimization" topics in this phase.
+</details>

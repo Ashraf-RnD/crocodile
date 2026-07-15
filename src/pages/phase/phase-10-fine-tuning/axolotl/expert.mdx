@@ -1,0 +1,95 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Axolotl"
+level: expert
+phaseSlug: "phase-10-fine-tuning"
+phaseName: "Fine-tuning"
+topicSlug: "axolotl"
+estReadTime: 12
+resources:
+  - type: docs
+    title: "Axolotl — multipack sample packing internals"
+    url: "https://docs.axolotl.ai/docs/dataset-formats/"
+  - type: docs
+    title: "Axolotl — multi-node and cloud deployment guides"
+    url: "https://docs.axolotl.ai/docs/multi-node.html"
+---
+
+## The config-schema abstraction is a leverage/lock-in trade-off
+
+Axolotl's core value proposition — encode a fine-tuning job declaratively — buys real
+leverage: reproducibility (a YAML file diffs cleanly in version control, unlike a
+Python script's incidental complexity), reduced surface area for configuration bugs
+(DeepSpeed/FSDP wrapping targets, packing correctness, chat template selection are all
+pre-validated per supported architecture), and lower onboarding cost for teams running
+many similar jobs. The cost is an abstraction boundary: when a job needs something the
+schema doesn't expose — a custom loss term, nonstandard multi-stage curriculum,
+bespoke data augmentation mid-training — you either fight the config format or drop to
+Axolotl's underlying Python APIs directly, at which point much of the declarative
+benefit is lost. Teams evaluating Axolotl for a specific production pipeline should
+explicitly check whether their eventual customization needs (not just today's) fit
+inside the config schema, since migrating a mature pipeline off Axolotl later is more
+disruptive than choosing not to adopt it in the first place.
+
+## Sample packing correctness is a genuine engineering-quality signal
+
+Naive sequence packing (concatenating multiple training examples into one sequence to
+reduce padding waste) risks cross-example attention contamination unless implemented
+with correct position ID resets and block-diagonal attention masking. Axolotl's
+`sample_packing` implementation (built on a multipack batching algorithm) specifically
+handles this — bin-packing examples to minimize wasted tokens while preserving correct
+per-example attention boundaries. This is worth verifying explicitly rather than
+assuming, because it's exactly the kind of subtle correctness issue that doesn't show
+up as an error, only as quietly degraded model quality — a good practical litmus test
+for whether a fine-tuning framework's packing implementation is trustworthy is to check
+whether its documentation explicitly discusses attention masking across packed
+examples, which Axolotl's does.
+
+## Multi-node scaling: where the orchestration layer earns its complexity
+
+Single-GPU or single-node multi-GPU fine-tuning has relatively few DeepSpeed/FSDP
+configuration failure modes. Multi-node training introduces network topology
+(NCCL configuration, InfiniBand vs. Ethernet interconnect assumptions), and
+inconsistent per-node environment setup becomes a much more common source of
+hard-to-debug failures than the training algorithm itself. Axolotl's multi-node guides
+and Docker-based deployment patterns exist specifically to reduce this variance —
+codifying a known-working environment (CUDA version, NCCL version, DeepSpeed version
+compatibility matrix) into a reusable image rather than each team rediscovering working
+combinations independently. This is less about Axolotl adding algorithmic value and
+more about it absorbing a genuinely painful piece of ML infrastructure engineering that
+would otherwise be redone per team.
+
+## The dependency surface as an operational risk
+
+Axolotl's breadth (supporting many base architectures, multiple PEFT methods, DeepSpeed,
+FSDP, various quantization backends) means its dependency graph is large and moves
+quickly — a new Axolotl release frequently bundles updated `transformers`, `peft`,
+`trl`, and `bitsandbytes` pins together as a tested combination. This is a real
+advantage (you get a known-compatible set of versions rather than resolving
+compatibility yourself) but also a real constraint: pinning to an older Axolotl release
+for stability means missing newer upstream library features, while tracking the latest
+release means absorbing upstream breaking changes on Axolotl's release cadence rather
+than your own. Production teams should treat Axolotl version upgrades with the same
+rigor as any other core infrastructure dependency upgrade — testing against a
+known-good training job before rolling forward, rather than assuming config-schema
+stability implies full behavioral stability across releases.
+
+## Trade-off summary
+
+| Dimension | Hand-written TRL/PEFT scripts | Axolotl |
+|---|---|---|
+| Reproducibility across a team | Depends on script discipline | Strong — YAML config is the artifact |
+| Time to a working multi-GPU job | Slower — DeepSpeed/FSDP config is easy to get wrong | Faster — tested example configs per architecture |
+| Support for novel/custom training logic | Full control | Constrained to the config schema, or requires dropping to Python |
+| Dependency management | You choose and pin versions directly | Axolotl bundles a tested version matrix, less granular control |
+| Debugging a subtle failure | Full visibility into your own code | May require reading Axolotl's internals to find the source |
+
+## The practical decision
+
+Default to Axolotl for standard SFT/DPO fine-tuning jobs on supported architectures,
+especially in team settings valuing reproducibility and multi-GPU reliability. Drop to
+hand-written TRL/PEFT scripts when the job needs training-loop-level customization the
+config schema can't express, or when full transparency into every line of the training
+pipeline is a hard requirement — e.g. regulated environments where the exact training
+procedure must be auditable line-by-line rather than mediated through a framework's
+internal trainer construction.

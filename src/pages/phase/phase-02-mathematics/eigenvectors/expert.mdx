@@ -1,0 +1,62 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Eigenvectors"
+level: expert
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "eigenvectors"
+estReadTime: 10
+resources:
+  - type: article
+    title: "SVD vs eigendecomposition — when each applies"
+    url: "https://gregorygundersen.com/blog/2018/12/10/svd/"
+---
+
+## Eigendecomposition vs SVD — why SVD is the one you'll actually use
+
+Eigendecomposition only applies to **square** matrices, and only guarantees real
+eigenvectors for symmetric ones. Most matrices in ML (a data matrix of `n` examples ×
+`d` features, a weight matrix of arbitrary shape) aren't square. The **Singular Value
+Decomposition** (`A = U Σ Vᵀ`) generalizes the same idea to any matrix — and for a
+symmetric matrix, SVD and eigendecomposition coincide (singular values equal the
+absolute eigenvalues). This is why library implementations of PCA typically use SVD
+directly on the data matrix rather than explicitly forming the covariance matrix and
+eigendecomposing it — it's more numerically stable, since forming `XᵀX` squares the
+condition number of the problem.
+
+```python
+# numerically preferred: SVD directly on centered data
+X_centered = X - X.mean(axis=0)
+U, S, Vt = np.linalg.svd(X_centered, full_matrices=False)
+principal_components = Vt[:2]   # top-2 directions, same as top eigenvectors of cov(X)
+```
+
+## Defective matrices and generalized eigenvectors
+
+Not every matrix is diagonalizable — a **defective** matrix has an eigenvalue whose
+algebraic multiplicity (how many times it's a root of the characteristic polynomial)
+exceeds its geometric multiplicity (how many independent eigenvectors it actually has).
+In this case, `A = VΛV⁻¹` doesn't exist, and you need the **Jordan normal form**
+instead, with generalized eigenvectors filling the gap. This matters practically when
+reasoning about the stability of certain dynamical systems where naive eigenvalue
+analysis alone (ignoring defectiveness) can give a misleadingly optimistic picture of
+convergence behavior.
+
+## Eigenvector sign and sup-space ambiguity
+
+Eigenvectors are only defined up to a scalar multiple (including sign) — `v` and `-v`
+are equally valid eigenvectors for the same eigenvalue. Different library versions or
+even different runs (with iterative solvers) can flip signs on returned eigenvectors.
+This causes real, reproducible bugs: comparing PCA projections across two runs and
+finding a component "flipped" is almost always this ambiguity, not a computation
+error — pipelines that depend on eigenvector sign (rare, but occurs in some
+spectral clustering implementations) need to explicitly fix a sign convention.
+
+## Trade-off summary
+
+| Approach | Applies to | Numerical stability |
+|---|---|---|
+| Eigendecomposition (`eig`) | Square matrices | Can be unstable for non-symmetric matrices |
+| Eigendecomposition (`eigh`) | Symmetric/Hermitian matrices | Stable, real eigenvalues guaranteed |
+| SVD | Any matrix, any shape | Most stable general-purpose choice |
+| Jordan form | Defective (non-diagonalizable) matrices | Rarely computed numerically — mostly a theoretical tool |

@@ -1,0 +1,79 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Segment Anything"
+level: intermediate
+phaseSlug: "phase-09-multimodal-ai"
+phaseName: "Multimodal AI"
+topicSlug: "segment-anything"
+estReadTime: 9
+resources:
+  - type: article
+    title: "Grounding DINO: open-set object detection"
+    url: "https://arxiv.org/abs/2303.05499"
+  - type: docs
+    title: "SAM — automatic mask generation example"
+    url: "https://github.com/facebookresearch/segment-anything/blob/main/notebooks/automatic_mask_generator_example.ipynb"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Three ways to prompt SAM
+
+<Mermaid client:visible code={`flowchart TB
+  A[SAM prompt encoder] --> B["Point prompts\n(click foreground/background)"]
+  A --> C["Box prompts\n(bounding box around object)"]
+  A --> D["Automatic mode\n(grid of points, no prompt)"]
+  B --> E[Mask decoder]
+  C --> E
+  D --> E
+  E --> F[Pixel-precise mask]`} />
+
+**Box prompts** are the most reliable for automation — a bounding box from an object
+detector gives SAM a tight, unambiguous region to refine into a precise mask:
+
+```python
+input_box = [x1, y1, x2, y2]  # from a YOLO detection, for example
+masks, scores, _ = predictor.predict(box=input_box)
+```
+
+**Automatic mask generation** segments *everything* in an image with no prompt at all,
+by seeding a dense grid of points internally:
+
+```python
+from segment_anything import SamAutomaticMaskGenerator
+
+mask_generator = SamAutomaticMaskGenerator(sam)
+masks = mask_generator.generate(image)
+print(f"found {len(masks)} objects")
+```
+
+This is expensive (many internal forward passes) but useful for exploratory tasks like
+"segment every distinct region in this satellite image" where you don't know in advance
+what objects exist.
+
+## The detector + SAM combo pattern
+
+The most common production pattern chains an **open-vocabulary detector** (like
+Grounding DINO, which finds boxes from a text description) with SAM for the mask:
+
+```python
+# 1. Grounding DINO: text prompt -> bounding boxes
+boxes = grounding_dino.predict(image, text_prompt="red car")
+
+# 2. SAM: box -> precise pixel mask
+predictor.set_image(image)
+masks, _, _ = predictor.predict(box=boxes[0])
+```
+
+This gives you **text-prompted segmentation** — "segment the red car" — without ever
+training a custom detector, which is why SAM became the backbone of so many rapid
+data-labeling tools: a human (or another model) proposes a rough region, SAM turns it
+into a pixel-perfect mask in under a second, at a fraction of the cost of manual
+polygon annotation.
+
+## Speeding up annotation pipelines
+
+Before SAM, building a segmentation dataset meant manually tracing polygons around
+every object — extremely slow. Teams now use SAM as an **annotation accelerator**: an
+annotator clicks a point or draws a rough box, SAM proposes the precise mask, and the
+human only corrects mistakes rather than drawing from scratch. This commonly cuts
+labeling time by 5-10x on segmentation datasets.

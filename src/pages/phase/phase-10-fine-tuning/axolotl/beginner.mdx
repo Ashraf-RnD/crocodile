@@ -1,0 +1,99 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Axolotl"
+level: beginner
+phaseSlug: "phase-10-fine-tuning"
+phaseName: "Fine-tuning"
+topicSlug: "axolotl"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "Axolotl — official documentation"
+    url: "https://docs.axolotl.ai/"
+  - type: docs
+    title: "Axolotl GitHub — example configs"
+    url: "https://github.com/axolotl-ai-cloud/axolotl/tree/main/examples"
+---
+
+## Fine-tuning by writing a config file, not a training script
+
+Everything you've seen so far — `SFTTrainer`, `DPOTrainer`, LoRA configs — involves
+writing Python. **Axolotl** takes a different approach: you describe your entire
+fine-tuning job (model, dataset, LoRA settings, hyperparameters) in a single YAML file,
+and Axolotl handles turning that into an actual training run using Hugging Face
+`transformers`, `peft`, and `trl` under the hood.
+
+Think of it like the difference between writing a Dockerfile and manually running
+install commands one by one — Axolotl is a declarative recipe for a fine-tuning job
+that anyone can read, reuse, and tweak without touching training-loop code.
+
+### A minimal Axolotl config
+
+```yaml
+# config.yaml
+base_model: meta-llama/Llama-3.1-8B-Instruct
+
+load_in_4bit: true
+adapter: qlora
+
+lora_r: 16
+lora_alpha: 32
+lora_target_modules:
+  - q_proj
+  - v_proj
+
+datasets:
+  - path: HuggingFaceH4/no_robots
+    type: alpaca
+
+num_epochs: 3
+micro_batch_size: 2
+learning_rate: 0.0002
+
+output_dir: ./qlora-llama3-out
+```
+
+### Running it
+
+```bash
+pip install axolotl
+axolotl train config.yaml
+```
+
+That's the entire workflow: write the YAML, run one command. Axolotl reads the config,
+loads the model, formats the dataset, sets up QLoRA, and runs training — everything
+you'd otherwise write dozens of lines of Python to configure by hand.
+
+### Why this matters for beginners
+
+You don't need to memorize `LoraConfig` arguments or `SFTTrainer` internals to run a
+solid fine-tuning job with Axolotl — you fill in a config template, point it at your
+dataset, and run one command. This makes it a common starting point for people who want
+to fine-tune a model without first becoming fluent in the Hugging Face Python stack.
+
+## Try it yourself
+
+You want to fine-tune `mistralai/Mistral-7B-v0.1` on your own dataset stored at
+`./my_data.jsonl`, using LoRA with rank 8. Sketch the key fields you'd need in an
+Axolotl YAML config (you don't need every field — just the ones that matter most).
+
+<details>
+<summary>Solution</summary>
+
+```yaml
+base_model: mistralai/Mistral-7B-v0.1
+adapter: lora
+lora_r: 8
+
+datasets:
+  - path: ./my_data.jsonl
+    type: alpaca
+
+output_dir: ./my-finetune-out
+```
+
+The core fields are `base_model` (what you're adapting), `adapter` + `lora_r` (which
+PEFT method and how big), and `datasets` (what you're training on) — everything else
+has reasonable defaults you can adjust later.
+
+</details>

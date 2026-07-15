@@ -1,0 +1,97 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "LangGraph"
+level: expert
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "langgraph"
+estReadTime: 12
+resources:
+  - type: docs
+    title: "LangGraph — Durable Execution"
+    url: "https://langchain-ai.github.io/langgraph/concepts/durable_execution/"
+  - type: docs
+    title: "LangGraph Platform — Deployment"
+    url: "https://langchain-ai.github.io/langgraph/concepts/langgraph_platform/"
+---
+
+## Durable execution as the actual value proposition
+
+The feature that most differentiates LangGraph from a hand-rolled agent loop isn't the
+graph abstraction itself — it's **durable execution**: every node's output is
+checkpointed, so a crash, a deploy, or a deliberate long pause (waiting days for human
+approval) doesn't lose progress. On resume, LangGraph replays from the last completed
+checkpoint rather than restarting the run. This matters most for agents with real
+side-effecting steps: if a node has already sent an email and the process crashes on
+the *next* node, durable execution means resuming doesn't re-send that email — the
+completed node isn't re-executed, only the graph continues from where it stopped.
+
+This has a subtle but critical implication for how you write nodes: **non-idempotent
+side effects inside a node must be written defensively**, because a node *can* still
+be retried in some failure scenarios before its result is durably persisted. The
+common pattern is to make node functions either pure/deterministic given their input,
+or to make any external side effect (API call, write) itself idempotent via a
+request/idempotency key derived from the checkpoint state — the same discipline
+required for any distributed system doing at-least-once processing.
+
+## Reducers and the mechanics of state merging
+
+LangGraph state isn't overwritten by default when multiple nodes run in parallel and
+write to the same field — how updates combine is governed by **reducers**, declared
+via `Annotated` types:
+
+```python
+from typing import Annotated
+import operator
+
+class State(TypedDict):
+    messages: Annotated[list, operator.add]   # concatenate on every update
+    counter: Annotated[int, lambda a, b: a + b]  # sum on every update
+    latest_status: str  # last write wins (no reducer = overwrite)
+```
+
+Getting this wrong is a common source of subtle bugs in parallel/fan-out graphs
+(multiple worker nodes running concurrently and writing to shared state) — a field
+without an explicit reducer silently uses overwrite semantics, so two parallel nodes
+updating the same field will have one clobber the other rather than merging, unless
+you've deliberately designed for that.
+
+## Subgraphs and composition at scale
+
+Large LangGraph applications compose smaller graphs as nodes within a larger graph
+(subgraphs), each potentially with its own state schema and checkpointer scope. This
+is the mechanism behind clean multi-agent architectures in LangGraph: a supervisor
+graph's node can *be* an entire compiled sub-agent graph, and its internal steps
+are namespaced separately in the checkpoint, keeping the parent graph's state clean
+of the sub-agent's internal working state — directly addressing the context-isolation
+concern discussed in the Multi-Agent Systems lesson, at the framework level.
+
+## Time-travel debugging
+
+Because every node's checkpoint is persisted with its full state snapshot, LangGraph
+supports replaying execution from any historical checkpoint — not just the most
+recent one — which enables inspecting exactly what state existed at step 4 of a
+17-step run that went wrong, and even forking a new execution branch from that point
+with modified state, without re-running steps 1-3. This is a materially different
+debugging experience than log-reading: you get an actual queryable snapshot of
+program state at each point in the trajectory, not just a text trace of what happened.
+
+## Trade-offs vs. a hand-rolled agent loop
+
+| Dimension | Hand-rolled while-loop | LangGraph |
+|---|---|---|
+| Setup complexity | Minimal for simple cases | Higher upfront (state schema, graph wiring) |
+| Crash recovery | None by default — must build yourself | Built-in via checkpointing |
+| Human-in-the-loop pausing | Requires custom persistence logic | Native (`interrupt`/`Command`) |
+| Parallel branching / fan-out | Manual concurrency management | Native via reducers and parallel edges |
+| Debuggability of complex flows | Degrades as branching logic grows | Time-travel + explicit graph structure scale better |
+| Best fit | Simple, linear, short-lived agents | Long-running, stateful, or multi-agent systems needing durability |
+
+## When LangGraph is the wrong tool
+
+For a single-turn, stateless request (classify this text, extract this data), the
+overhead of defining a state schema and compiling a graph buys nothing — a direct API
+call is simpler, faster to write, and easier to reason about. LangGraph's value
+compounds specifically with statefulness, long-running execution, and branching
+complexity; applying it to inherently simple, one-shot tasks is over-engineering that
+adds abstraction without addressing a real problem.

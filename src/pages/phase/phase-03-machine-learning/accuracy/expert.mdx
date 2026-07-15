@@ -1,0 +1,136 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Accuracy"
+level: expert
+phaseSlug: "phase-03-machine-learning"
+phaseName: "Machine Learning"
+topicSlug: "accuracy"
+estReadTime: 12
+resources:
+  - type: docs
+    title: "scikit-learn: Classification metrics (precision, recall, F1, MCC)"
+    url: "https://scikit-learn.org/stable/modules/model_evaluation.html#classification-report"
+  - type: article
+    title: "The advantages of the Matthews correlation coefficient (MCC) over F1 score and accuracy"
+    url: "https://bmcgenomics.biomedcentral.com/articles/10.1186/s12864-019-6413-7"
+---
+
+## The accuracy paradox, formalized
+
+For a binary classifier, the confusion matrix has four cells: true positives
+(TP), true negatives (TN), false positives (FP), false negatives (FN).
+Accuracy is:
+
+```
+accuracy = (TP + TN) / (TP + TN + FP + FN)
+```
+
+This formula only looks at the diagonal of the confusion matrix (TP, TN). It
+sums both correct-prediction cells and divides by everything, which means it
+is blind to how the *off-diagonal* errors (FP, FN) are distributed. A
+classifier that makes 50 FN and 0 FP looks identical, accuracy-wise, to one
+that makes 0 FN and 50 FP — even though in a medical screening context those
+two failure modes have wildly different consequences (missing a disease vs.
+an unnecessary follow-up test).
+
+The accuracy paradox is the specific case where a model's accuracy is high
+purely because the majority class dominates the denominator, not because the
+model discriminates between classes:
+
+```python
+import numpy as np
+from sklearn.metrics import (
+    accuracy_score, balanced_accuracy_score, f1_score,
+    matthews_corrcoef, confusion_matrix
+)
+
+# 950 negatives, 50 positives - realistic imbalance
+y_true = np.array([0] * 950 + [1] * 50)
+y_pred = np.zeros(1000, dtype=int)  # always predicts negative
+
+print("accuracy:         ", accuracy_score(y_true, y_pred))          # 0.95
+print("balanced accuracy: ", balanced_accuracy_score(y_true, y_pred)) # 0.50
+print("F1 (positive class):", f1_score(y_true, y_pred))               # 0.0
+print("MCC:               ", matthews_corrcoef(y_true, y_pred))       # 0.0
+print(confusion_matrix(y_true, y_pred))
+# [[950   0]
+#  [ 50   0]]
+```
+
+Accuracy reports 95% — a model that appears to work well. Balanced accuracy,
+F1, and MCC all correctly expose it as having zero discriminative power on
+the positive class.
+
+## Why the alternatives fix this
+
+- **Balanced accuracy** averages recall computed independently *per class*
+  (`(recall_0 + recall_1) / 2`), so the majority class can no longer mask a
+  complete failure on the minority class.
+- **Precision / Recall / F1** decompose the off-diagonal explicitly. Recall
+  (`TP / (TP + FN)`) tells you what fraction of true positives you actually
+  caught; precision (`TP / (TP + FP)`) tells you how much you can trust a
+  positive prediction. F1 is their harmonic mean — it collapses to 0 exactly
+  when recall or precision is 0, which is why it caught the degenerate model
+  above when raw accuracy didn't.
+- **ROC-AUC** evaluates the ranking quality of predicted probabilities across
+  every possible decision threshold, independent of the threshold you
+  eventually choose — useful when the operating point isn't fixed yet.
+- **Matthews correlation coefficient (MCC)** uses all four confusion-matrix
+  cells symmetrically in a single correlation-like statistic between -1 and
+  +1 (0 = random, 1 = perfect, -1 = perfectly inverted). It is widely
+  considered the most information-dense single-number summary for binary
+  classification because, unlike F1, it isn't biased toward whichever class
+  is treated as "positive."
+
+## Trade-off summary
+
+| Metric | Sensitive to class imbalance | Interpretability | Prefer when |
+|---|---|---|---|
+| **Accuracy** | High (misleading on skewed data) | Very high — plain % correct | Classes are balanced and error costs are symmetric |
+| **Balanced accuracy** | Low (corrects for imbalance) | High — average per-class recall | Imbalanced classes, all classes matter equally |
+| **F1 score** | Moderate (ignores TN entirely) | Moderate — harmonic mean of precision/recall | Positive class is rare and both FP and FN matter (e.g. spam, search relevance) |
+| **ROC-AUC** | Low (threshold-independent) | Moderate — needs probability scores, less intuitive as a single number | You need to compare ranking quality or haven't fixed a decision threshold |
+| **MCC** | Low (uses full confusion matrix) | Lower — correlation coefficient, less intuitive to non-technical stakeholders | You want one robust number that penalizes any confusion-matrix asymmetry, especially with imbalance |
+
+## Production concerns: accuracy as a dashboard metric
+
+Aggregate accuracy is a dangerous default for a production monitoring
+dashboard on any classifier where classes are imbalanced or errors are
+asymmetric in cost:
+
+- **Fraud detection**: fraud is rare by construction. A dashboard showing
+  "99.4% accuracy" can hide a model whose fraud recall has silently dropped
+  to near zero after a data drift event, while accuracy barely moves because
+  the negative class still dominates.
+- **Medical screening**: missing a positive case (FN) is typically far more
+  costly than a false alarm (FP). A single accuracy number gives equal
+  implicit weight to both, hiding a shift that increases missed diagnoses as
+  long as it's offset by fewer false alarms elsewhere.
+- **Spam filtering**: false positives (legitimate email marked as spam) and
+  false negatives (spam reaching the inbox) have different user-facing costs.
+  Aggregate accuracy can stay flat while one error type creeps up and the
+  other creeps down.
+
+The fix is architectural, not just "pick a different metric":
+
+1. **Monitor class-wise metrics** (per-class precision/recall, or a live
+   confusion matrix) rather than a single aggregate number, so a regression
+   concentrated in the minority class is visible immediately instead of
+   averaged away.
+2. **Track business-cost-weighted metrics** — assign explicit dollar or risk
+   costs to FP and FN and monitor the weighted sum, since that number
+   reflects what the business actually cares about, not an
+   equal-weighting-of-errors assumption that accuracy silently bakes in.
+3. **Alert on distributional shift of the positive class rate**, since a
+   change in the base rate alone can move accuracy substantially without any
+   change in model quality — conflating a data problem with a model problem
+   if accuracy is your only signal.
+4. **Re-evaluate the decision threshold**, not just the metric — many
+   production issues attributed to "the model got worse" are actually a
+   fixed classification threshold no longer matching a shifted score
+   distribution; ROC-AUC/PR-AUC monitoring catches this independent of
+   threshold choice.
+
+In short: accuracy is a reasonable smoke test, but it should never be the
+only number on a production classifier's dashboard, and it should never be
+the metric used to gate a deployment decision on its own.

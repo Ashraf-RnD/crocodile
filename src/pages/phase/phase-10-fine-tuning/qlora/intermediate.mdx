@@ -1,0 +1,121 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "QLoRA"
+level: intermediate
+phaseSlug: "phase-10-fine-tuning"
+phaseName: "Fine-tuning"
+topicSlug: "qlora"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "PEFT + TRL — QLoRA fine-tuning example"
+    url: "https://huggingface.co/docs/trl/main/en/sft_trainer"
+  - type: docs
+    title: "bitsandbytes — 4-bit quantization API"
+    url: "https://huggingface.co/docs/bitsandbytes/main/en/index"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## What actually happens during a QLoRA forward pass
+
+QLoRA doesn't just "shrink the numbers." The 4-bit weights are stored compressed and
+**dequantized on the fly**, block by block, right before the matrix multiply — the
+compute itself still happens in a higher-precision dtype (typically `bfloat16`).
+
+<Mermaid client:visible code={`flowchart LR
+  Store["Weights stored in 4-bit NF4"] --> Dequant["Dequantize block on the fly"]
+  Dequant --> Matmul["Matmul in bfloat16 compute"]
+  Matmul --> Out["Output"]
+  Adapter["LoRA adapter (bf16, trainable)"] --> Add["+"]
+  Matmul --> Add
+  Add --> Out`} />
+
+This is why QLoRA saves memory (weights sit compressed in VRAM) without destroying
+numerical stability during training (the actual arithmetic runs in bf16).
+
+## The three techniques QLoRA combines
+
+The QLoRA paper isn't just "LoRA + int4" — it introduces three specific pieces that
+together make it work well:
+
+1. **NF4 (4-bit NormalFloat)**: a quantization data type designed around the fact that
+   pretrained neural network weights are roughly normally distributed, so NF4's
+   quantization bins are spaced to minimize error for that specific distribution —
+   better than a naive uniform 4-bit format.
+2. **Double quantization**: quantizes the quantization *constants themselves* (the
+   per-block scaling factors), saving roughly another 0.4 bits per parameter — small
+   per-parameter, but meaningful at billions of parameters.
+3. **Paged optimizers**: uses NVIDIA unified memory to page optimizer states to CPU RAM
+   during rare GPU memory spikes (e.g. long sequences), preventing out-of-memory
+   crashes instead of raising an OOM error mid-training.
+
+```python
+bnb_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_quant_type="nf4",          # technique 1
+    bnb_4bit_use_double_quant=True,     # technique 2
+    bnb_4bit_compute_dtype=torch.bfloat16,
+)
+
+training_args = TrainingArguments(
+    optim="paged_adamw_8bit",           # technique 3
+    ...
+)
+```
+
+## A realistic QLoRA + TRL fine-tuning script
+
+```python
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from peft import LoraConfig, prepare_model_for_kbit_training
+from trl import SFTTrainer, SFTConfig
+from datasets import load_dataset
+import torch
+
+model_id = "meta-llama/Llama-3.1-8B-Instruct"
+
+bnb_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_quant_type="nf4",
+    bnb_4bit_use_double_quant=True,
+    bnb_4bit_compute_dtype=torch.bfloat16,
+)
+
+model = AutoModelForCausalLM.from_pretrained(model_id, quantization_config=bnb_config, device_map="auto")
+model = prepare_model_for_kbit_training(model)
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+peft_config = LoraConfig(r=32, lora_alpha=64, target_modules="all-linear", task_type="CAUSAL_LM")
+
+dataset = load_dataset("HuggingFaceH4/no_robots", split="train")
+
+trainer = SFTTrainer(
+    model=model,
+    train_dataset=dataset,
+    peft_config=peft_config,
+    args=SFTConfig(
+        output_dir="./qlora-llama3-out",
+        per_device_train_batch_size=4,
+        gradient_accumulation_steps=4,
+        optim="paged_adamw_8bit",
+        num_train_epochs=3,
+        bf16=True,
+    ),
+)
+trainer.train()
+```
+
+`prepare_model_for_kbit_training` handles the fiddly parts: casting layer norms to
+`float32` for stability, enabling gradient checkpointing correctly with a quantized
+base, and making sure the input embeddings require gradients (needed for gradient
+checkpointing to work through a frozen embedding layer).
+
+## When to reach for QLoRA over plain LoRA
+
+- **Single consumer GPU** (24GB or less) and a 7B+ model — QLoRA is often the only
+  option that fits.
+- **You don't need training to be maximally fast** — the dequantize step adds real
+  overhead, so QLoRA trains noticeably slower than plain 16-bit LoRA per step when both
+  fit in memory.
+- **You're memory-bound, not compute-bound** — if you have spare A100/H100 memory
+  headroom, plain LoRA in bf16 is usually faster wall-clock for the same quality.

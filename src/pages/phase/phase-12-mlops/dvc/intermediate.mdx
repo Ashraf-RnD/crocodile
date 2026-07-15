@@ -1,0 +1,121 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "DVC"
+level: intermediate
+phaseSlug: "phase-12-mlops"
+phaseName: "MLOps"
+topicSlug: "dvc"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "DVC Pipelines"
+    url: "https://dvc.org/doc/user-guide/pipelines"
+  - type: docs
+    title: "DVC Remote Storage"
+    url: "https://dvc.org/doc/user-guide/data-management/remote-storage"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Remote storage: sharing data across a team
+
+`dvc add` alone only versions data locally. To share it, you configure a
+**remote** — the DVC equivalent of `git remote` — and push/pull data the same
+way you would code:
+
+```bash
+dvc remote add -d storage s3://my-team-bucket/dvc-store
+dvc push       # uploads cached data to the remote
+dvc pull       # downloads data referenced by the current Git checkout
+```
+
+A teammate cloning the repo gets the tiny `.dvc` pointer files via `git clone`,
+then a single `dvc pull` fetches everything those pointers reference —
+identical experience to `git pull`, but for datasets and model checkpoints.
+
+## Pipelines: reproducible multi-stage workflows
+
+Beyond simple file versioning, DVC's `dvc.yaml` defines a **pipeline** of
+stages (preprocess → train → evaluate), each with declared dependencies and
+outputs. DVC only reruns a stage if its inputs changed:
+
+```yaml
+# dvc.yaml
+stages:
+  preprocess:
+    cmd: python preprocess.py data/raw.csv data/processed.csv
+    deps:
+      - preprocess.py
+      - data/raw.csv
+    outs:
+      - data/processed.csv
+
+  train:
+    cmd: python train.py data/processed.csv model.pkl
+    deps:
+      - train.py
+      - data/processed.csv
+    params:
+      - train.learning_rate
+      - train.n_estimators
+    outs:
+      - model.pkl
+    metrics:
+      - metrics.json:
+          cache: false
+```
+
+```bash
+dvc repro     # runs only the stages whose deps changed since last run
+```
+
+If you tweak `preprocess.py` but not `train.py`, `dvc repro` reruns
+`preprocess` and `train` (since `train` depends on `preprocess`'s output) but
+skips any stage further downstream that's unaffected — a build-cache style
+optimization for ML pipelines, similar to how `make` only rebuilds stale
+targets.
+
+<Mermaid client:visible code={`flowchart LR
+  A["data/raw.csv"] --> B["preprocess stage"]
+  B --> C["data/processed.csv"]
+  C --> D["train stage"]
+  D --> E["model.pkl"]
+  D --> F["metrics.json"]
+  G["params.yaml changed?"] -.triggers rerun.-> D`} />
+
+## Experiment tracking with `dvc exp`
+
+DVC also supports lightweight experiment tracking without a separate server —
+useful for teams that want Git-native experiment history rather than a
+hosted UI:
+
+```bash
+dvc exp run --set-param train.learning_rate=0.005
+dvc exp run --set-param train.learning_rate=0.01
+dvc exp show          # tabular comparison of all experiment runs
+dvc exp apply exp-a1b2  # promote the best experiment to your working directory
+```
+
+Each `dvc exp run` creates a lightweight, uncommitted Git experiment ref —
+you only commit the one you decide to keep, avoiding a Git history cluttered
+with 50 throwaway hyperparameter trials.
+
+## Combining DVC with a CI pipeline
+
+A common production pattern: a CI job runs `dvc repro` when `data/raw.csv` or
+`train.py` changes, then pushes the resulting model artifact to remote
+storage and registers it:
+
+```yaml
+# .github/workflows/retrain.yml (excerpt)
+- name: Pull data and reproduce pipeline
+  run: |
+    dvc pull
+    dvc repro
+    dvc push
+- name: Register model if metrics improved
+  run: python register_if_better.py metrics.json
+```
+
+This turns "retrain the model" into a fully reproducible, versioned operation
+triggered by a data or code change — the same guarantee Git gives you for
+code, extended to the entire data-to-model pipeline.

@@ -1,0 +1,92 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Cost Optimization"
+level: intermediate
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "cost-optimization"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "OpenAI Platform — Pricing"
+    url: "https://openai.com/api/pricing/"
+  - type: docs
+    title: "Anthropic Docs — Prompt caching"
+    url: "https://docs.claude.com/en/docs/build-with-claude/prompt-caching"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Where the money actually goes
+
+LLM cost has a small number of real levers, and effective cost optimization
+means attacking each independently rather than hoping one trick fixes
+everything.
+
+<Mermaid client:visible code={`flowchart TB
+  Request["Incoming request"] --> Route["Model router:<br/>pick cheapest model that meets quality bar"]
+  Route --> Cache{"Cache hit?"}
+  Cache -->|yes| Free["Served free / near-free"]
+  Cache -->|no| Trim["Context trimming:<br/>only include necessary tokens"]
+  Trim --> PromptCache{"Shared prefix cached?"}
+  PromptCache -->|yes| Cheaper["Prefix reused, cheaper generation"]
+  PromptCache -->|no| Full["Full-price generation"]
+  Cheaper --> Bill["Bill = input tokens + output tokens, at chosen model's rate"]
+  Full --> Bill`} />
+
+## Model routing / cascading
+
+Not every request needs your most capable (and most expensive) model. A
+common pattern is a **cascade**: try a cheap, fast model first, and only
+escalate to a more expensive model if the cheap one's output fails a
+confidence check or a validation rule. Simpler still is static routing by
+task type (classification -> small model, open-ended reasoning -> large
+model), decided once rather than per-request.
+
+```python
+async def answer(query, confidence_threshold=0.7):
+    cheap_result = await small_model.generate(query)
+    if cheap_result.confidence >= confidence_threshold:
+        return cheap_result.text  # cheap path, most requests land here
+    return await large_model.generate(query)  # escalate only when needed
+```
+
+## Context and output trimming
+
+Every token sent or generated is billed. Concrete techniques:
+
+- **Truncate or summarize conversation history** instead of resending it in
+  full once a conversation grows past a threshold.
+- **Retrieve only what's relevant** in RAG systems, rather than stuffing in
+  every loosely related document "just in case" — bigger context windows
+  make this tempting, but every extra token still costs money.
+- **Set explicit max output length** where the use case allows it — an
+  open-ended `max_tokens` invites unnecessarily long (and costly) responses
+  for tasks that need a short answer.
+
+## Caching (the biggest lever for repeat traffic)
+
+Response caching for repeated/similar queries and prompt/prefix caching for
+shared prompt structure (system prompts, long tool definitions) can cut
+costs substantially for workloads with real repetition — see the "Caching"
+topic in this phase for the mechanics. The cost impact is often larger than
+model choice for high-repetition workloads like customer support or
+internal tools with common queries.
+
+## Batching for non-interactive workloads
+
+For workloads that don't need an immediate response (bulk classification,
+overnight report generation, data enrichment), batch APIs offered by major
+providers process requests asynchronously at a meaningful discount
+(commonly 50% off standard pricing) in exchange for higher latency
+(processed within a window like 24 hours rather than seconds). This is
+"free" savings for any workload that was already tolerant of that latency.
+
+## Measuring cost per unit of value, not just total spend
+
+Raw dollar spend isn't the useful number on its own — cost per resolved
+support ticket, cost per accepted code suggestion, cost per successful task
+completion tells you whether you're spending efficiently. A cheaper model
+that requires more retries or produces lower-quality answers users have to
+re-ask can end up costing more per successful outcome than a pricier model
+that gets it right the first time — optimizing for raw token cost alone can
+backfire.

@@ -1,0 +1,110 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Decoder"
+level: intermediate
+phaseSlug: "phase-06-transformers"
+phaseName: "Transformers"
+topicSlug: "decoder"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "PyTorch — torch.nn.TransformerDecoder"
+    url: "https://pytorch.org/docs/stable/generated/torch.nn.TransformerDecoder.html"
+  - type: docs
+    title: "Hugging Face — generate() API reference"
+    url: "https://huggingface.co/docs/transformers/en/main_classes/text_generation"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Two decoder shapes: decoder-only vs. encoder-decoder's decoder
+
+There are two flavors of "decoder" you'll encounter:
+
+1. **Decoder-only** (GPT family, LLaMA) — every layer has just causally-masked
+   self-attention plus a feed-forward network. No separate encoder exists; the
+   "prompt" and "generation" share the same sequence.
+2. **Encoder-decoder's decoder** (original Transformer, T5, BART) — each layer has
+   causally-masked self-attention **plus a cross-attention sublayer** that attends to
+   the encoder's output, letting the decoder condition its generation on a separately
+   encoded source sequence (e.g. the sentence being translated).
+
+<Mermaid client:visible code={`flowchart TB
+  In["Target tokens so far"] --> SA["Masked self-attention (causal)"]
+  SA --> Add1["Add & Norm"]
+  Add1 --> CA["Cross-attention: Q from decoder, K/V from encoder output"]
+  EncOut["Encoder output"] --> CA
+  CA --> Add2["Add & Norm"]
+  Add2 --> FF["Feed-forward network"]
+  FF --> Add3["Add & Norm"]
+  Add3 --> Out["Decoder layer output"]`} />
+
+## Building a decoder-only layer (GPT-style)
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class DecoderOnlyLayer(nn.Module):
+    def __init__(self, d_model=256, num_heads=8, d_ff=1024):
+        super().__init__()
+        self.self_attn = nn.MultiheadAttention(d_model, num_heads, batch_first=True)
+        self.norm1 = nn.LayerNorm(d_model)
+        self.ffn = nn.Sequential(
+            nn.Linear(d_model, d_ff), nn.GELU(), nn.Linear(d_ff, d_model)
+        )
+        self.norm2 = nn.LayerNorm(d_model)
+
+    def forward(self, x):
+        seq_len = x.size(1)
+        causal_mask = nn.Transformer.generate_square_subsequent_mask(seq_len)
+        attn_out, _ = self.self_attn(x, x, x, attn_mask=causal_mask, is_causal=True)
+        x = self.norm1(x + attn_out)
+        x = self.norm2(x + self.ffn(x))
+        return x
+
+layer = DecoderOnlyLayer()
+x = torch.randn(2, 10, 256)
+out = layer(x)
+print(out.shape)  # torch.Size([2, 10, 256])
+```
+
+## Autoregressive generation and the KV cache in practice
+
+Generating text token by token naively means recomputing attention over the entire
+growing sequence at every step. Hugging Face's `generate()` avoids this by caching
+past key/value projections:
+
+```python
+from transformers import AutoTokenizer, AutoModelForCausalLM
+
+tokenizer = AutoTokenizer.from_pretrained("gpt2")
+model = AutoModelForCausalLM.from_pretrained("gpt2")
+
+inputs = tokenizer("The best way to learn transformers is", return_tensors="pt")
+output_ids = model.generate(
+    **inputs,
+    max_new_tokens=20,
+    do_sample=True,
+    top_k=50,
+    use_cache=True,   # reuse past K/V instead of recomputing from scratch each step
+)
+print(tokenizer.decode(output_ids[0], skip_special_tokens=True))
+```
+
+`use_cache=True` (the default) is what makes generation practical — without it,
+generating a 100-token continuation would mean re-running the full forward pass 100
+times over an ever-growing sequence instead of doing 100 cheap incremental steps.
+
+## Decoding strategies matter as much as the architecture
+
+The decoder produces a probability distribution over the vocabulary at each step —
+*how* you turn that distribution into an actual token has a big effect on output
+quality:
+
+- **Greedy** — always pick the highest-probability token; fast but often repetitive.
+- **Beam search** — track several candidate sequences at once; better for tasks with
+  one "correct" answer (translation), but can produce bland text for open generation.
+- **Top-k / nucleus (top-p) sampling** — sample from a restricted set of likely
+  tokens; standard for creative/open-ended generation, controlled via `temperature`,
+  `top_k`, and `top_p` in `generate()`.

@@ -1,0 +1,103 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Word2Vec"
+level: intermediate
+phaseSlug: "phase-05-natural-language-processing"
+phaseName: "Natural Language Processing"
+topicSlug: "word2vec"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "Gensim — Word2Vec API reference"
+    url: "https://radimrehurek.com/gensim/models/word2vec.html"
+  - type: article
+    title: "The Illustrated Word2Vec (Jay Alammar)"
+    url: "https://jalammar.github.io/illustrated-word2vec/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Two training objectives: CBOW vs. Skip-gram
+
+Word2Vec isn't one algorithm, it's a training setup with two variants that predict in
+opposite directions using a shallow (one hidden layer) neural network:
+
+<Mermaid client:visible code={`flowchart LR
+  subgraph CBOW["CBOW: context -> word"]
+    C1[the] --> M1((hidden))
+    C2[quick] --> M1
+    C3[fox] --> M1
+    C4[jumps] --> M1
+    M1 --> W1[predict: brown]
+  end
+  subgraph SG["Skip-gram: word -> context"]
+    W2[brown] --> M2((hidden))
+    M2 --> S1[predict: the]
+    M2 --> S2[predict: quick]
+    M2 --> S3[predict: fox]
+    M2 --> S4[predict: jumps]
+  end`} />
+
+- **CBOW** (Continuous Bag of Words) predicts the center word from its surrounding
+  context — faster to train, works better on frequent words.
+- **Skip-gram** predicts surrounding context words from the center word — slower, but
+  noticeably better for rare words, since each rare-word occurrence generates several
+  training examples (one per context word) instead of just one.
+
+Skip-gram is the more commonly used variant in practice because rare-word quality
+usually matters more than raw training speed.
+
+## Negative sampling: the trick that makes it fast
+
+Naively, each training step would require a softmax over the entire vocabulary
+(hundreds of thousands of words) — far too slow. **Negative sampling** reframes
+training as a much cheaper binary classification: for each true (word, context) pair,
+sample a handful of random "negative" words and train the model to distinguish real
+context words from noise.
+
+```python
+from gensim.models import Word2Vec
+
+sentences = [
+    ["the", "quick", "brown", "fox", "jumps", "over", "the", "lazy", "dog"],
+    ["the", "dog", "barks", "at", "the", "fox"],
+    # ... thousands more tokenized sentences
+]
+
+model = Word2Vec(
+    sentences,
+    vector_size=100,     # embedding dimensionality
+    window=5,             # context window size
+    min_count=2,          # ignore words appearing fewer than 2 times
+    sg=1,                 # 1 = skip-gram, 0 = CBOW
+    negative=10,           # negative samples per positive example
+    epochs=10,
+    workers=4,
+)
+
+model.save("my_word2vec.model")
+print(model.wv.most_similar("fox", topn=5))
+```
+
+Negative sampling with 5-20 samples per step is roughly as effective as full softmax
+for downstream quality, at a small fraction of the compute — this is the single
+optimization that made training word embeddings on billion-word corpora practical.
+
+## Why Word2Vec embeddings became a standard building block
+
+Before pretrained language models existed, training your own Word2Vec vectors (or
+downloading GloVe/Word2Vec pretrained ones) on a large general corpus, then using them
+as the frozen input layer of a downstream classifier (LSTM, CNN, or even logistic
+regression over averaged vectors) was the default way to get any semantic signal into
+a model without needing labeled data for every task. This "pretrain once, reuse
+everywhere" pattern is the direct conceptual ancestor of today's pretrained
+transformer + fine-tuning workflow — Word2Vec was where the industry first learned
+that unsupervised pretraining on raw text transfers well to downstream supervised
+tasks.
+
+## A known limitation: one vector per word
+
+Word2Vec gives `"bank"` exactly one vector, blending "river bank" and "financial bank"
+into a single averaged representation — it has no way to disambiguate meaning by
+context. This static, context-free nature is precisely the gap that contextual
+embeddings from transformer models (covered in the sentence-embeddings and Hugging
+Face Transformers topics) were built to close.

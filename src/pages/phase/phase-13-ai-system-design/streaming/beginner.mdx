@@ -1,0 +1,65 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Streaming"
+level: beginner
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "streaming"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "MDN — Server-Sent Events (SSE)"
+    url: "https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events"
+  - type: docs
+    title: "OpenAI Platform — Streaming API responses"
+    url: "https://platform.openai.com/docs/api-reference/streaming"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Why AI answers appear word by word
+
+You've almost certainly noticed that ChatGPT-style tools don't show you the
+full answer instantly — words appear gradually, like someone typing in real
+time. This isn't a visual effect for style; it's a direct reflection of how
+the model actually works. An LLM generates one token (roughly a word-piece)
+at a time, and each token depends on all the ones before it. **Streaming**
+just means sending each token to your screen the moment it's generated,
+instead of waiting for the whole response to finish first.
+
+<Mermaid client:visible code={`flowchart LR
+  Request["You send a message"] --> Model["Model starts generating"]
+  Model --> T1["Token 1 ready"] --> Send1["Sent to you immediately"]
+  Model --> T2["Token 2 ready"] --> Send2["Sent to you immediately"]
+  Model --> T3["Token 3 ready..."] --> Send3["...and so on"]`} />
+
+## Without streaming vs. with streaming
+
+Imagine asking a question that takes 8 seconds to fully answer:
+
+- **Without streaming**: you stare at a blank screen (or a spinner) for the
+  full 8 seconds, then the entire answer appears at once.
+- **With streaming**: you start seeing the first words after maybe half a
+  second, and the rest fills in while you're already reading.
+
+Both take the same total time to finish, but streaming makes the *wait
+before anything happens* — called **time to first token** — dramatically
+shorter, which is what actually determines whether an app feels responsive.
+
+## Try it yourself
+
+If a non-streaming version of a chatbot and a streaming version both take
+exactly 8 seconds to generate the same full answer, which one will most
+users perceive as faster, and why?
+
+<details>
+<summary>Solution</summary>
+
+The streaming version, even though the total generation time is identical.
+Perceived speed is driven much more by how quickly *something* useful
+appears (time to first token) than by total completion time — a user who
+starts reading a growing response after half a second feels like the system
+is working, while a user staring at a blank spinner for 8 seconds feels like
+it's stuck, even if it finishes at the same moment. This is why nearly every
+production chat product streams responses rather than waiting for the full
+answer.
+</details>

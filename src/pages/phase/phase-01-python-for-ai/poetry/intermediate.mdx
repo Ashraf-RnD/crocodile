@@ -1,0 +1,97 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Poetry"
+level: intermediate
+phaseSlug: "phase-01-python-for-ai"
+phaseName: "Python for AI"
+topicSlug: "poetry"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "Poetry — Dependency specification"
+    url: "https://python-poetry.org/docs/dependency-specification/"
+  - type: docs
+    title: "Poetry — Managing dependency groups"
+    url: "https://python-poetry.org/docs/managing-dependencies/#dependency-groups"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Dependency groups: separating dev tools from runtime code
+
+A real project needs packages your code imports at runtime (`torch`, `pandas`) and
+packages only used while developing (`pytest`, `black`, `mypy`) — you don't want
+test frameworks shipped into a production container. Poetry's dependency groups
+express this directly.
+
+```toml
+[tool.poetry.dependencies]
+python = "^3.11"
+torch = "^2.2"
+pandas = "^2.2"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0"
+black = "^24.0"
+mypy = "^1.9"
+
+[tool.poetry.group.notebooks.dependencies]
+jupyterlab = "^4.1"
+matplotlib = "^3.8"
+```
+
+```bash
+poetry install                     # installs main + all default groups
+poetry install --only main         # production install — skips dev/notebooks entirely
+poetry install --with notebooks    # main + the notebooks group specifically
+```
+
+`--only main` is exactly what a Dockerfile building a production training/inference
+image should use — a smaller image with no test or notebook dependencies baked in.
+
+<Mermaid client:visible code={`flowchart TB
+  PP["pyproject.toml"] --> Main["main deps — torch, pandas"]
+  PP --> Dev["dev group — pytest, black"]
+  PP --> NB["notebooks group — jupyterlab"]
+  Main --> Prod["poetry install --only main → prod image"]
+  Dev --> Local["poetry install → full local dev env"]`} />
+
+## Version constraint syntax
+
+Poetry uses caret (`^`) and tilde (`~`) constraints by default, which is more
+opinionated than pip's raw `==`/`>=`.
+
+```toml
+numpy = "^1.26"    # allows 1.26.x and 1.x (>=1.26.0, <2.0.0) — most common default
+requests = "~2.31" # allows 2.31.x only (>=2.31.0, <2.32.0) — tighter
+transformers = "4.38.2"  # exact pin, no updates allowed
+```
+
+`^1.26` follows semantic versioning: it allows updates that shouldn't break your
+code (patch/minor bumps) but blocks the next major version, which by convention may
+contain breaking changes. For fast-moving, less strictly-versioned ML libraries,
+teams often pin exact versions instead of trusting semver.
+
+## Updating the lock file safely
+
+```bash
+poetry add "torch@^2.3"      # bump a specific dependency, re-resolves + re-locks
+poetry update                # re-resolve everything to the newest allowed versions
+poetry update transformers   # re-resolve just one package, minimal ripple
+poetry lock --no-update      # regenerate lock file from pyproject.toml without bumping versions
+```
+
+`poetry update` with no arguments re-resolves the *entire* dependency tree, which
+can shift many transitive versions at once — in an ML project with narrow
+inter-package version constraints (`torch` + `transformers` + `accelerate`), it's
+usually safer to update one package at a time and re-run tests after each.
+
+## Publishing a package
+
+Because Poetry treats your project as a real installable/publishable package, not
+just an environment, shipping an internal library to a private index (or PyPI) is
+built in.
+
+```bash
+poetry build                 # builds a wheel + sdist into dist/
+poetry publish                # uploads to PyPI (or --repository for a private index)
+```

@@ -1,0 +1,86 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "BERT"
+level: beginner
+phaseSlug: "phase-06-transformers"
+phaseName: "Transformers"
+topicSlug: "bert-2"
+estReadTime: 6
+resources:
+  - type: article
+    title: "BERT: Pre-training of Deep Bidirectional Transformers (original paper)"
+    url: "https://arxiv.org/abs/1810.04805"
+  - type: article
+    title: "Google AI Blog — Open Sourcing BERT"
+    url: "https://research.google/blog/open-sourcing-bert-state-of-the-art-pre-training-for-natural-language-processing/"
+---
+
+## The paper, not just the model
+
+This lesson is about the 2018 research paper "BERT: Pre-training of Deep
+Bidirectional Transformers for Language Understanding" — the paper that introduced
+BERT and reshaped how the NLP field approached pretraining. (If you're looking for
+"how do I use BERT," see the separate BERT architecture lesson — this one is about
+what problem the paper solved and why it mattered.)
+
+### The problem the paper identified
+
+By 2018, using a Transformer's decoder half for language modeling (predicting the
+next word, left-to-right) was already known to work well as a pretraining signal.
+But the paper's authors pointed out a real limitation: standard left-to-right
+language models can only use *past* context to understand a word — they can never
+look ahead. For many understanding tasks (is this review positive or negative? what
+does "it" refer to in this sentence?), looking at the *whole* sentence, both
+directions, should intuitively give richer understanding than only looking backward.
+
+The obstacle: how do you pretrain a model to use both directions at once, without
+the model "cheating" by trivially copying the answer for the word it's supposed to
+predict?
+
+### The paper's key idea: mask, then predict
+
+The paper's answer is elegant and simple: randomly hide ("mask") some words in the
+input, and train the model to predict the hidden words using **all** the surrounding
+context, both before and after. Since the model never sees the actual hidden word,
+there's no way to "cheat" by copying it, and the model is forced to build a genuinely
+bidirectional representation of the sentence.
+
+```
+Input:  "The [MASK] sat on the mat and purred contentedly."
+Model must predict: "cat"
+```
+
+Combined with a second, smaller pretraining task (predicting whether one sentence
+follows another), this became BERT's full pretraining recipe.
+
+### Why this was a big deal
+
+Before this paper, getting state-of-the-art results on a new NLP task usually meant
+designing a custom architecture for that specific task. BERT's paper showed that a
+**single pretrained model**, fine-tuned with only a small added output layer, could
+beat specialized architectures across eleven different NLP benchmark tasks — often by
+a wide margin. That result is what made "pretrain once, fine-tune everywhere" the
+dominant paradigm in NLP almost overnight.
+
+## Try it yourself
+
+Before this paper, language model pretraining (like GPT-1, released the same year)
+was left-to-right only. Explain in your own words why a left-to-right-only model
+struggles to fully understand the word "bank" in "I sat by the river **bank**"
+versus "I withdrew cash from the **bank**."
+
+<details>
+<summary>Solution</summary>
+
+A left-to-right model reading "I sat by the river bank" only has "I sat by the
+river" as context when it reaches "bank" — which already gives a strong hint. But
+consider a harder case: "The bank was closed, so I couldn't get cash." A
+left-to-right model processing "bank" only has "The" as prior context — not nearly
+enough to know if this is a financial institution or a riverbank. It has to wait
+until much later words ("cash") to disambiguate, and by then it's too late to revise
+its earlier representation of "bank." A bidirectional model, by contrast, can use
+"cash" (which comes after "bank") immediately when building its representation of
+the word "bank" itself — this is exactly the ambiguity-resolution advantage the
+BERT paper argued bidirectional context provides.
+
+</details>

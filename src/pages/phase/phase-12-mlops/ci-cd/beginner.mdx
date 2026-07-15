@@ -1,0 +1,84 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "CI/CD"
+level: beginner
+phaseSlug: "phase-12-mlops"
+phaseName: "MLOps"
+topicSlug: "ci-cd"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "GitHub Actions — Quickstart"
+    url: "https://docs.github.com/en/actions/quickstart"
+  - type: article
+    title: "CI/CD for Machine Learning: An Introduction"
+    url: "https://ml-ops.org/content/mlops-principles"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## What CI/CD means for ML
+
+In regular software, **CI/CD** (Continuous Integration / Continuous
+Deployment) automatically tests and deploys code every time it changes — no
+manual "let me run the tests and upload the build" ritual. For ML, the same
+idea applies, but there's more to test and deploy than just code: data,
+model files, and the trained model's actual performance all need checking.
+
+A basic ML CI pipeline typically runs on every pull request:
+
+```yaml
+# .github/workflows/ci.yml
+name: ML CI
+on: [pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - run: pytest tests/                    # unit tests for data/feature code
+      - run: python -m src.validate_data       # sanity-check schema of sample data
+```
+
+### The mental model
+
+<Mermaid client:visible code={`flowchart LR
+  A["Push code / open PR"] --> B["CI: run unit tests"]
+  B --> C["CI: validate data schema"]
+  C --> D{"All checks pass?"}
+  D -->|yes| E["Merge allowed"]
+  D -->|no| F["Block merge, show failure"]`} />
+
+This catches obvious problems — broken preprocessing code, a schema change
+that silently breaks a downstream feature — *before* they reach a training
+job that might run for hours on expensive GPU time.
+
+## Try it yourself
+
+You want a CI job that installs dependencies and runs `pytest` on every push
+to any branch. Sketch the GitHub Actions YAML.
+
+<details>
+<summary>Solution</summary>
+
+```yaml
+name: Run Tests
+on: [push]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - run: pytest
+```
+
+</details>

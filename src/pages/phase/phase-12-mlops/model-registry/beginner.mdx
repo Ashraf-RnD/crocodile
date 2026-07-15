@@ -1,0 +1,102 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Model Registry"
+level: beginner
+phaseSlug: "phase-12-mlops"
+phaseName: "MLOps"
+topicSlug: "model-registry"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "MLflow Model Registry"
+    url: "https://mlflow.org/docs/latest/model-registry.html"
+  - type: article
+    title: "What Is a Model Registry?"
+    url: "https://neptune.ai/blog/mlops-model-registries"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## A catalog for trained models
+
+After training dozens of model versions, you need a clear answer to two
+questions: "which model is currently live in production?" and "what were the
+previous versions, in case we need to roll back?"
+
+A **model registry** is a versioned catalog that answers both. Instead of
+model files scattered across folders named `model_final_v2.pkl`, every
+trained model gets registered with a version number and a stage
+(`Staging`, `Production`, `Archived`).
+
+### Registering a model
+
+```python
+import mlflow
+
+# After training and logging a run...
+result = mlflow.register_model(
+    model_uri="runs:/abc123/model",
+    name="churn-predictor"
+)
+print(f"Registered as version {result.version}")
+```
+
+### Promoting it
+
+```python
+from mlflow import MlflowClient
+
+client = MlflowClient()
+client.transition_model_version_stage(
+    name="churn-predictor",
+    version=result.version,
+    stage="Production"
+)
+```
+
+Now your serving code always loads "whatever is currently in Production,"
+without needing to know the exact file path or version number:
+
+```python
+model = mlflow.pyfunc.load_model("models:/churn-predictor/Production")
+```
+
+### The mental model
+
+<Mermaid client:visible code={`flowchart LR
+  A["Training run"] -->|register_model| B["Version 1"]
+  C["Better training run"] -->|register_model| D["Version 2"]
+  D -->|promote| E["Stage: Production"]
+  B -->|demote| F["Stage: Archived"]
+  E --> G["Serving code loads 'Production' — always the current version"]`} />
+
+If version 2 turns out to be worse, you can instantly roll back by promoting
+version 1 back to Production — no retraining needed, because the old model
+file is still safely stored in the registry.
+
+## Try it yourself
+
+You trained a new model and want to register it under the name
+`"spam-classifier"`, then mark it as `"Staging"` (not yet production) for
+further testing.
+
+<details>
+<summary>Solution</summary>
+
+```python
+import mlflow
+from mlflow import MlflowClient
+
+result = mlflow.register_model(
+    model_uri="runs:/xyz789/model",
+    name="spam-classifier"
+)
+
+client = MlflowClient()
+client.transition_model_version_stage(
+    name="spam-classifier",
+    version=result.version,
+    stage="Staging"
+)
+```
+
+</details>

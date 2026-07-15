@@ -1,0 +1,126 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Tool Calling"
+level: intermediate
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "tool-calling"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "LangChain — Tool Calling Concepts"
+    url: "https://python.langchain.com/docs/concepts/tool_calling/"
+  - type: docs
+    title: "Anthropic — Tool Use with Claude"
+    url: "https://docs.anthropic.com/en/docs/build-with-claude/tool-use/implement-tool-use"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Designing a tool registry
+
+Real systems don't hand-wire tool schemas one at a time — they build a **tool
+registry**: a decorator or registration pattern that keeps a function, its schema, and
+its metadata bundled together, so adding a new capability is one function definition,
+not three places to keep in sync.
+
+```python
+from pydantic import BaseModel
+from typing import Callable
+
+class Tool(BaseModel):
+    name: str
+    description: str
+    parameters: dict
+    handler: Callable
+
+    class Config:
+        arbitrary_types_allowed = True
+
+REGISTRY: dict[str, Tool] = {}
+
+def register_tool(name: str, description: str, parameters: dict):
+    def decorator(fn):
+        REGISTRY[name] = Tool(name=name, description=description, parameters=parameters, handler=fn)
+        return fn
+    return decorator
+
+@register_tool(
+    name="get_order_status",
+    description="Look up the status of a customer order by ID",
+    parameters={"type": "object", "properties": {"order_id": {"type": "string"}}, "required": ["order_id"]},
+)
+def get_order_status(order_id: str):
+    return {"order_id": order_id, "status": "shipped"}
+
+def to_openai_schema():
+    return [
+        {"type": "function", "function": {"name": t.name, "description": t.description, "parameters": t.parameters}}
+        for t in REGISTRY.values()
+    ]
+```
+
+This is essentially what LangChain's `@tool` decorator and similar libraries do under
+the hood — decorate a function once, get both the callable and the schema derived
+from it.
+
+## The ReAct loop with a max-iteration guard
+
+Any loop that lets a model repeatedly call tools needs a hard stop — otherwise a
+confused model can loop indefinitely, burning tokens and money:
+
+```python
+def run_agent(user_message, max_iterations=8):
+    messages = [{"role": "user", "content": user_message}]
+    for i in range(max_iterations):
+        response = client.chat.completions.create(
+            model="gpt-4o", messages=messages, tools=to_openai_schema()
+        )
+        msg = response.choices[0].message
+        messages.append(msg)
+
+        if not msg.tool_calls:
+            return msg.content
+
+        for call in msg.tool_calls:
+            tool = REGISTRY[call.function.name]
+            args = json.loads(call.function.arguments)
+            try:
+                result = tool.handler(**args)
+            except Exception as e:
+                result = {"error": str(e)}
+            messages.append({"role": "tool", "tool_call_id": call.id, "content": json.dumps(result)})
+
+    return "Reached max iterations without a final answer."
+```
+
+<Mermaid client:visible code={`flowchart TB
+  A[User request] --> B[Model reasons + picks a tool]
+  B --> C[Execute tool, observe result]
+  C --> D{Enough info to answer?}
+  D -->|No, and under max_iterations| B
+  D -->|Yes| E[Return final answer]
+  D -->|No, hit max_iterations| F[Return fallback / escalate]`} />
+
+## Read-only vs. side-effecting tools
+
+Not all tools carry the same risk. A useful split:
+
+- **Read-only tools** (search, lookup, calculate) — safe to let the model call freely,
+  since a wrong call just wastes a round trip.
+- **Side-effecting tools** (send email, charge a card, delete a record) — should
+  require explicit confirmation, additional validation, or be scoped so narrowly that
+  a wrong call has limited blast radius (e.g. `refund_order(order_id, max_amount=50)`
+  rather than an open-ended `run_refund(sql)`).
+
+Production agent frameworks (LangGraph's `interrupt`, OpenAI's approval workflows)
+build this distinction in directly, pausing execution before side-effecting calls for
+a human-in-the-loop check.
+
+## Tool result formatting affects the next decision
+
+What you return from a tool matters as much as what you compute. Returning a raw
+500-row database dump forces the model to parse an enormous, noisy blob before its
+next decision; returning a concise, pre-summarized result (`{"count": 42, "top_3": [...]}`)
+gives the model exactly what it needs to decide the next step, cheaper and more
+reliably. Treat tool output formatting as part of the prompt design, not just a data
+plumbing detail.

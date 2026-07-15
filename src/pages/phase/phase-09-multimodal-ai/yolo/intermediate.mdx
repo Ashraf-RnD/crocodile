@@ -1,0 +1,80 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "YOLO"
+level: intermediate
+phaseSlug: "phase-09-multimodal-ai"
+phaseName: "Multimodal AI"
+topicSlug: "yolo"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "Ultralytics — Train custom models"
+    url: "https://docs.ultralytics.com/modes/train/"
+  - type: docs
+    title: "Ultralytics — Multi-object tracking"
+    url: "https://docs.ultralytics.com/modes/track/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Anatomy of a YOLO forward pass
+
+A YOLO model is three stages chained together:
+
+<Mermaid client:visible code={`flowchart LR
+  A[Input image] --> B["Backbone\n(CNN feature extractor)"]
+  B --> C["Neck\n(feature pyramid, merges scales)"]
+  C --> D["Head\n(predicts boxes + classes)"]
+  D --> E["NMS\n(remove duplicate boxes)"]
+  E --> F[Final detections]`} />
+
+- **Backbone**: a convolutional network (CSPDarknet in earlier YOLO versions) extracts
+  features at decreasing resolutions.
+- **Neck**: a feature pyramid network merges features across scales, so the model can
+  detect both a tiny distant object and a large close one from the same forward pass.
+- **Head**: predicts bounding boxes, objectness, and class scores directly at each grid
+  cell — modern YOLO (v8+) is **anchor-free**, predicting box coordinates directly
+  instead of adjusting predefined anchor box templates, which simplifies training and
+  generalizes better across unusual object aspect ratios.
+- **NMS (Non-Maximum Suppression)**: the raw head output typically has many overlapping
+  boxes for the same object; NMS keeps only the highest-confidence box per cluster and
+  discards the rest.
+
+## Fine-tuning on your own data
+
+Pretrained COCO weights are a starting point, not the end product, for most real
+applications — a warehouse inventory system doesn't care about "dog" or "traffic
+light," it cares about specific SKUs. Fine-tuning is a few lines with Ultralytics:
+
+```python
+from ultralytics import YOLO
+
+model = YOLO("yolo11n.pt")
+model.train(
+    data="warehouse_dataset.yaml",  # defines classes + train/val image paths
+    epochs=50,
+    imgsz=640,
+)
+```
+
+`warehouse_dataset.yaml` points to labeled images in YOLO format (one `.txt` per image
+with `class x_center y_center width height` per line, normalized 0-1) — tools like
+Roboflow or CVAT are the standard way teams generate this from raw photos.
+
+## Tracking, not just detecting
+
+Real-time video applications (retail analytics, traffic monitoring) usually need
+objects tracked *across frames*, not detected independently in each one. Ultralytics
+bundles tracking (ByteTrack/BoT-SORT) directly:
+
+```python
+results = model.track(source="store_camera.mp4", persist=True)
+
+for r in results:
+    for box in r.boxes:
+        track_id = int(box.id) if box.id is not None else None
+        print(f"object {track_id}: {model.names[int(box.cls)]}")
+```
+
+`persist=True` keeps track IDs consistent across frames, which is what lets you count
+"how many unique people walked past this camera today" instead of re-detecting the
+same person in every frame as if they were new.

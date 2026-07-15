@@ -1,0 +1,70 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Distributions"
+level: expert
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "distributions"
+estReadTime: 10
+resources:
+  - type: article
+    title: "The reparameterization trick, explained"
+    url: "https://gregorygundersen.com/blog/2018/04/29/reparameterization/"
+---
+
+## The reparameterization trick
+
+You can't backpropagate through a random sampling operation directly — `z ~ N(μ, σ²)`
+has no gradient with respect to `μ` and `σ` as written, because sampling is not a
+differentiable function of its parameters. The **reparameterization trick** rewrites
+sampling as a deterministic, differentiable function of the parameters plus external
+noise:
+
+```
+z = μ + σ * ε,   where ε ~ N(0, 1)
+```
+
+Now `z` is a differentiable function of `μ` and `σ`, and gradients flow through
+normally, with all the randomness pushed into `ε`, which doesn't need gradients. This
+is precisely what makes VAEs trainable end-to-end with standard backpropagation, and
+it's a specific instance of a more general pattern (also seen in the Gumbel-softmax
+trick for discrete distributions) for making stochastic computation graphs
+differentiable.
+
+## Heavy-tailed distributions and gradient noise
+
+Empirically, gradient noise in SGD is not well-modeled as Gaussian — it's closer to a
+heavy-tailed (alpha-stable) distribution, with occasional large outlier gradients far
+more frequent than a Gaussian assumption would predict. This has real optimizer
+design consequences: gradient clipping exists specifically to bound the damage from
+these heavy-tailed outlier gradients, and it's part of the theoretical motivation for
+why adaptive optimizers (Adam) that normalize by a running estimate of gradient
+magnitude tend to be more robust than plain SGD to this noise structure.
+
+## Mixture models and multimodality
+
+A single Gaussian assumes unimodal data (one "hump"). Real data is frequently
+**multimodal** — multiple clusters of likely values. A **Gaussian Mixture Model**
+represents this as a weighted sum of several Gaussians:
+
+```
+P(x) = sum_k π_k · N(x; μ_k, σ_k²)
+```
+
+This shows up directly in diffusion models' theoretical framing (the reverse process
+learns to model a mixture-like multimodal distribution at each denoising step) and in
+mixture density networks, where a model outputs distribution parameters instead of a
+point estimate — useful whenever a single "average" prediction would be a poor
+summary of genuinely multiple plausible outcomes (e.g. multi-agent trajectory
+prediction, where "average" over two divergent paths is a path nobody would take).
+
+## Distribution shift and its practical failure mode
+
+A model is trained assuming train and test data come from the same distribution
+(i.i.d. assumption). **Distribution shift** — when production data's distribution
+diverges from training data's — is one of the most common causes of silent production
+model degradation, distinct from a code bug: the model still runs, still returns
+confident predictions, but its learned distribution no longer matches reality. This is
+the statistical justification for drift detection in MLOps monitoring — tracking
+divergence (e.g. KL divergence, population stability index) between training-time and
+production-time feature/prediction distributions over time.

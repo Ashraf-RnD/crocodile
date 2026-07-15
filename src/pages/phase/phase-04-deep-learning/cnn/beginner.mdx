@@ -1,0 +1,75 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "CNN"
+level: beginner
+phaseSlug: "phase-04-deep-learning"
+phaseName: "Deep Learning"
+topicSlug: "cnn"
+estReadTime: 7
+resources:
+  - type: docs
+    title: "PyTorch — Conv2d documentation"
+    url: "https://pytorch.org/docs/stable/generated/torch.nn.Conv2d.html"
+  - type: video
+    title: "But what is a convolution? (3Blue1Brown)"
+    url: "https://www.youtube.com/watch?v=KuXjwB4LzSA"
+---
+
+## A convolution is a stamp that slides across an image
+
+Imagine a small transparent stamp with a pattern on it — say, a diagonal line
+detector. You slide that stamp across every position of a photo, and everywhere the
+underlying image matches the stamp's pattern, you get a strong response. That's a
+**convolution**: a small learnable filter (the "stamp") slides across the image,
+producing a new image (a "feature map") that highlights where that pattern appears.
+
+A **Convolutional Neural Network (CNN)** stacks many of these filters, learning
+simple patterns (edges, colors) in early layers and combining them into complex
+patterns (eyes, wheels, faces) in deeper layers.
+
+```python
+import torch
+import torch.nn as nn
+
+conv = nn.Conv2d(in_channels=3, out_channels=8, kernel_size=3, padding=1)
+
+image = torch.randn(1, 3, 32, 32)   # 1 image, 3 color channels, 32x32 pixels
+features = conv(image)
+print(features.shape)               # torch.Size([1, 8, 32, 32]) -> 8 feature maps
+```
+
+Each of the 8 output channels is a different learned "stamp" looking for a different
+pattern — the network figures out what patterns are useful during training, you
+never hand-design them.
+
+### Shrinking the image with pooling
+
+CNNs typically shrink the spatial size as they go deeper, using **pooling** to keep
+only the strongest signal in each small region:
+
+```python
+pool = nn.MaxPool2d(kernel_size=2)   # halves height and width
+downsampled = pool(features)
+print(downsampled.shape)             # torch.Size([1, 8, 16, 16])
+```
+
+### Try it yourself
+
+Create a `Conv2d` layer that takes a 1-channel (grayscale) 28x28 image and outputs
+16 feature maps, using a 3x3 kernel with padding so the spatial size stays 28x28.
+Print the output shape for a batch of 4 images.
+
+<details>
+<summary>Solution</summary>
+
+```python
+import torch
+import torch.nn as nn
+
+conv = nn.Conv2d(in_channels=1, out_channels=16, kernel_size=3, padding=1)
+images = torch.randn(4, 1, 28, 28)
+out = conv(images)
+print(out.shape)   # torch.Size([4, 16, 28, 28])
+```
+
+</details>

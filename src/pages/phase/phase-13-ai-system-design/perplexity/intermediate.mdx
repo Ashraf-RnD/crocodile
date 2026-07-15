@@ -1,0 +1,100 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Perplexity"
+level: intermediate
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "perplexity"
+estReadTime: 9
+resources:
+  - type: article
+    title: "Perplexity Engineering Blog"
+    url: "https://www.perplexity.ai/hub/blog"
+  - type: article
+    title: "Pinecone — Retrieval Augmented Generation (RAG) explained"
+    url: "https://www.pinecone.io/learn/retrieval-augmented-generation/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## System design: a RAG pipeline with a search engine attached
+
+Perplexity's core loop is retrieval-augmented generation, but the interesting
+engineering is in how much happens **before** the model ever sees a token:
+query understanding, search, fetching, ranking, and deduplication all have to
+finish first, and all of it sits in the critical path of time-to-first-token.
+
+<Mermaid client:visible code={`flowchart TB
+  Query["User query"] --> Classify["Query classifier<br/>needs search? conversational? math?"]
+  Classify -->|no retrieval needed| Direct["Answer directly from the model"]
+  Classify -->|needs retrieval| Rewrite["Query rewriting<br/>expand/clarify for search engines"]
+  Rewrite --> MultiSearch["Parallel search<br/>web index + news + maybe specialized indexes"]
+  MultiSearch --> Fetch["Fetch & extract page content"]
+  Fetch --> Rank["Rank & dedupe passages"]
+  Rank --> Prompt["Assemble prompt:<br/>question + top-k ranked passages"]
+  Prompt --> Gen["LLM generates answer with citation markers"]
+  Gen --> Verify["Citation linking<br/>map claims back to source passages"]
+  Verify --> Out["Answer + numbered sources rendered to user"]`} />
+
+## Query understanding and rewriting
+
+A user's raw query is often a bad search query. "is it still true" (following
+up on a previous question) has no standalone meaning to a search engine.
+Before hitting search, the system typically:
+
+- **Resolves conversational context** — folds prior turns into a
+  self-contained query ("is melatonin safe for kids" + "what about long
+  term?" -> "is long-term melatonin use safe for children").
+- **Classifies intent** — does this need fresh web results at all, or is it
+  a definitional/math/creative request the model can answer directly? Routing
+  around retrieval when it's unnecessary is a meaningful latency and cost
+  saving at scale.
+- **Expands/rewrites** the query into one or more search-engine-friendly
+  strings, sometimes issuing several parallel searches (e.g. a general web
+  search plus a news-specific search for time-sensitive queries).
+
+## Retrieval and ranking
+
+Multiple sources are fetched in parallel — search doesn't wait for one result
+before requesting the next. Each returned page then needs its **main content
+extracted** (stripping nav bars, ads, cookie banners) before it's useful as
+context. Ranking has to balance:
+
+- **Relevance** to the rewritten query.
+- **Recency**, weighted more heavily for queries that are inherently
+  time-sensitive.
+- **Source diversity** — three near-duplicate articles from the same wire
+  story add much less value than one article each from three independent
+  angles, so ranking typically deduplicates near-identical passages.
+
+```python
+# Simplified shape of the retrieval stage
+async def retrieve(query: str, k: int = 8):
+    rewritten = await rewrite_query(query)
+    raw_results = await asyncio.gather(*[
+        web_search(rewritten), news_search(rewritten)
+    ])
+    pages = await asyncio.gather(*[fetch_and_extract(r.url) for r in flatten(raw_results)])
+    ranked = rank_and_dedupe(pages, query=rewritten)
+    return ranked[:k]
+```
+
+## Grounded generation and citation mapping
+
+The prompt sent to the model isn't just "answer this question" — it includes
+the retrieved passages, each tagged with an identifier, and instructions to
+cite the identifier next to any claim drawn from it. After generation, the
+system typically post-processes the output to turn citation markers into
+clickable links back to the actual source page — this mapping has to survive
+the model paraphrasing or combining multiple sources into one sentence,
+which is one of the harder correctness problems in a RAG UI.
+
+## Latency budget
+
+Because search + fetch + rank all happen before generation starts, this
+pipeline has a fundamentally different latency shape than a plain chat
+completion: a meaningful chunk of total response time is spent *before* the
+first generated token, not during generation. Production systems mitigate
+this by parallelizing every retrieval step aggressively and by starting to
+stream the answer the moment generation begins, rather than waiting for the
+full response — but the search-and-fetch floor latency can't be streamed
+away, only minimized.

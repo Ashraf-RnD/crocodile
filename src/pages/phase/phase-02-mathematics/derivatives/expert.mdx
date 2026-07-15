@@ -1,0 +1,63 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Derivatives"
+level: expert
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "derivatives"
+estReadTime: 10
+resources:
+  - type: article
+    title: "Automatic Differentiation in Machine Learning: a Survey"
+    url: "https://arxiv.org/abs/1502.05767"
+---
+
+## Forward-mode vs reverse-mode automatic differentiation
+
+Autograd has two dual modes. **Forward-mode** propagates derivatives alongside values
+from input to output — efficient when there are few inputs and many outputs.
+**Reverse-mode** (what backpropagation is) propagates derivatives backward from output
+to input — efficient when there are many inputs (millions of weights) and one output
+(scalar loss), which is exactly the shape of every neural network training problem.
+This asymmetry — not an arbitrary implementation choice — is *why* backprop is
+reverse-mode: forward-mode would cost one pass per input parameter, intractable for
+models with millions/billions of weights.
+
+## The vanishing/exploding gradient problem as repeated multiplication
+
+Backprop through `L` layers multiplies `L` local derivatives together via the chain
+rule. If those local derivatives are consistently less than 1 (as with sigmoid/tanh
+saturating near their tails, where the derivative approaches 0), the product shrinks
+exponentially with depth — **vanishing gradients**. If consistently greater than 1,
+it grows exponentially — **exploding gradients**. This single multiplicative structure
+is the root cause behind:
+
+- Why ReLU (derivative is exactly 1 for positive inputs, not shrinking) largely
+  replaced sigmoid/tanh in deep networks
+- Why residual/skip connections help — they add an identity path (`derivative = 1`)
+  alongside the transformed path, giving gradients an unimpeded route backward
+- Why gradient clipping is necessary for RNNs specifically — the same weight matrix is
+  multiplied repeatedly across time steps, compounding the effect
+
+## Second-order derivatives and the Hessian
+
+The **Hessian** (matrix of all second partial derivatives) describes curvature — how
+the gradient itself is changing. Second-order optimization methods (Newton's method,
+L-BFGS) use this to take smarter steps than gradient descent's local linear
+approximation, converging in far fewer iterations near a well-behaved minimum.
+They're rarely used for training large neural networks directly because computing or
+even approximating the full Hessian for billions of parameters is computationally
+infeasible (`O(n^2)` storage, `O(n^3)` for an exact inverse) — this is precisely why
+first-order methods with adaptive per-parameter scaling (Adam) became the practical
+default: they capture some second-order-like benefit (per-parameter step sizing) at
+first-order cost.
+
+## Higher-order autodiff and its use in meta-learning
+
+Differentiating *through* a gradient update itself (computing gradients of gradients)
+underlies meta-learning algorithms like MAML (Model-Agnostic Meta-Learning) — training
+a model such that a few gradient steps on a new task produce good performance requires
+backpropagating through the inner-loop optimization process, i.e. taking a derivative
+of a function that itself contains a derivative. Frameworks that support this
+(`torch.autograd.grad` with `create_graph=True`) build a computation graph of the
+backward pass itself, allowing it to be differentiated again.

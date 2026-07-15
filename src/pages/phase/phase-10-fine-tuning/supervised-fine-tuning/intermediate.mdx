@@ -1,0 +1,126 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Supervised Fine-Tuning"
+level: intermediate
+phaseSlug: "phase-10-fine-tuning"
+phaseName: "Fine-tuning"
+topicSlug: "supervised-fine-tuning"
+estReadTime: 11
+resources:
+  - type: docs
+    title: "TRL — SFTTrainer and chat template formatting"
+    url: "https://huggingface.co/docs/trl/main/en/dataset_formats"
+  - type: article
+    title: "Hugging Face — Chat templates guide"
+    url: "https://huggingface.co/docs/transformers/main/en/chat_templating"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Chat templates and loss masking
+
+Real SFT datasets aren't raw text blobs — they're structured conversations, and the
+tokenizer's **chat template** converts them into the exact token sequence (with role
+markers) the model expects:
+
+```python
+from transformers import AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.1-8B-Instruct")
+
+messages = [
+    {"role": "system", "content": "You are a helpful assistant."},
+    {"role": "user", "content": "What's 12 * 7?"},
+    {"role": "assistant", "content": "12 * 7 = 84."},
+]
+
+formatted = tokenizer.apply_chat_template(messages, tokenize=False)
+```
+
+Crucially, production SFT setups mask the loss on everything except the **assistant's**
+tokens — you don't want the model being trained to predict the user's turn or the
+system prompt, only to generate good assistant responses given that context.
+
+<Mermaid client:visible code={`flowchart LR
+  Sys["System tokens (loss masked)"] --> User["User tokens (loss masked)"]
+  User --> Asst["Assistant tokens (loss computed here)"]
+  Asst --> Loss["Only these tokens contribute to the training loss"]`} />
+
+```python
+from trl import SFTTrainer, SFTConfig, DataCollatorForCompletionOnlyLM
+
+collator = DataCollatorForCompletionOnlyLM(
+    response_template="<|start_header_id|>assistant<|end_header_id|>",
+    tokenizer=tokenizer,
+)
+
+trainer = SFTTrainer(
+    model=model,
+    train_dataset=dataset,
+    data_collator=collator,          # masks loss on everything before the response template
+    args=SFTConfig(output_dir="./sft-out", max_length=2048, packing=False),
+)
+```
+
+## Full dataset-to-training pipeline
+
+```python
+from datasets import load_dataset
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from trl import SFTTrainer, SFTConfig
+from peft import LoraConfig
+
+model_id = "meta-llama/Llama-3.1-8B-Instruct"
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+model = AutoModelForCausalLM.from_pretrained(model_id)
+
+dataset = load_dataset("HuggingFaceH4/no_robots", split="train")
+
+peft_config = LoraConfig(r=16, lora_alpha=32, target_modules="all-linear")
+
+trainer = SFTTrainer(
+    model=model,
+    train_dataset=dataset,
+    peft_config=peft_config,        # SFT is commonly combined with LoRA/QLoRA
+    args=SFTConfig(
+        output_dir="./llama3-sft-out",
+        num_train_epochs=3,
+        per_device_train_batch_size=4,
+        gradient_accumulation_steps=4,
+        learning_rate=2e-4,
+        max_length=2048,
+        packing=True,                # concatenates short examples to fill sequence length
+    ),
+)
+trainer.train()
+```
+
+**Packing** concatenates multiple short training examples into a single sequence up to
+`max_length`, avoiding wasted compute on padding tokens — a meaningful speedup on
+datasets with widely varying example lengths, though it requires careful attention
+masking so examples don't attend across each other's boundaries (TRL handles this
+automatically when `packing=True`).
+
+## Dataset quality dominates over dataset size
+
+A recurring lesson from production SFT (and formalized in papers like LIMA) is that a
+few thousand carefully curated, high-quality, diverse examples routinely outperform
+hundreds of thousands of noisy or repetitive ones. Practical implications:
+
+- **Deduplicate aggressively** — near-duplicate examples waste training steps and can
+  cause the model to overfit to specific phrasings.
+- **Balance task diversity** — a dataset dominated by one task type (e.g. mostly
+  summarization) will visibly skew general instruction-following behavior.
+- **Match your target format exactly** — if your production system expects a specific
+  output structure, your SFT examples must consistently demonstrate that structure.
+
+## Common failure modes
+
+- **Catastrophic forgetting**: training too many epochs on a narrow dataset degrades
+  the model's general capabilities — usually mitigated by low learning rates, few
+  epochs (1-3), and PEFT methods that constrain how much the weights can drift.
+- **Overfitting to format artifacts**: if every training example ends with the same
+  closing phrase, the model learns to always produce that phrase, even when it's
+  inappropriate.
+- **Forgetting to mask the prompt in the loss**: training on full sequences (prompt +
+  response) without masking wastes capacity teaching the model to reproduce prompts it
+  will never need to generate at inference time.

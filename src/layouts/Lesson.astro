@@ -1,0 +1,67 @@
+---
+import Base from "./Base.astro";
+import Sidebar from "../components/Sidebar.astro";
+import ProgressToggle from "../components/ProgressToggle.tsx";
+
+const { frontmatter } = Astro.props as {
+  frontmatter: {
+    title: string;
+    level: "beginner" | "intermediate" | "expert";
+    phaseSlug: string;
+    phaseName: string;
+    topicSlug: string;
+    estReadTime: number;
+    resources?: { type: string; title: string; url: string }[];
+  };
+};
+
+const { title, level, phaseSlug, phaseName, topicSlug, estReadTime, resources = [] } = frontmatter;
+const LEVELS = ["beginner", "intermediate", "expert"] as const;
+---
+<Base title={title}>
+  <div class="app-shell">
+    <Sidebar activePhaseSlug={phaseSlug} />
+    <main class="main">
+      <div class="topbar">
+        <div class="breadcrumb">
+          <a href={`/phase/${phaseSlug}/`}>{phaseName}</a> / {title}
+        </div>
+        <a class="search-link" href="/search/">🔎 Search</a>
+      </div>
+
+      <h1>{title}</h1>
+      <p style="color: var(--text-muted); font-size: 0.85rem;">~{estReadTime} min read</p>
+
+      <nav class="level-tabs" aria-label="Difficulty level">
+        {LEVELS.map((lvl) => (
+          <a
+            class={`level-tab ${lvl === level ? "active" : ""}`}
+            href={`/phase/${phaseSlug}/${topicSlug}/${lvl}/`}
+          >
+            {lvl[0].toUpperCase() + lvl.slice(1)}
+          </a>
+        ))}
+      </nav>
+
+      <ProgressToggle client:load phaseSlug={phaseSlug} topicSlug={topicSlug} />
+
+      <article>
+        <slot />
+      </article>
+
+      {resources.length > 0 && (
+        <div class="resource-panel">
+          <h3>Resources</h3>
+          <ul class="resource-list">
+            {resources.map((r) => (
+              <li>
+                <span class="resource-tag">{r.type}</span>
+                <a href={r.url} target="_blank" rel="noopener noreferrer">{r.title}</a>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </main>
+  </div>
+</Base>

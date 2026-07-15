@@ -1,0 +1,83 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "DeepSeek-V3"
+level: beginner
+phaseSlug: "phase-14-research-literacy"
+phaseName: "Research Literacy"
+topicSlug: "deepseek-v3"
+estReadTime: 7
+resources:
+  - type: article
+    title: "DeepSeek-V3 Technical Report"
+    url: "https://arxiv.org/abs/2412.19437"
+  - type: article
+    title: "DeepSeek-V3 and the cost of frontier AI models — Interconnects"
+    url: "https://www.interconnects.ai/p/deepseek-v3-and-the-actual-cost-of"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The problem before this paper
+
+Training a frontier-capability language model was widely assumed to require
+budgets in the tens or hundreds of millions of dollars — massive GPU clusters
+run for months — putting genuinely competitive model training out of reach
+for all but a handful of well-funded labs. Efficiency techniques existed
+individually (Mixture of Experts, lower-precision training, better attention
+mechanisms), but no released frontier-scale model had stacked enough of them
+together, and pushed each one far enough, to fundamentally change the
+economics of getting there.
+
+## The core idea, in plain language
+
+DeepSeek-V3 didn't invent a wholly new paradigm — it combined and pushed
+several engineering efficiency techniques much further than prior work,
+across nearly every layer of the training stack: a smarter, more
+memory-efficient attention mechanism, a more specialized Mixture-of-Experts
+design, extremely low-precision (8-bit) training arithmetic where earlier
+frontier models had insisted on higher precision, and a training objective
+that gets more useful signal out of each token processed. The team reported
+training a 671-billion-parameter model (with only 37 billion parameters
+"active" per token, thanks to MoE — see the Mixture of Experts lesson) for
+roughly $5.5 million in compute — remarkably low next to the widely assumed
+cost of frontier training at the time — while reaching benchmark performance
+competitive with leading closed models.
+
+A useful analogy: imagine most car manufacturers assume you need a massive
+factory and huge budget to build a genuinely fast car. DeepSeek-V3 is like a
+smaller team that, instead of building a bigger factory, carefully
+re-engineered the engine, the fuel system, and the assembly line itself —
+each individually a modest improvement — and the combination let them build a
+comparably fast car for a fraction of the assumed cost.
+
+<Mermaid client:visible code={`flowchart LR
+  A["Assumed: frontier model = huge budget, huge cluster"] --> B["$100M+ training runs"]
+  C["DeepSeek-V3: stack of efficiency techniques (MLA, MoE, FP8, MTP)"] --> D["Reported ~$5.5M training compute, competitive benchmarks"]`} />
+
+## Why it mattered
+
+DeepSeek-V3's release (and the reasoning model built on top of it,
+DeepSeek-R1, shortly after) triggered a widely reported reassessment — dubbed
+by some commentators the "DeepSeek moment" — of assumptions about how much
+compute and money were strictly necessary to reach frontier-level model
+quality, and it was released as **open weights**, letting anyone inspect,
+self-host, or build on it. It demonstrated that clever systems engineering
+could substitute, to a meaningful degree, for sheer compute spending — a
+genuinely consequential result for how the rest of the industry thought about
+the cost curve of AI progress.
+
+## Try it yourself
+
+Can you explain the core idea of this paper in one sentence to a non-technical
+friend?
+
+<details>
+<summary>Solution</summary>
+
+Something like: "Instead of assuming you need an enormous budget to train a
+top-tier AI model, this team carefully re-engineered several parts of how the
+model is built and trained — how it pays attention to text, how it uses its
+'brain' efficiently, and how precisely it does its math — and reached
+competitive performance for a small fraction of what it was assumed to cost,
+while giving away the resulting model for free."
+
+</details>

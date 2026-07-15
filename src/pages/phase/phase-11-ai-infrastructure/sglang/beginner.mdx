@@ -1,0 +1,82 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "SGLang"
+level: beginner
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "sglang"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "SGLang Documentation — Getting Started"
+    url: "https://docs.sglang.ai/get_started/quick_start.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The problem of repeated work
+
+Imagine your app sends the same 2,000-token system prompt in front of every single
+user message — a common pattern for chatbots and agents. A naive server recomputes the
+attention keys/values for that entire system prompt from scratch on *every single
+request*, even though it's identical every time. That's wasted GPU work, repeated
+thousands of times a day. **SGLang** is an inference engine built around eliminating
+exactly this kind of redundant computation, using a technique called
+**RadixAttention**.
+
+## RadixAttention, in one analogy
+
+Picture a family tree instead of a flat list of requests. Any two requests that share
+the same starting text (the same system prompt, the same few-shot examples, the same
+first few turns of a conversation) are "siblings" branching off a common ancestor.
+RadixAttention stores computed KV-cache blocks in a tree structure (a radix tree)
+keyed by token sequence, so when a new request arrives, SGLang automatically detects
+the longest matching prefix already in the tree and reuses its cached computation —
+only computing the *new* part of the prompt.
+
+<Mermaid client:visible code={`flowchart TB
+  Root["Shared system prompt (cached once)"] --> A["Request A: + user question 1"]
+  Root --> B["Request B: + user question 2"]
+  Root --> C["Request C: + user question 3"]`} />
+
+## Running your first SGLang server
+
+```bash
+pip install "sglang[all]"
+
+python -m sglang.launch_server --model-path meta-llama/Llama-3.1-8B-Instruct --port 30000
+```
+
+Like vLLM, SGLang exposes an OpenAI-compatible endpoint:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:30000/v1", api_key="not-needed")
+
+response = client.chat.completions.create(
+    model="meta-llama/Llama-3.1-8B-Instruct",
+    messages=[{"role": "user", "content": "What is RadixAttention?"}],
+)
+print(response.choices[0].message.content)
+```
+
+If you then send a second request that shares the same system prompt, SGLang reuses
+the cached prefix automatically — no code change required on your end.
+
+## Try it yourself
+
+A customer-support bot sends the same 1,500-token instructions block before every user
+message, to 10,000 users a day. With a server that has no prefix reuse, how many times
+does that 1,500-token block get processed by attention? What does RadixAttention
+change about that number?
+
+<details>
+<summary>Solution</summary>
+
+Without prefix reuse: 10,000 times — once per request, fully recomputed from scratch
+every time. With RadixAttention, the shared 1,500-token instructions block is computed
+once, cached in the radix tree, and reused for all 10,000 requests; only each user's
+actual (short) message needs new computation. This is why RadixAttention shines
+specifically on workloads with heavy prompt reuse — the savings scale with how much
+prefix is shared.
+</details>

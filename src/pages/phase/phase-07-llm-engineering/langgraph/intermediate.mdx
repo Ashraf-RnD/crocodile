@@ -1,0 +1,108 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "LangGraph"
+level: intermediate
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "langgraph"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "LangGraph — Persistence"
+    url: "https://langchain-ai.github.io/langgraph/concepts/persistence/"
+  - type: docs
+    title: "LangGraph — Human-in-the-loop"
+    url: "https://langchain-ai.github.io/langgraph/concepts/human_in_the_loop/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Building a real ReAct agent with prebuilt components
+
+LangGraph ships prebuilt nodes for the most common agent pattern, so you don't
+hand-roll the tool-calling loop yourself:
+
+```python
+from langgraph.prebuilt import create_react_agent
+from langchain.chat_models import init_chat_model
+from langchain_core.tools import tool
+
+@tool
+def get_weather(city: str) -> str:
+    """Get the current weather for a city."""
+    return f"Sunny, 22°C in {city}"
+
+model = init_chat_model("gpt-4o-mini", model_provider="openai")
+agent = create_react_agent(model, tools=[get_weather])
+
+result = agent.invoke({"messages": [{"role": "user", "content": "What's the weather in Nairobi?"}]})
+print(result["messages"][-1].content)
+```
+
+`create_react_agent` builds exactly the call-model → run-tools → loop-back graph you'd
+hand-write, with sensible defaults — worth using until you need custom control flow
+the prebuilt agent doesn't support.
+
+## Persistence: checkpointing state across steps and sessions
+
+LangGraph's checkpointer saves the full graph state after every node runs, which
+enables resuming a conversation exactly where it left off — even across process
+restarts — and is the mechanism behind multi-turn chat memory:
+
+```python
+from langgraph.checkpoint.memory import MemorySaver
+
+checkpointer = MemorySaver()
+app = graph.compile(checkpointer=checkpointer)
+
+config = {"configurable": {"thread_id": "user-123"}}
+app.invoke({"messages": [{"role": "user", "content": "My name is Alex."}]}, config=config)
+app.invoke({"messages": [{"role": "user", "content": "What's my name?"}]}, config=config)
+# Second call sees the first call's state, keyed by thread_id — "Your name is Alex."
+```
+
+For production, swap `MemorySaver` for `PostgresSaver` or `SqliteSaver` so state
+survives beyond the current process — the API is identical, only the storage backend
+changes.
+
+<Mermaid client:visible code={`flowchart LR
+  A[invoke, thread_id=123] --> B[Run graph, save checkpoint after each node]
+  B --> C[(Checkpoint store)]
+  D[invoke again, thread_id=123] --> E[Load checkpoint, resume with full prior state]
+  C --> E`} />
+
+## Human-in-the-loop with `interrupt`
+
+For agents that take consequential actions, LangGraph's `interrupt()` pauses graph
+execution at a specific node and waits for external input before continuing — the
+graph's state is checkpointed at the pause point, so it can resume hours or days later:
+
+```python
+from langgraph.types import interrupt, Command
+
+def request_approval(state):
+    decision = interrupt({"question": f"Approve refund of ${state['amount']}?"})
+    if decision != "approve":
+        return {"status": "cancelled"}
+    return {"status": "approved"}
+
+# Later, resume the paused graph with the human's decision:
+app.invoke(Command(resume="approve"), config=config)
+```
+
+This is the standard pattern for gating side-effecting tool calls (refunds, sending
+emails, deleting data) behind explicit human confirmation without rebuilding the
+whole conversation from scratch each time.
+
+## Streaming intermediate steps
+
+Long-running agents benefit from streaming node-by-node updates to the UI rather than
+waiting for the full run to finish:
+
+```python
+for chunk in app.stream({"messages": [{"role": "user", "content": "Research and summarize X"}]}, config=config):
+    print(chunk)  # yields state updates as each node completes
+```
+
+This is what powers the "thinking..." / step-by-step progress UIs you see in
+production agent products — each node's completion is a natural point to push a
+progress update to the frontend.

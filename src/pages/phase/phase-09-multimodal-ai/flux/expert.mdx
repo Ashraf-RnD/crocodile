@@ -1,0 +1,75 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "FLUX"
+level: expert
+phaseSlug: "phase-09-multimodal-ai"
+phaseName: "Multimodal AI"
+topicSlug: "flux"
+estReadTime: 11
+resources:
+  - type: docs
+    title: "FLUX.1 GitHub repository — licenses and model variants"
+    url: "https://github.com/black-forest-labs/flux"
+  - type: docs
+    title: "Diffusers — Memory optimization (CPU offload, quantization)"
+    url: "https://huggingface.co/docs/diffusers/optimization/memory"
+---
+
+## Model landscape comparison
+
+| Model | Architecture | Open weights | License (best tier) | Guidance distilled | Strong point |
+|---|---|---|---|---|---|
+| SDXL | UNet | Yes | Permissive (CreativeML OpenRAIL++) | No (some Turbo variants) | Mature ecosystem, LoRA/ControlNet support |
+| SD3 | MMDiT transformer | Yes (medium size) | Restrictive for commercial use at scale | No | Strong prompt adherence |
+| FLUX.1-schnell | MMDiT + rectified flow | Yes | Apache 2.0 (commercial OK) | Yes | Fast, legally clean for products |
+| FLUX.1-dev | MMDiT + rectified flow | Yes | Non-commercial | Yes | Highest open-weight quality |
+| Midjourney | Undisclosed | No | Hosted service only | Unknown | Strong aesthetic default, no self-hosting |
+
+FLUX's licensing split (schnell fully open, dev restricted, pro API-only) is a
+deliberate commercial strategy as much as a technical one — it lets Black Forest Labs
+give away a genuinely useful, unrestricted model (driving adoption and ecosystem
+tooling) while keeping their best quality behind a paid API, similar to how other
+foundation model companies segment free/open vs paid tiers.
+
+## Guidance distillation: what schnell actually gives up
+
+Guidance-distilled models like `schnell` are trained to bake classifier-free guidance
+behavior directly into the model weights, letting inference skip the extra forward
+pass CFG normally requires — this is *why* it can generate in 1-4 steps at
+`guidance_scale=0.0`. The trade-off is a narrower quality ceiling and somewhat reduced
+prompt diversity across different seeds compared to `dev`: distillation optimizes for
+"good result fast," which tends to compress the range of plausible outputs the model
+will produce for a given prompt, a mild form of mode collapse relative to the
+non-distilled model it was distilled from.
+
+## Running FLUX on consumer hardware
+
+FLUX's full-precision weights (the transformer alone is ~12B parameters for
+dev/schnell) don't fit comfortably on consumer GPU VRAM without intervention. Common
+production/hobbyist workarounds:
+
+```python
+pipe = FluxPipeline.from_pretrained(
+    "black-forest-labs/FLUX.1-schnell",
+    torch_dtype=torch.bfloat16,
+)
+pipe.enable_model_cpu_offload()   # keep only active submodule on GPU
+# or: load a quantized (e.g. 8-bit/NF4) version of the transformer weights
+```
+
+`enable_model_cpu_offload()` keeps the text encoders, transformer, and VAE mostly on
+CPU RAM and only moves each onto the GPU when it's actively needed for that step,
+trading generation speed for the ability to run on GPUs with as little as 8-12GB VRAM
+— the standard technique that makes FLUX practical outside of data-center-grade GPUs.
+
+## Why FLUX pushed the field toward transformers over UNets
+
+FLUX's success (alongside SD3) reinforced a broader architectural shift already
+happening across diffusion research: transformer backbones scale more predictably
+with additional data and compute than convolutional UNets did, mirroring the same
+scaling-law dynamics that drove the field from CNNs to transformers in vision
+classification years earlier. This is less about transformers being intrinsically
+"better at images" and more that they inherit a much larger body of scaling and
+training-stability knowledge from LLM research, which shows up directly in how
+reliably these newer models improve with more training compute compared to earlier
+UNet-based diffusion models.

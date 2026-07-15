@@ -1,0 +1,136 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "TRL"
+level: intermediate
+phaseSlug: "phase-10-fine-tuning"
+phaseName: "Fine-tuning"
+topicSlug: "trl"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "TRL — Trainer overview and shared arguments"
+    url: "https://huggingface.co/docs/trl/main/en/trainer"
+  - type: docs
+    title: "TRL — CLI (trl sft / trl dpo commands)"
+    url: "https://huggingface.co/docs/trl/main/en/clis"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Where TRL sits in the fine-tuning stack
+
+<Mermaid client:visible code={`flowchart TB
+  Transformers["transformers: models, tokenizers, generation"] --> TRL["TRL: fine-tuning-specific training loops"]
+  PEFT["peft: LoRA/QLoRA adapter injection"] --> TRL
+  Accelerate["accelerate: multi-GPU/distributed backend"] --> TRL
+  TRL --> SFT["SFTTrainer"]
+  TRL --> DPO["DPOTrainer"]
+  TRL --> Reward["RewardTrainer"]
+  TRL --> PPO["PPOTrainer"]`} />
+
+TRL doesn't reinvent model loading or distributed training — it builds directly on
+`transformers` for models/tokenizers, `peft` for adapter methods, and `accelerate` for
+multi-GPU orchestration. This is why TRL scripts look so similar to plain
+`transformers.Trainer` scripts: the training loop internals are shared infrastructure,
+and TRL adds the fine-tuning-method-specific pieces (loss functions, dataset
+formatting conventions, reference model handling) on top.
+
+## Using the `trl` CLI for quick runs
+
+For straightforward runs, TRL ships a CLI that skips writing a Python script entirely:
+
+```bash
+trl sft \
+  --model_name_or_path meta-llama/Llama-3.1-8B \
+  --dataset_name HuggingFaceH4/no_robots \
+  --output_dir ./llama3-sft-cli \
+  --per_device_train_batch_size 4 \
+  --num_train_epochs 3 \
+  --use_peft \
+  --lora_r 16
+
+trl dpo \
+  --model_name_or_path ./llama3-sft-cli \
+  --dataset_name trl-lib/ultrafeedback_binarized \
+  --output_dir ./llama3-dpo-cli \
+  --beta 0.1
+```
+
+This is useful for quick experiments or CI smoke tests, but production pipelines
+typically still write Python scripts for full control over dataset preprocessing,
+custom callbacks, and logging integration.
+
+## A realistic multi-stage pipeline: SFT then DPO
+
+```python
+from datasets import load_dataset
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from trl import SFTTrainer, SFTConfig, DPOTrainer, DPOConfig
+from peft import LoraConfig
+
+model_id = "mistralai/Mistral-7B-v0.1"
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+# Stage 1: SFT
+sft_model = AutoModelForCausalLM.from_pretrained(model_id)
+sft_dataset = load_dataset("HuggingFaceH4/no_robots", split="train")
+
+sft_trainer = SFTTrainer(
+    model=sft_model,
+    train_dataset=sft_dataset,
+    peft_config=LoraConfig(r=16, target_modules="all-linear"),
+    args=SFTConfig(output_dir="./stage1-sft", num_train_epochs=3),
+)
+sft_trainer.train()
+sft_trainer.save_model("./stage1-sft-final")
+
+# Stage 2: DPO, starting from the SFT checkpoint
+dpo_model = AutoModelForCausalLM.from_pretrained("./stage1-sft-final")
+dpo_dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
+
+dpo_trainer = DPOTrainer(
+    model=dpo_model,
+    train_dataset=dpo_dataset,
+    args=DPOConfig(output_dir="./stage2-dpo", beta=0.1, learning_rate=5e-6),
+    processing_class=tokenizer,
+)
+dpo_trainer.train()
+```
+
+This two-stage pattern (SFT to establish behavior, DPO to sharpen preferences) mirrors
+how most production alignment pipelines are actually structured — it's rare to run DPO
+directly on a base model.
+
+## Logging, evaluation, and callbacks
+
+TRL trainers accept standard `transformers.Trainer` callbacks and integrate with common
+experiment trackers out of the box:
+
+```python
+from trl import SFTConfig
+
+args = SFTConfig(
+    output_dir="./sft-out",
+    report_to="wandb",              # or "tensorboard", "mlflow"
+    eval_strategy="steps",
+    eval_steps=100,
+    logging_steps=10,
+    save_strategy="steps",
+    save_steps=200,
+    load_best_model_at_end=True,
+)
+```
+
+Being built on `transformers.Trainer` means all the surrounding infrastructure — early
+stopping, checkpoint resumption, distributed training via `accelerate launch` — carries
+over without needing fine-tuning-specific reimplementation.
+
+## Practical tips
+
+- **Use `trl sft --help` / `trl dpo --help` to discover available flags** before
+  writing a custom script — many common needs (packing, max sequence length, PEFT) are
+  already exposed as CLI arguments.
+- **Pin the TRL version** in production requirements files — the library moves quickly
+  and trainer APIs (argument names especially) have changed across versions.
+- **Use `accelerate launch` for multi-GPU** rather than manually wrapping training code
+  — TRL trainers are designed to be launched this way, not called directly in a
+  hand-rolled distributed setup.

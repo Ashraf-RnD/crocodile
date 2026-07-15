@@ -1,0 +1,105 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "F1 Score"
+level: intermediate
+phaseSlug: "phase-03-machine-learning"
+phaseName: "Machine Learning"
+topicSlug: "f1-score"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "scikit-learn: classification_report"
+    url: "https://scikit-learn.org/stable/modules/generated/sklearn.metrics.classification_report.html"
+  - type: docs
+    title: "scikit-learn: Precision, recall and F-measures"
+    url: "https://scikit-learn.org/stable/modules/model_evaluation.html#precision-recall-f-measure-metrics"
+---
+
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## F1 in a real workflow
+
+`f1_score` on its own tells you the balance number, but in practice you almost always want
+the full breakdown alongside it — `classification_report` gives precision, recall, and F1
+per class in one call:
+
+```python
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import f1_score, classification_report
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, stratify=y, random_state=42
+)
+
+clf = LogisticRegression(max_iter=1000).fit(X_train, y_train)
+y_pred = clf.predict(X_test)
+
+print(f"F1: {f1_score(y_test, y_pred):.3f}")
+print(classification_report(y_test, y_pred))
+```
+
+<Mermaid client:visible code={`flowchart LR
+  A[Precision] --> C[Harmonic mean]
+  B[Recall] --> C
+  C --> D[F1 score]`} />
+
+## Averaging strategies for multiclass
+
+F1 is naturally a binary-classification metric (positive vs. negative), so multiclass
+problems require choosing how per-class F1 scores get combined via `average`:
+
+```python
+from sklearn.metrics import f1_score
+
+# y_true / y_pred span classes 0, 1, 2
+f1_macro = f1_score(y_test, y_pred, average="macro")       # unweighted mean per class
+f1_micro = f1_score(y_test, y_pred, average="micro")       # aggregate TP/FP/FN globally
+f1_weighted = f1_score(y_test, y_pred, average="weighted")  # weighted by class support
+f1_per_class = f1_score(y_test, y_pred, average=None)       # one score per class
+```
+
+- **`macro`** — every class counts equally regardless of frequency. Use this when a rare
+  class matters just as much as a common one (e.g. detecting a rare defect type).
+- **`micro`** — pools TP/FP/FN across all classes before computing one global F1;
+  effectively equals accuracy for single-label multiclass problems, so it's most useful in
+  multi-label settings where that equivalence doesn't hold.
+- **`weighted`** — like macro, but each class's F1 is weighted by its support (number of
+  true instances), so it reflects overall performance while still accounting for per-class
+  quality, unlike accuracy.
+
+Picking the wrong average is a common, quiet bug: `macro` on a heavily imbalanced dataset
+lets a model that completely fails on a rare class still report a decent-looking number if
+the majority classes are strong, unless you actually inspect the per-class breakdown.
+
+## Using F1 as a model-selection objective
+
+F1 is a common scoring function for hyperparameter search on imbalanced classification
+problems, since accuracy would reward doing nothing useful on the minority class:
+
+```python
+from sklearn.model_selection import GridSearchCV
+
+param_grid = {"C": [0.01, 0.1, 1, 10]}
+search = GridSearchCV(
+    LogisticRegression(max_iter=1000, class_weight="balanced"),
+    param_grid,
+    scoring="f1",       # or "f1_macro" / "f1_weighted" for multiclass
+    cv=5,
+)
+search.fit(X_train, y_train)
+print(search.best_params_, search.best_score_)
+```
+
+## Common pitfalls
+
+- **Defaulting to `average='binary'`** on a multiclass problem raises an error or silently
+  behaves unexpectedly — always set `average` explicitly for anything beyond two classes.
+- **Treating F1 as the automatic right choice** whenever accuracy is misleading. F1 assumes
+  precision and recall matter equally (see the F-beta generalization at the expert level) —
+  that's not always true, and defaulting to F1 without checking the actual cost asymmetry
+  of your problem can optimize for the wrong trade-off.
+- **Reporting only the macro/micro/weighted F1** without the per-class breakdown hides
+  *which* class is dragging the score down — always look at `average=None` or the full
+  `classification_report` during model debugging, even if a single averaged number is what
+  ships to a dashboard.

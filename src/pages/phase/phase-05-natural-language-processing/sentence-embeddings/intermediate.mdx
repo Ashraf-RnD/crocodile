@@ -1,0 +1,101 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Sentence Embeddings"
+level: intermediate
+phaseSlug: "phase-05-natural-language-processing"
+phaseName: "Natural Language Processing"
+topicSlug: "sentence-embeddings"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "Sentence-Transformers — Pretrained models overview"
+    url: "https://www.sbert.net/docs/sentence_transformer/pretrained_models.html"
+  - type: article
+    title: "Reimers & Gurevych — Sentence-BERT: Sentence Embeddings using Siamese BERT-Networks"
+    url: "https://arxiv.org/abs/1908.10084"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Why you can't just average BERT's token embeddings
+
+A naive approach to sentence embeddings: run BERT, average the token embeddings from
+its last layer. This works poorly in practice — raw BERT embeddings are optimized for
+masked-token prediction, not sentence-level similarity, and the resulting vectors are
+famously **anisotropic** (clustered in a narrow cone), meaning almost any two
+sentences score as suspiciously similar under cosine similarity. Sentence-BERT (SBERT)
+fixed this by fine-tuning BERT specifically for the similarity task using a **siamese
+network** structure:
+
+<Mermaid client:visible code={`flowchart TB
+  S1[Sentence A] --> B1[BERT encoder]
+  S2[Sentence B] --> B2["BERT encoder (shared weights)"]
+  B1 --> P1[Mean pooling]
+  B2 --> P2[Mean pooling]
+  P1 --> U[Embedding A]
+  P2 --> V[Embedding B]
+  U --> Loss["Loss: pull similar pairs together,\npush dissimilar pairs apart"]
+  V --> Loss`} />
+
+Both sentences pass through the *same* encoder (shared weights, hence "siamese"),
+producing two embeddings that are compared with a similarity-aware loss (contrastive
+loss, cosine similarity loss, or triplet loss depending on the training data
+available). This is a fundamentally different training objective from BERT's original
+masked-language-modeling pretraining, which is why fine-tuned SBERT-style models
+outperform raw BERT for retrieval and similarity tasks by a wide margin.
+
+## Using the library in practice
+
+```python
+from sentence_transformers import SentenceTransformer, util
+import numpy as np
+
+model = SentenceTransformer("all-mpnet-base-v2")  # stronger, slower than MiniLM
+
+corpus = [
+    "How do I reset my password?",
+    "What is the refund policy?",
+    "How can I change my shipping address?",
+    "I forgot my login credentials.",
+]
+corpus_embeddings = model.encode(corpus, convert_to_tensor=True)
+
+query = "I can't remember my account password"
+query_embedding = model.encode(query, convert_to_tensor=True)
+
+hits = util.semantic_search(query_embedding, corpus_embeddings, top_k=2)
+for hit in hits[0]:
+    print(corpus[hit["corpus_id"]], hit["score"])
+# "How do I reset my password?" 0.71
+# "I forgot my login credentials." 0.65
+```
+
+`util.semantic_search` does a brute-force cosine similarity search — fine for
+thousands of documents, but for real production-scale retrieval (millions of
+documents), embeddings are typically indexed with an approximate nearest-neighbor
+library (FAISS, HNSW, Annoy, or a managed vector database) instead of comparing
+against every candidate at query time.
+
+## Model size vs. quality trade-off
+
+Sentence-Transformers ships models spanning a wide speed/accuracy range:
+
+- `all-MiniLM-L6-v2` — 6 layers, ~80MB, very fast, good enough for most semantic
+  search and deduplication tasks
+- `all-mpnet-base-v2` — 12 layers, larger, meaningfully better embedding quality at
+  roughly 3-5x the inference cost
+- Domain/task-specific fine-tunes (e.g. `multi-qa-mpnet-base-dot-v1` for QA
+  retrieval) — trained on retrieval-specific data, often outperforming general-purpose
+  models on that exact task
+
+Choosing a model is a latency/cost/quality trade-off exactly like choosing between a
+small and large LLM — bigger isn't automatically better if the smaller model already
+clears your task's accuracy bar at a fraction of the compute.
+
+## Retrieval-Augmented Generation (RAG) is built on this
+
+This is the technology underneath most RAG pipelines: documents are embedded once and
+stored in a vector index; a user's query is embedded at request time; the top-k most
+similar document chunks are retrieved and passed to an LLM as context. Sentence
+embedding quality directly bounds RAG quality — no amount of prompt engineering on the
+generation side can recover from the wrong documents being retrieved in the first
+place.

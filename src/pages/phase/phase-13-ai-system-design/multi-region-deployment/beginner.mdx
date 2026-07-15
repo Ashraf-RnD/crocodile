@@ -1,0 +1,71 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Multi-Region Deployment"
+level: beginner
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "multi-region-deployment"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "AWS — What is multi-region deployment?"
+    url: "https://aws.amazon.com/what-is/multi-region-architecture/"
+  - type: docs
+    title: "Google Cloud — Geography and regions"
+    url: "https://cloud.google.com/about/locations"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Serving users from nearby, not from one far-away place
+
+If your only servers are in the US and a user in Japan uses your AI
+product, every request has to travel across the ocean and back before they
+see a response — adding real, physically-unavoidable delay on top of
+however long the AI itself takes to think. **Multi-region deployment**
+means running your system in multiple geographic locations, so users get
+routed to the one nearest them.
+
+<Mermaid client:visible code={`flowchart TB
+  UserUS["User in the US"] --> RegionUS["US region servers"]
+  UserEU["User in Europe"] --> RegionEU["EU region servers"]
+  UserAsia["User in Asia"] --> RegionAsia["Asia region servers"]
+  RegionUS -.->|kept in sync| RegionEU
+  RegionEU -.->|kept in sync| RegionAsia`} />
+
+## Why distance actually matters
+
+Data can only travel so fast — physics puts a floor on network latency
+based on distance, even with a perfect network. A round trip from Japan to
+a US server can add well over 100ms just from travel time, before any
+actual processing happens. For AI products where every extra bit of latency
+is already tight (see the "Streaming" topic in this phase), that's a
+meaningful chunk of your latency budget spent purely on distance.
+
+## It's also about staying up
+
+A second reason for multiple regions: if the one place your system runs has
+an outage (a power failure, a natural disaster, a cloud provider issue),
+your entire product goes down for everyone. Running in multiple
+independent regions means a failure in one place doesn't necessarily take
+down the whole product — traffic can be routed to a region that's still
+healthy.
+
+## Try it yourself
+
+If a company launches an AI chatbot only in a single US data center and
+suddenly gets a lot of users in Europe, what are the two separate problems
+they'll run into, beyond "we need more servers"?
+
+<details>
+<summary>Solution</summary>
+
+First, latency: every European user's request has to cross the Atlantic
+and back, adding noticeable delay that no amount of adding more US servers
+can fix — that delay comes from distance, not from lacking capacity.
+Second, potentially data residency/legal requirements: depending on what
+data the product handles, some countries or regions (notably the EU) have
+rules about where certain user data is allowed to be stored and processed,
+which "just add more servers in the US" doesn't address at all. Both
+problems point toward the same fix — deploying in a region physically and
+legally closer to those users — not just scaling up the existing region.
+</details>

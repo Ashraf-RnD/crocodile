@@ -1,0 +1,75 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Ray Serve"
+level: expert
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "ray-serve"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "KubeRay — Ray on Kubernetes"
+    url: "https://docs.ray.io/en/latest/cluster/kubernetes/index.html"
+---
+
+## What Ray Serve actually optimizes for
+
+Ray Serve's core bet is **Python-native flexibility for arbitrary, custom
+pipelines**, not raw single-model inference throughput. Its differentiator is that
+your preprocessing, business logic, multi-model orchestration, and ensembling all live
+in ordinary Python, composed via deployment graphs, with per-step independent scaling
+and resource allocation. That's a materially different value proposition than an
+inference engine like vLLM/TensorRT-LLM or a general-purpose server like Triton, both
+of which optimize the "run this one model as fast as possible" problem far more deeply
+than Ray Serve does natively — Ray Serve is commonly used to *wrap* a vLLM or
+TensorRT-LLM engine as one node in a larger graph, not to replace it as the inference
+kernel.
+
+## Comparison: Ray Serve vs Kubernetes-native serving vs Triton
+
+| Axis | Ray Serve | Kubernetes-native (KServe/Seldon + single-model containers) | Triton Inference Server |
+|---|---|---|---|
+| Python-nativeness for custom pipelines | High — arbitrary Python in deployment graphs | Low — typically one container per step, glued via K8s/Istio | Low-medium — Python backend exists but ensembles are config-driven, not free-form code |
+| Autoscaling responsiveness | Fast, request-level (`target_ongoing_requests`), sub-minute reactions | Pod-level HPA, typically slower (metric scrape + pod cold start) | No built-in autoscaling — relies on external orchestration (K8s HPA) |
+| Multi-model GPU sharing granularity | Fine-grained via fractional `num_gpus` at the deployment level | Coarse — typically one model per pod/GPU unless hand-built sharing | Fine-grained via one server process hosting many models, with instance groups |
+| Ecosystem/operational maturity | Newer in production LLM serving; strong in the Ray/data ecosystem | Very mature, standard K8s tooling (metrics, logging, rollout) | Very mature, NVIDIA enterprise support, long track record |
+| Multi-framework model support | Any Python-callable model | Any (per-container), but composition is manual | First-class: TensorRT-LLM, PyTorch, ONNX, Python, vLLM backend, all in one server |
+| Best fit | Custom multi-step pipelines needing real orchestration logic in code | Teams already standardized on K8s deploying mostly single-model services | Multi-framework model fleets wanting one unified serving layer |
+
+## The operational cost you're taking on
+
+Ray Serve requires running an actual **Ray cluster** — a head node plus workers,
+either standalone or via KubeRay on Kubernetes — with its own failure modes (head node
+as a control-plane bottleneck, object store memory pressure, cluster autoscaler
+lag) distinct from Kubernetes' own pod scheduling. That's real operational surface
+area you don't take on with a single-model server behind a plain K8s Deployment +
+Service. The overhead is worth paying when your workload genuinely needs Ray Serve's
+composition model: multiple models talking to each other with custom logic between
+them, independent scaling per pipeline stage, or you're already running Ray for
+training/data processing and want to reuse the same cluster for serving.
+
+## When Ray Serve's overhead isn't worth it
+
+If you're serving exactly one model behind one endpoint with no custom orchestration
+logic, Ray Serve's deployment-graph flexibility buys you nothing over a purpose-built
+single-model server (vLLM's OpenAI-compatible server, or Triton with a single model
+repository entry) — and you've added a distributed system's worth of operational
+complexity for a problem that didn't need it. The signal to reach for Ray Serve
+specifically: your service is a *pipeline*, not a single model call — multiple models
+with different scaling needs, non-trivial business logic between inference steps, or
+dynamic routing between model variants — where hand-rolling that orchestration in a
+plain K8s setup would mean writing and maintaining your own request-routing and
+scaling logic that Ray Serve already provides.
+
+## Fractional GPU sharing caveat at scale
+
+Fractional `num_gpus` scheduling is a **soft** reservation — Ray's scheduler ensures
+the sum of requested fractions per GPU doesn't exceed 1, but it does not enforce
+memory isolation between co-located deployments (no CUDA MPS or MIG partitioning by
+default). Two deployments each requesting `num_gpus: 0.5` can still OOM each other if
+their actual memory usage exceeds what you budgeted, so production use of fractional
+GPUs requires you to independently verify real memory headroom (profiling actual peak
+usage per model) rather than trusting the fractional number as a hard guarantee — this
+is a meaningfully different isolation model than Triton's instance-group-based GPU
+assignment or a dedicated-GPU-per-pod Kubernetes setup, both of which are closer to
+hard boundaries.

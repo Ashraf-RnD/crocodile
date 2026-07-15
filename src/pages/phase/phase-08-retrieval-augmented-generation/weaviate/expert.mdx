@@ -1,0 +1,102 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Weaviate"
+level: expert
+phaseSlug: "phase-08-retrieval-augmented-generation"
+phaseName: "Retrieval-Augmented Generation"
+topicSlug: "weaviate"
+estReadTime: 12
+resources:
+  - type: docs
+    title: "Weaviate — Vector indexing (HNSW & flat)"
+    url: "https://weaviate.io/developers/weaviate/concepts/vector-index"
+  - type: docs
+    title: "Weaviate — Replication architecture"
+    url: "https://weaviate.io/developers/weaviate/concepts/replication-architecture"
+---
+
+## Module architecture: vectorization as a pluggable, per-collection concern
+
+Weaviate's defining architectural choice is treating vectorization as a modular
+concern attached to a collection rather than an external application-layer step —
+`text2vec-*` modules (OpenAI, Cohere, HuggingFace, transformers) run inline as part of
+insert and query, and `generative-*` modules wire an LLM directly into query results.
+This has real implications beyond convenience: coupling the vectorizer to the database
+means a model swap is a schema/collection-level operation (and, as with any embedding
+model change, requires re-vectorizing existing data), and it introduces the database
+as a dependency on external embedding API availability/latency during writes and
+`near_text` queries — a coupling that `self_provided()` vectors deliberately avoid by
+moving embedding responsibility back into application code, trading convenience for
+operational independence.
+
+## HNSW tuning and the flat-index alternative
+
+Weaviate's default HNSW index exposes the same core parameters as other HNSW
+implementations, with Weaviate-specific defaults tuned for balanced recall/speed:
+
+```python
+from weaviate.classes.config import Configure
+
+client.collections.create(
+    name="SupportDoc",
+    vector_index_config=Configure.VectorIndex.hnsw(
+        ef_construction=256,
+        max_connections=32,
+        ef=-1,  # -1 enables dynamic ef, auto-tuned per query based on result set size
+        quantizer=Configure.VectorIndex.Quantizer.pq(),  # product quantization
+    ),
+)
+```
+
+Weaviate also supports a **flat index** (brute-force, no graph) as an explicit
+alternative for small collections or per-tenant collections in multi-tenant setups —
+below a certain vector count, HNSW's graph-build overhead and memory cost aren't
+justified by its speed advantage over exact search, and Weaviate's multi-tenancy
+design leans on this: many small per-tenant collections are often better served by
+flat indexes than by many small HNSW graphs each paying fixed per-graph overhead.
+
+## Compression trade-offs: PQ, BQ, and SQ
+
+| Compression | Mechanism | Memory savings | Recall impact | Fit |
+|---|---|---|---|---|
+| None (flat vectors) | Store full float32 | Baseline | None | Small collections, maximum accuracy |
+| Product Quantization (PQ) | Splits vector into subspaces, quantizes each independently via learned codebooks | ~4-32x depending on config | Moderate, tunable via segment count | Large collections needing significant compression with recoverable accuracy via rescoring |
+| Binary Quantization (BQ) | 1 bit per dimension | ~32x | Higher, best combined with oversampling + rescore | Very large collections, aggressive memory constraints |
+| Scalar Quantization (SQ) | int8 per dimension | ~4x | Low | A safer middle ground when PQ's accuracy loss is unacceptable |
+
+PQ's codebooks are *trained* on a data sample before being applied collection-wide —
+this means compression quality depends on how representative that training sample is
+of the full data distribution, and PQ compression configured against an early, small
+dataset can degrade if the corpus's vector distribution shifts meaningfully as it
+grows, a subtler operational gotcha than a pure memory/recall trade-off.
+
+## Replication, consistency, and Weaviate's tunable consistency levels
+
+Weaviate's replicated deployments expose tunable read/write consistency (`ONE`,
+`QUORUM`, `ALL`) per request, similar in spirit to Cassandra-style quorum consistency:
+
+```python
+docs.data.insert_many([...], consistency_level="QUORUM")
+results = docs.query.near_vector(near_vector=vec, consistency_level="ONE")
+```
+
+`ALL` guarantees strongest consistency at the cost of write/read latency and
+availability during node failure; `ONE` favors availability and speed at the risk of
+reading slightly stale replicas. This is a direct, explicit trade-off exposed to the
+application rather than a fixed system-wide policy — appropriate given that different
+RAG workloads within the same deployment (e.g. a user-facing chat query vs. a batch
+analytics job) can reasonably want different points on that trade-off.
+
+## When Weaviate's opinionated feature set is the right fit — and when it isn't
+
+Weaviate's built-in vectorizer modules, generative search, and native multi-tenancy
+are genuine productivity wins for teams building RAG products end-to-end within
+Weaviate's ecosystem, but they represent real architectural commitments: relying on
+`text2vec` modules ties embedding infrastructure to database uptime and API
+dependencies, and generative search couples LLM prompt logic to database configuration
+rather than application code, which can complicate testing, prompt iteration, and
+multi-provider LLM strategies. Teams with strong existing embedding/LLM
+infrastructure, or who need tight version control over prompts and models
+independent of the database layer, often deliberately opt out of these modules and use
+Weaviate as a "plain" vector database with `self_provided()` vectors — a reasonable
+and fully supported configuration, not a workaround.

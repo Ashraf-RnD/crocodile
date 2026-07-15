@@ -1,0 +1,91 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "GPTQ"
+level: intermediate
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "gptq"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "AutoGPTQ — GitHub"
+    url: "https://github.com/AutoGPTQ/AutoGPTQ"
+  - type: article
+    title: "GPTQ: Accurate Post-Training Quantization for Generative Pre-trained Transformers"
+    url: "https://arxiv.org/abs/2210.17323"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Why GPTQ needs calibration data
+
+Unlike simpler quantization schemes that just round each weight based on its own
+value, GPTQ needs to know what the *activations* flowing through the layer typically
+look like, so it can measure how much a given rounding choice actually hurts the
+layer's output. That means running a small batch of representative text through the
+model first — a **calibration dataset**, usually a few hundred sequences pulled from a
+general corpus like WikiText-2 or C4. You don't need your production data, just text
+that's broadly representative of what the model will see.
+
+<Mermaid client:visible code={`flowchart LR
+  Cal["Calibration text\n(e.g. WikiText-2 samples)"] --> Run["Run through model,\ncollect layer activations"]
+  Run --> Layer["Quantize one layer"]
+  Layer --> Col["Quantize one column of weights"]
+  Col --> Err["Measure output error"]
+  Err --> Comp["Adjust remaining\nunquantized columns to compensate"]
+  Comp --> Col
+  Comp --> Next["Move to next layer"]`} />
+
+## Running quantization yourself
+
+```python
+from auto_gptq import AutoGPTQForCausalLM, BaseQuantizeConfig
+from transformers import AutoTokenizer
+
+model_name = "meta-llama/Llama-2-7b-hf"
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+quantize_config = BaseQuantizeConfig(
+    bits=4,
+    group_size=128,
+    desc_act=False,  # faster inference, tiny accuracy trade-off
+)
+
+model = AutoGPTQForCausalLM.from_pretrained(model_name, quantize_config)
+
+# Calibration examples: a few hundred tokenized text samples is typical
+examples = [
+    tokenizer("The quick brown fox jumps over the lazy dog.", return_tensors="pt")
+    for _ in range(128)
+]
+
+model.quantize(examples)
+model.save_quantized("./llama-2-7b-gptq-4bit")
+```
+
+The `quantize()` call is the expensive part — it processes the calibration examples
+layer by layer, solving a small optimization problem for each layer's weight matrix
+before moving to the next.
+
+## group_size: the accuracy/size knob
+
+GPTQ doesn't use one scale factor for an entire weight matrix — it splits each row
+into groups of consecutive weights (`group_size=128` is the common default) and
+computes a separate scale factor per group. Smaller groups (e.g. 32 or 64) track the
+weight distribution more precisely and give better accuracy, at the cost of storing
+more scale factors (slightly larger file, marginally slower kernels). Larger groups
+(or `group_size=-1`, meaning one group per whole row) minimize overhead but lose
+accuracy on weight matrices with uneven value distributions. 128 is the practical
+default because it's a good accuracy/size trade-off across most transformer layers.
+
+## Serving a GPTQ model in production
+
+```bash
+vllm serve ./llama-2-7b-gptq-4bit \
+  --quantization gptq \
+  --max-model-len 4096 \
+  --gpu-memory-utilization 0.90
+```
+
+vLLM auto-detects group size and bit-width from the saved `quantize_config.json`, so
+you don't need to repeat those flags at serve time — you only need to point at the
+directory and tell it the quantization method.

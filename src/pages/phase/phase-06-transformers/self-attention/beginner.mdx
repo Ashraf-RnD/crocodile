@@ -1,0 +1,88 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Self-Attention"
+level: beginner
+phaseSlug: "phase-06-transformers"
+phaseName: "Transformers"
+topicSlug: "self-attention"
+estReadTime: 6
+resources:
+  - type: article
+    title: "Jay Alammar — The Illustrated Transformer"
+    url: "https://jalammar.github.io/illustrated-transformer/"
+  - type: video
+    title: "3Blue1Brown — Visualizing Attention"
+    url: "https://www.youtube.com/watch?v=eMlx5fFNoYc"
+---
+
+## Self-attention: a sentence looking at itself
+
+Regular attention connects two different sequences (like translating one language to
+another). **Self-attention** is the special case where a sentence attends to
+*itself* — every word looks at every other word in the same sentence to build a
+richer understanding of its own meaning.
+
+Take: "The animal didn't cross the street because **it** was too tired." To know
+what "it" means, the word "it" needs to look at every other word in the same
+sentence and figure out that "animal" is the most relevant one. That's self-attention:
+same sentence supplies the queries, keys, *and* values.
+
+### The recipe, in words
+
+For every word in the sentence:
+1. Turn it into a **query** ("what am I looking for?").
+2. Compare that query against the **keys** of every word in the sentence (including
+   itself).
+3. Use the comparison scores to build a weighted mix of every word's **value**.
+4. That weighted mix becomes the new, context-aware representation of the word.
+
+```python
+import numpy as np
+
+sentence = ["The", "animal", "was", "tired"]
+
+# toy embeddings, one 3-dim vector per word
+X = np.array([
+    [0.1, 0.2, 0.0],   # The
+    [0.9, 0.1, 0.0],   # animal
+    [0.0, 0.8, 0.2],   # was
+    [0.1, 0.7, 0.3],   # tired
+])
+
+def softmax(x, axis=-1):
+    e = np.exp(x - np.max(x, axis=axis, keepdims=True))
+    return e / e.sum(axis=axis, keepdims=True)
+
+# In real self-attention, Q/K/V come from learned projections of X.
+# Here we use X directly for all three to keep the example minimal.
+Q, K, V = X, X, X
+
+scores = Q @ K.T                 # every word compared against every word
+weights = softmax(scores)        # normalize each row to sum to 1
+output = weights @ V             # blend values using those weights
+
+print("attention weights (rows = query word, cols = key word):")
+print(np.round(weights, 2))
+```
+
+Notice the output has one row of weights per word — each word gets its *own*
+personalized blend of every other word, based on how relevant it finds them.
+
+## Try it yourself
+
+Looking at the `weights` matrix printed above, which word do you expect "animal" (row
+1) to pay the most attention to, and why might that make sense given the embeddings
+chosen?
+
+<details>
+<summary>Solution</summary>
+
+"animal" (row 1, embedding `[0.9, 0.1, 0.0]`) will score highest against keys that
+are most similar in direction — comparing dot products, it's most similar to itself
+(`[0.9, 0.1, 0.0]`), so the diagonal entry (attending to itself) will likely dominate.
+This is common in early, untrained self-attention layers: without learned Q/K/V
+projections that separate "what I'm looking for" from "what I contain," words often
+attend most strongly to themselves. The learned projections in a real Transformer are
+what let a word like "it" learn to look *away* from itself toward "animal" instead.
+
+</details>

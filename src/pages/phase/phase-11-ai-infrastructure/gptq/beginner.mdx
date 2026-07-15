@@ -1,0 +1,72 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "GPTQ"
+level: beginner
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "gptq"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "AutoGPTQ — GitHub"
+    url: "https://github.com/AutoGPTQ/AutoGPTQ"
+---
+
+## Shrinking a model without wrecking it
+
+A model's weights are normally stored as 16-bit numbers. **Quantization** rounds them
+down to fewer bits (often 4) so the model takes a quarter of the memory and loads/runs
+faster — but naive rounding, done blindly on every weight, quietly degrades output
+quality because errors pile up layer after layer.
+
+**GPTQ** is a smarter way to do this. Instead of rounding every weight independently,
+it quantizes a layer's weights one at a time and, after each one, nudges the
+*remaining* unquantized weights in that layer slightly to compensate for the error it
+just introduced. It's like tailoring a jacket: instead of cutting all the fabric at
+once and hoping it fits, you make one cut, see how the fabric shifts, and adjust your
+next cut accordingly. The result is a 4-bit model that's dramatically smaller than the
+original but much closer in behavior than naive rounding would give you.
+
+## Using an already-quantized GPTQ model
+
+Most of the time you don't run the quantization process yourself — you download a
+model someone already GPTQ-quantized (search Hugging Face for a repo name ending in
+`-GPTQ`) and load it directly:
+
+```python
+from transformers import AutoTokenizer
+from auto_gptq import AutoGPTQForCausalLM
+
+model_name = "TheBloke/Llama-2-7B-Chat-GPTQ"
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoGPTQForCausalLM.from_quantized(model_name, device="cuda:0")
+
+inputs = tokenizer("The capital of France is", return_tensors="pt").to("cuda:0")
+output = model.generate(**inputs, max_new_tokens=20)
+print(tokenizer.decode(output[0]))
+```
+
+Or, if you're already using vLLM for serving, GPTQ models work out of the box:
+
+```bash
+vllm serve TheBloke/Llama-2-7B-Chat-GPTQ --quantization gptq
+```
+
+Either way, a 7B model that would normally need ~14GB of GPU memory in 16-bit fits in
+roughly 4GB at 4-bit — often the difference between "needs an A100" and "runs on a
+laptop GPU."
+
+## Try it yourself
+
+A 13B-parameter model stored in 16-bit precision needs about 26GB of GPU memory just
+for weights. Roughly how much memory would the same model need after 4-bit GPTQ
+quantization, and why isn't the answer "exactly a quarter"?
+
+<details>
+<summary>Solution</summary>
+
+Roughly 6.5-7GB — 4 bits is a quarter of 16 bits, so weight storage shrinks close to
+4x. It's not *exactly* a quarter because a few components (like small per-group scale
+factors used to keep accuracy high, and any layers left unquantized) add a bit of
+overhead on top of the raw 4-bit weights.
+</details>

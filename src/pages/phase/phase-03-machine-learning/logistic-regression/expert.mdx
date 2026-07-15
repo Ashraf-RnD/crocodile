@@ -1,0 +1,119 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Logistic Regression"
+level: expert
+phaseSlug: "phase-03-machine-learning"
+phaseName: "Machine Learning"
+topicSlug: "logistic-regression"
+estReadTime: 12
+resources:
+  - type: docs
+    title: "scikit-learn: LogisticRegression API reference"
+    url: "https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.LogisticRegression.html"
+  - type: article
+    title: "scikit-learn: Probability calibration"
+    url: "https://scikit-learn.org/stable/modules/calibration.html"
+---
+
+## Expert: Logistic Regression
+
+## Why log-loss, not squared error
+
+Logistic regression is fit by **maximum likelihood estimation**, not by minimizing squared
+error. For a single training example with true label `y ∈ {0, 1}` and predicted probability `p`,
+the likelihood of observing that label is `p^y * (1-p)^(1-y)`. Taking the negative log of the
+product of likelihoods across all examples gives the **log-loss** (binary cross-entropy):
+
+```
+L = -1/n * Σ [ y_i * log(p_i) + (1 - y_i) * log(1 - p_i) ]
+```
+
+Two reasons this matters over squared error:
+
+1. **Convexity.** Log-loss composed with the sigmoid is convex in the model's weights, so
+   gradient-based solvers (`lbfgs`, `newton-cg`, `saga`, `liblinear`) are guaranteed to find the
+   global optimum — no local minima to get stuck in. Squared error on top of a sigmoid is
+   non-convex, which makes optimization unreliable.
+2. **Correct penalty shape.** Log-loss penalizes confident wrong predictions much more harshly
+   than squared error does. A prediction of `p=0.99` for a true label of 0 incurs a huge log-loss
+   penalty, appropriately punishing overconfidence — squared error grows only quadratically and
+   under-penalizes this case.
+
+## Perfect separation and unbounded coefficients
+
+If a feature (or combination of features) perfectly separates the two classes, the unregularized
+maximum-likelihood solution doesn't exist as a finite point — the optimizer can keep pushing a
+coefficient toward infinity and keep improving log-loss, since it can always push predicted
+probabilities closer to exactly 0 or 1. In practice this shows up as a solver that fails to
+converge, or converges to suspiciously huge coefficients on one feature.
+
+Regularization (`C` in scikit-learn) fixes this by adding a penalty term (`L2`: `1/(2C) * ||w||^2`,
+or `L1`: `1/C * ||w||_1`) to the loss, which caps how large coefficients can grow. Without
+regularization — `LogisticRegression(penalty=None)` — perfect or near-perfect separation is a
+real production hazard, especially with high-dimensional sparse features (text, one-hot
+categoricals) where accidental separation is common.
+
+```python
+from sklearn.linear_model import LogisticRegression
+
+# safe default in production: keep some regularization even if C is large
+model = LogisticRegression(penalty="l2", C=1.0, solver="lbfgs", max_iter=1000)
+```
+
+## Calibration under imbalance and resampling
+
+A well-calibrated model's `predict_proba` output of 0.7 should mean "true positive roughly 70%
+of the time" among similar examples. Logistic regression is naturally one of the better-calibrated
+classifiers when trained on representative data with enough samples, because it directly
+optimizes log-loss — a *proper scoring rule* that rewards calibrated probabilities.
+
+That calibration breaks under two common interventions:
+
+- **`class_weight='balanced'` or manual reweighting** shifts the decision function to compensate
+  for class imbalance, but the resulting probabilities no longer reflect the true base rate —
+  they reflect the reweighted training distribution.
+- **Resampling** (SMOTE, random oversampling/undersampling) changes the class prior the model
+  sees during training, again distorting `predict_proba` relative to production base rates.
+
+If you need faithful probabilities downstream (e.g., feeding a risk score into a cost model),
+either train on the natural class distribution and adjust the decision threshold instead of the
+data/weights, or explicitly recalibrate afterward with `CalibratedClassifierCV` (Platt scaling
+or isotonic regression) on held-out data.
+
+```python
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.linear_model import LogisticRegression
+
+base = LogisticRegression(class_weight="balanced", max_iter=1000)
+calibrated = CalibratedClassifierCV(base, method="sigmoid", cv=5)
+calibrated.fit(X_train, y_train)
+```
+
+## Trade-off summary
+
+| Model | Interpretability | Training cost | Handles nonlinearity | Probability calibration |
+|---|---|---|---|---|
+| Logistic Regression | High — coefficients are log-odds weights | Low, convex, fast to fit | No — linear boundary; needs manual feature engineering | Good, natively optimizes log-loss |
+| Decision Trees | Medium — rules are readable but unstable across resamples | Low to medium | Yes — splits capture nonlinear/interaction effects natively | Poor — leaf-based probabilities are coarse and overconfident |
+| SVM (RBF kernel) | Low — support vectors aren't directly interpretable | High — scales poorly with sample count | Yes — kernel trick handles nonlinear boundaries | Poor without extra calibration (Platt scaling needed) |
+| Naive Bayes | High — per-feature likelihoods are inspectable | Very low — closed-form, single pass | No — assumes feature independence, weak on interactions | Often poorly calibrated — independence assumption skews probabilities |
+
+## Feature engineering burden and production case
+
+Because the decision boundary is strictly linear in the input features, logistic regression
+pushes nonlinearity into feature engineering: interaction terms (`x1 * x2`), polynomial features
+(`PolynomialFeatures`), binning continuous variables, or domain-specific transforms. This is more
+upfront work than tree ensembles or kernel methods, which capture nonlinearity automatically —
+but it's also why logistic regression remains a strong production default:
+
+- **Inference is a dot product.** No tree traversal, no kernel computation — just `wx + b` and a
+  sigmoid. This is trivially fast and cheap to serve at scale.
+- **Coefficients are directly interpretable** as log-odds contributions per feature, which
+  matters for regulated domains (credit, insurance, healthcare) where you must explain a
+  decision.
+- **With enough data and light regularization, it's well-calibrated out of the box**, which
+  matters when downstream systems consume the probability, not just the label.
+- **It's a cheap, strong baseline.** Before reaching for a gradient-boosted tree or neural net,
+  a well-featured logistic regression tells you how much signal is actually linear in your
+  features — and often gets surprisingly close to more complex models once engineered features
+  are added.

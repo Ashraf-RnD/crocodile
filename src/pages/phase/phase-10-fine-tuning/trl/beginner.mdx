@@ -1,0 +1,97 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "TRL"
+level: beginner
+phaseSlug: "phase-10-fine-tuning"
+phaseName: "Fine-tuning"
+topicSlug: "trl"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "Hugging Face TRL — official documentation"
+    url: "https://huggingface.co/docs/trl/index"
+  - type: docs
+    title: "TRL GitHub repository"
+    url: "https://github.com/huggingface/trl"
+---
+
+## The library that turns fine-tuning theory into runnable code
+
+Throughout this phase you've seen code using `SFTTrainer` and `DPOTrainer` — those both
+come from **TRL (Transformer Reinforcement Learning)**, Hugging Face's library for the
+whole spectrum of post-pretraining fine-tuning: supervised fine-tuning, reward
+modeling, PPO-based RLHF, and preference optimization methods like DPO.
+
+Think of TRL as the "batteries included" layer on top of the base `transformers`
+library. `transformers` gives you models and tokenizers; TRL gives you the actual
+training loops, loss functions, and data-handling logic specific to each fine-tuning
+technique, so you don't have to implement the DPO loss or the PPO update rule
+yourself.
+
+### The trainers you'll use most
+
+```python
+from trl import SFTTrainer      # supervised fine-tuning
+from trl import DPOTrainer      # direct preference optimization
+from trl import RewardTrainer   # training a reward model for RLHF
+from trl import PPOTrainer      # the RL optimization step of RLHF
+```
+
+Each one follows roughly the same shape as Hugging Face's familiar `Trainer` class —
+you pass a model, a dataset, and a config object, then call `.train()`.
+
+### A minimal end-to-end example
+
+```python
+from datasets import load_dataset
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from trl import SFTTrainer, SFTConfig
+
+model = AutoModelForCausalLM.from_pretrained("gpt2")
+tokenizer = AutoTokenizer.from_pretrained("gpt2")
+
+dataset = load_dataset("HuggingFaceH4/no_robots", split="train[:200]")
+
+trainer = SFTTrainer(
+    model=model,
+    train_dataset=dataset,
+    args=SFTConfig(output_dir="./gpt2-sft-demo", num_train_epochs=1),
+)
+trainer.train()
+```
+
+That's the entire training script for a working supervised fine-tuning run — TRL
+handles tokenization, batching, the training loop, and checkpointing under the hood.
+
+### Why it matters that TRL integrates with PEFT
+
+TRL's trainers accept a `peft_config` argument directly, so combining fine-tuning
+methods (SFT, DPO) with parameter-efficient techniques (LoRA, QLoRA) is a config
+change, not a separate integration you have to wire up yourself:
+
+```python
+from peft import LoraConfig
+
+trainer = SFTTrainer(
+    model=model,
+    train_dataset=dataset,
+    peft_config=LoraConfig(r=16, target_modules="all-linear"),  # LoRA, in one line
+    args=SFTConfig(output_dir="./gpt2-sft-lora-demo"),
+)
+```
+
+## Try it yourself
+
+Which TRL trainer would you use for each scenario: (1) teaching a model to follow a
+specific output format from labeled examples, and (2) teaching a model to prefer one
+of two candidate responses?
+
+<details>
+<summary>Solution</summary>
+
+1. `SFTTrainer` — you have direct `(prompt, ideal response)` examples, which is exactly
+   what supervised fine-tuning is for.
+2. `DPOTrainer` — you have `(prompt, chosen, rejected)` comparisons, which is a
+   preference-optimization problem, not a direct-imitation one.
+
+</details>

@@ -1,0 +1,73 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Rate Limiting"
+level: beginner
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "rate-limiting"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "OpenAI Platform — Rate limits"
+    url: "https://platform.openai.com/docs/guides/rate-limits"
+  - type: article
+    title: "Cloudflare — What is rate limiting?"
+    url: "https://www.cloudflare.com/learning/bots/what-is-rate-limiting/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## A bouncer for your API
+
+Rate limiting caps how many requests a user (or an API key, or an IP
+address) can make in a given time window — for example, "20 requests per
+minute." If they go over, the extra requests get rejected instead of
+processed. Think of it like a bouncer at a club door: not "no more people
+ever," just "no more than this many, this fast."
+
+<Mermaid client:visible code={`flowchart LR
+  Req["Request arrives"] --> Check{"Under the limit?"}
+  Check -->|yes| Allow["Process the request"]
+  Check -->|no| Reject["Reject with 'too many requests'"]`} />
+
+## Why AI systems need this even more than typical APIs
+
+A regular API request might cost a server a few milliseconds of work. An
+LLM request can take seconds of expensive GPU time and cost real money per
+call. Without limits, one user (or one buggy script stuck in a retry loop)
+could hog a large share of your capacity, slow the system down for
+everyone else, and rack up a huge bill — all without doing anything
+malicious, just by accident.
+
+## A simple example
+
+```python
+requests_this_minute = {}
+
+def is_allowed(user_id, limit=20):
+    count = requests_this_minute.get(user_id, 0)
+    if count >= limit:
+        return False  # over the limit, reject
+    requests_this_minute[user_id] = count + 1
+    return True
+```
+
+This is a simplified version of the idea — real systems use more careful
+counting (covered at the intermediate level) so the limit doesn't reset
+unfairly all at once every minute.
+
+## Try it yourself
+
+Why might an AI product want a *lower* rate limit for free-tier users than
+for paying users, beyond just "paying users deserve more"?
+
+<details>
+<summary>Solution</summary>
+
+Because every request has a real compute cost, unlimited or high-limit free
+usage is a direct cost the business absorbs with no matching revenue —
+unlike a typical web app where serving one more page view is nearly free. A
+lower free-tier limit protects the business from having its GPU capacity
+(and budget) consumed disproportionately by users who aren't paying for it,
+while still letting people try the product. This is a much more direct
+cost-driven reason for tiered limits than most non-AI SaaS products have.
+</details>

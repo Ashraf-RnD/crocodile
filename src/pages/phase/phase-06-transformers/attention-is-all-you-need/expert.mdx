@@ -1,0 +1,104 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Attention Is All You Need"
+level: expert
+phaseSlug: "phase-06-transformers"
+phaseName: "Transformers"
+topicSlug: "attention-is-all-you-need"
+estReadTime: 12
+resources:
+  - type: article
+    title: "Attention Is All You Need (original paper)"
+    url: "https://arxiv.org/abs/1706.03762"
+  - type: article
+    title: "On Layer Normalization in the Transformer Architecture"
+    url: "https://arxiv.org/abs/2002.04745"
+---
+
+## What the paper got right, and what later work quietly fixed
+
+Reading the original paper with the benefit of hindsight is instructive precisely
+because several of its specific design choices — not the core attention mechanism,
+but surrounding details — turned out to be suboptimal and were revised by follow-up
+work:
+
+- **Post-LN placement** — the paper places LayerNorm *after* each residual addition.
+  This works but requires careful learning-rate warmup and becomes progressively
+  harder to train stably as depth increases. Xiong et al. (2020) later showed
+  pre-LN (normalizing before each sublayer) trains more stably at depth without
+  warmup, and pre-LN became the near-universal default in GPT-2 onward.
+- **Sinusoidal positional encoding** — fixed, non-learned, added to input
+  embeddings. Reasonable and mathematically elegant, but empirically outperformed by
+  RoPE and ALiBi on length-extrapolation behavior in later architectures. The paper
+  itself hedges on this, noting they also tried learned positional embeddings and
+  found "nearly identical" results at the scales they tested.
+- **Absolute rather than relative position framing** — even though the sinusoidal
+  scheme has some relative-position properties baked in, subsequent architectures
+  (T5's relative position bias, Transformer-XL, RoPE) made relative position an
+  explicit first-class design choice, generally with better results for
+  longer-context behavior.
+
+None of these are flaws in the core contribution (attention as the primary
+computational mechanism) — they're evidence that the paper's *specific*
+implementation choices around that core mechanism left real room for refinement,
+which the field spent the following several years finding.
+
+## The inductive bias trade-off the paper explicitly discusses
+
+Section 4 of the paper directly compares self-attention to recurrent and
+convolutional layers on three axes: computational complexity per layer, the amount
+of computation that can be parallelized, and the path length between long-range
+dependencies. The paper's own honest accounting: self-attention layers connect all
+positions with a constant number of sequential operations (`O(1)`), versus `O(n)`
+for recurrent layers, at the cost of `O(n²·d)` computational complexity per layer
+versus `O(n·d²)` for recurrent layers. For typical sentence lengths in machine
+translation (`n` smaller than `d`), this was a clear win; the paper's authors were
+explicit that this complexity trade-off would need to be revisited for much longer
+sequences — a prediction that came true and drove the entire subsequent
+efficient-attention research direction (sparse attention, FlashAttention, linear
+attention).
+
+## Why the paper's translation framing undersold its own generality
+
+The paper is scoped entirely to machine translation (and briefly, English
+constituency parsing, as a secondary experiment to show generality). It makes no
+claims about language modeling, classification, or multi-task transfer learning —
+those applications came from later papers (BERT, GPT, T5) recognizing that the
+encoder and decoder halves could each be repurposed independently, pretrained at
+scale on unlabeled text, and fine-tuned for downstream tasks. This is a useful
+reminder when reading any influential paper: the authors' own scoped claims and the
+architecture's eventual realized impact can diverge substantially, and judging a
+paper's importance requires tracking what the field built *on top of* it, not just
+what it originally demonstrated.
+
+## Reproducibility and the "recipe" details that mattered more than expected
+
+The paper's appendix includes specific, seemingly minor training details — label
+smoothing (`ε=0.1`), a particular warmup-then-decay learning rate schedule tied to
+`d_model^-0.5`, and specific dropout placement — that later reproductions found
+were non-trivial to get right and materially affected final translation quality.
+This foreshadowed a pattern that became even more pronounced at LLM scale: published
+architecture diagrams alone are often insufficient to reproduce reported results,
+and training recipe details (optimizer schedule, regularization, initialization)
+carry real, sometimes underappreciated, weight.
+
+## Trade-off summary: the paper's core bet, evaluated with hindsight
+
+| Design bet | Paid off | Needed later revision |
+|---|---|---|
+| Attention as sole computational primitive (no recurrence/convolution) | Yes — foundational to nearly all subsequent LLMs | — |
+| Multi-head attention for representational diversity | Yes — retained (with GQA/MQA refinements) in all major LLMs | Partial — head redundancy findings motivated pruning/sharing research |
+| Post-LN + warmup schedule | Worked at the paper's scale | Yes — pre-LN became standard for deeper/larger models |
+| Fixed sinusoidal positional encoding | Reasonable starting point | Yes — RoPE/ALiBi now dominant for long-context models |
+| `O(n²)` attention complexity accepted as a trade-off | Correct call for translation-scale sequences at the time | Yes — became the central bottleneck motivating a decade of efficient-attention research |
+
+## The practical engineering takeaway
+
+Reading this paper today is valuable less as "the final word" on Transformer design
+and more as the clearest available record of the field's starting assumptions —
+understanding exactly which choices were arbitrary implementation decisions (LayerNorm
+placement, positional scheme) versus which were the genuinely load-bearing insight
+(attention replacing recurrence as the core mechanism) is what lets you correctly
+judge which modern architectural variants are meaningful innovations versus which are
+incremental refinements of details the original authors themselves flagged as open
+questions.

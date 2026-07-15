@@ -1,0 +1,88 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "GRU"
+level: expert
+phaseSlug: "phase-04-deep-learning"
+phaseName: "Deep Learning"
+topicSlug: "gru"
+estReadTime: 11
+resources:
+  - type: article
+    title: "Empirical Evaluation of Gated Recurrent Neural Networks on Sequence Modeling"
+    url: "https://arxiv.org/abs/1412.3555"
+  - type: article
+    title: "LSTM: A Search Space Odyssey"
+    url: "https://arxiv.org/abs/1503.04069"
+---
+
+## The gate equations
+
+```
+z_t = sigmoid(W_z · [h_{t-1}, x_t])                     # update gate
+r_t = sigmoid(W_r · [h_{t-1}, x_t])                     # reset gate
+h~_t = tanh(W_h · [r_t * h_{t-1}, x_t])                  # candidate hidden state
+h_t = (1 - z_t) * h_{t-1} + z_t * h~_t                    # blend old and new
+```
+
+The update gate `z_t` directly interpolates between the previous hidden state and
+the new candidate — structurally similar to LSTM's forget-gate-controlled additive
+cell update, which is why GRU inherits much of LSTM's resistance to vanishing
+gradients: `dh_t/dh_{t-1}` has a `(1 - z_t)` term that the network can push toward 1
+by learning to keep the update gate closed, giving a comparable near-identity
+gradient path without a separate cell state.
+
+## Why merging cell state and hidden state is a real trade-off, not just simplification
+
+LSTM's separate cell state lets the network maintain long-term memory (`c_t`)
+that's decoupled from what's exposed to the rest of the network at each step
+(`h_t`, filtered through the output gate). GRU exposes its entire state as both
+memory and output — there's no equivalent to LSTM's "remember this internally but
+don't act on it yet." Empirically (Chung et al. 2014, Greff et al.'s "Search Space
+Odyssey") this rarely matters for typical sequence lengths and tasks, but it is the
+structural reason some very long-range or fine-grained-timing tasks show a
+measurable, if small, LSTM advantage — the missing degree of freedom is a genuine
+capability gap, not a benchmarking artifact.
+
+## Parameter count comparison, worked out
+
+For hidden size `H` and input size `I`:
+
+- **LSTM**: 4 gates, each `H(H+I) + H` parameters → `4(H(H+I) + H)`
+- **GRU**: 3 gates, each `H(H+I) + H` parameters → `3(H(H+I) + H)`
+
+That's exactly a 25% reduction in recurrent parameters for the same hidden size —
+a mechanical consequence of one fewer gate, not an approximation. For a model with
+`H=512, I=512`, this is roughly 500K fewer parameters per layer, which compounds
+significantly in deep, stacked, bidirectional configurations at production scale.
+
+## Empirical evidence: task-dependent, not universal
+
+The most-cited empirical comparison (Chung et al., 2014) found GRU and LSTM
+performed comparably across polyphonic music modeling and speech signal tasks, with
+neither consistently dominant — and follow-up large-scale ablations (Jozefowicz et
+al., "An Empirical Exploration of Recurrent Network Architectures") reached similar
+conclusions. This is the actual state of evidence practitioners should carry
+forward: absent a specific, well-documented benchmark for your exact task/domain
+favoring one architecture, the parameter/speed savings of GRU make it a reasonable
+default starting point, with LSTM as the fallback if validation performance
+specifically demands it.
+
+## Comparing GRU and LSTM directly
+
+| Aspect | GRU | LSTM |
+|---|---|---|
+| Gates | 2 (reset, update) | 3 (forget, input, output) |
+| Separate cell state | No | Yes |
+| Parameters (relative) | ~75% of LSTM | Baseline |
+| Training/inference speed | Faster per step | Slower per step |
+| Long-range memory control | Coupled state = output | Decoupled internal memory |
+| Typical production fit | Resource-constrained, shorter sequences | Tasks needing fine long-range control |
+
+## Practical note on cuDNN acceleration
+
+Both `nn.GRU` and `nn.LSTM` dispatch to fused cuDNN kernels on GPU when input
+conditions allow (contiguous inputs, no unsupported custom modifications), giving
+comparable *wall-clock* speedups over naive implementations regardless of gate
+count — the parameter/FLOP advantage of GRU shows up more in memory footprint and
+CPU-bound or highly parallel multi-model serving scenarios than in single-model GPU
+training speed, where both are already heavily optimized.

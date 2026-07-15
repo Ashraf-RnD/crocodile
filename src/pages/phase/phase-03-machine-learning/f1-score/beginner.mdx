@@ -1,0 +1,80 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "F1 Score"
+level: beginner
+phaseSlug: "phase-03-machine-learning"
+phaseName: "Machine Learning"
+topicSlug: "f1-score"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "scikit-learn: Precision, recall and F-measures"
+    url: "https://scikit-learn.org/stable/modules/model_evaluation.html#precision-recall-f-measure-metrics"
+  - type: video
+    title: "StatQuest: Sensitivity, Specificity, and F1 Score"
+    url: "https://www.youtube.com/watch?v=j9ZlLqTbA5A"
+---
+
+## A single "balance score"
+
+A classifier has two report cards: **precision** (of everything it flagged positive, how much was actually positive) and **recall** (of everything that was actually positive, how much did it catch). A model can ace one and fail the other — a spam filter that marks *everything* as spam gets perfect recall but terrible precision.
+
+F1 is a way to squeeze both numbers into one score you can compare across models. But it doesn't use a plain average. It uses the **harmonic mean**, which punishes imbalance: if either precision or recall is very low, F1 drops sharply even if the other one is perfect. A plain average would let one great score paper over one terrible score; F1 refuses to.
+
+```
+F1 = 2 * (precision * recall) / (precision + recall)
+```
+
+## In code
+
+```python
+from sklearn.metrics import f1_score, precision_score, recall_score
+
+y_true = [1, 0, 1, 1, 0, 1, 0, 0]
+y_pred = [1, 0, 0, 1, 0, 1, 1, 0]
+
+precision = precision_score(y_true, y_pred)
+recall = recall_score(y_true, y_pred)
+f1 = f1_score(y_true, y_pred)
+
+print(f"precision={precision:.2f} recall={recall:.2f} f1={f1:.2f}")
+# precision=0.75 recall=0.75 f1=0.75
+```
+
+Now watch what happens with an imbalanced pair — precision high, recall low:
+
+```python
+precision, recall = 0.95, 0.10
+
+manual_f1 = 2 * (precision * recall) / (precision + recall)
+plain_average = (precision + recall) / 2
+
+print(f"F1={manual_f1:.2f}  plain average={plain_average:.2f}")
+# F1=0.18  plain average=0.53
+```
+
+The plain average makes the model look decent (0.53). F1 tells the truth: 0.18, because recall is almost nonexistent.
+
+## Try it yourself
+
+You have a model with `precision = 0.60` and `recall = 0.90`. Compute the F1 score by hand using the formula above, then verify it with `sklearn.metrics.f1_score` on a small `y_true`/`y_pred` example you construct that produces roughly those numbers.
+
+<details>
+<summary>Solution</summary>
+
+```python
+from sklearn.metrics import f1_score
+
+precision, recall = 0.60, 0.90
+f1 = 2 * (precision * recall) / (precision + recall)
+print(f"{f1:.3f}")
+# 0.720
+
+# A small example with precision ~0.60, recall ~0.90
+y_true = [1, 1, 1, 1, 1, 0, 0, 0, 0, 0]
+y_pred = [1, 1, 1, 1, 0, 1, 1, 1, 0, 0]
+
+print(f1_score(y_true, y_pred))
+```
+
+</details>

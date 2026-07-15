@@ -1,0 +1,83 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Dropout"
+level: expert
+phaseSlug: "phase-04-deep-learning"
+phaseName: "Deep Learning"
+topicSlug: "dropout"
+estReadTime: 11
+resources:
+  - type: article
+    title: "Dropout as a Bayesian Approximation (Gal & Ghahramani)"
+    url: "https://arxiv.org/abs/1506.02142"
+  - type: article
+    title: "Dropout: A Simple Way to Prevent Overfitting (Srivastava et al.)"
+    url: "https://jmlr.org/papers/v15/srivastava14a.html"
+---
+
+## The ensemble interpretation
+
+The original dropout paper frames it as implicitly training an exponential number
+of "thinned" sub-networks (one per random mask) that share weights, with test-time
+inference (using the full network) approximating averaging over all of them. This is
+a useful mental model but an approximation, not exact — the true theoretical
+justification that has held up better in later analysis is dropout as a stochastic
+regularizer that adds noise proportional to a form of weight decay on the effective
+loss, discouraging co-adaptation between units by making any single unit's
+usefulness conditional on the network working without guaranteed access to its
+neighbors.
+
+## Monte Carlo dropout: turning a regularizer into an uncertainty estimate
+
+Gal & Ghahramani (2016) showed that leaving dropout **active at inference time** and
+running multiple stochastic forward passes approximates Bayesian posterior sampling
+over model weights — the variance across those forward passes becomes a usable
+estimate of the model's predictive uncertainty:
+
+```python
+model.train()   # keep dropout active, deliberately, at inference time
+preds = torch.stack([model(x) for _ in range(30)])   # 30 stochastic forward passes
+
+mean_pred = preds.mean(dim=0)
+uncertainty = preds.std(dim=0)   # higher std = less confident prediction
+```
+
+This is a genuinely production-relevant technique (MC Dropout) for cheap uncertainty
+estimation without training a full ensemble or a dedicated Bayesian model — though
+it's an approximation whose quality depends heavily on dropout rate and where
+dropout layers are placed, and it's increasingly displaced by deep ensembles or
+conformal prediction methods when calibration quality matters more than compute cost.
+
+## Why large-scale transformers often minimize or drop dropout
+
+At the data and parameter scales common in modern LLM pretraining, the
+regularization dropout provides is frequently unnecessary or actively harmful:
+with enormous training corpora relative to model capacity, the primary risk is
+underfitting a fixed compute budget, not overfitting a fixed dataset. Dropout adds
+gradient noise that can measurably slow convergence per training step; several
+large-scale pretraining recipes (e.g. GPT-3-class training) report using zero or
+near-zero dropout for the pretraining phase, sometimes re-introducing modest dropout
+only during fine-tuning on smaller task-specific datasets where overfitting risk
+returns. This is a clean illustration that dropout's value is conditional on the
+overfitting-vs-underfitting regime a specific training run is actually in — not a
+universal default that should always be applied.
+
+## Comparing regularization techniques
+
+| Technique | Mechanism | Compute cost | Best suited for |
+|---|---|---|---|
+| Dropout | Randomly zero activations during training | Negligible | Small-to-moderate models, limited data |
+| Weight decay (L2) | Penalizes large weight magnitudes directly in the loss | Negligible | Nearly universal, especially large-scale training |
+| Data augmentation | Expands effective dataset diversity | Moderate (preprocessing) | Vision/audio tasks, most CNN training |
+| Early stopping | Halts training before validation loss worsens | Requires held-out validation set | Any training with an overfitting signal |
+| Label smoothing | Softens hard target labels | Negligible | Classification, especially at scale |
+| MC Dropout (inference-time) | Multiple stochastic forward passes | N x inference cost | Uncertainty estimation, not primarily regularization |
+
+## A production debugging note
+
+A model that trains well but performs inconsistently in production serving is
+sometimes traced back to dropout accidentally left active (`model.train()` never
+switched, or a custom inference path that bypasses `.eval()`) — the fix is one line,
+but the symptom (nondeterministic, slightly-off predictions) can otherwise consume
+hours of investigation into data pipelines or infrastructure that were never the
+actual problem.

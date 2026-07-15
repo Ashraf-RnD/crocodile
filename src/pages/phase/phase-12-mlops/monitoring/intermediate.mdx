@@ -1,0 +1,104 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Monitoring"
+level: intermediate
+phaseSlug: "phase-12-mlops"
+phaseName: "MLOps"
+topicSlug: "monitoring"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "Grafana + Prometheus for ML Model Monitoring"
+    url: "https://grafana.com/docs/grafana/latest/getting-started/"
+  - type: docs
+    title: "Evidently AI — Production Monitoring Dashboards"
+    url: "https://docs.evidentlyai.com/user-guide/monitoring/monitoring_overview"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The four layers of production ML monitoring
+
+A mature monitoring setup tracks metrics at four distinct layers, because a
+problem at one layer can be invisible at another:
+
+1. **Infrastructure** — CPU/GPU utilization, memory, pod restarts
+2. **Service** — request rate, latency (p50/p95/p99), error rate
+3. **Data** — input feature distributions, missing values, schema violations
+4. **Model** — prediction distribution, confidence scores, and (once
+   available) accuracy against ground truth
+
+```python
+from prometheus_client import Counter, Histogram
+
+prediction_counter = Counter("model_predictions_total", "Total predictions", ["model_version"])
+prediction_latency = Histogram("model_prediction_latency_seconds", "Prediction latency")
+prediction_confidence = Histogram("model_prediction_confidence", "Confidence score distribution")
+
+def predict(features, model_version="v3"):
+    with prediction_latency.time():
+        prediction, confidence = model.predict_proba(features)
+
+    prediction_counter.labels(model_version=model_version).inc()
+    prediction_confidence.observe(confidence)
+    return prediction
+```
+
+Prometheus scrapes these metrics on an interval; Grafana turns them into
+dashboards and alerts — the same stack most companies already use for
+service monitoring, extended with model-specific metrics.
+
+<Mermaid client:visible code={`flowchart TB
+  A["Infrastructure: GPU util, memory"] --> E["Grafana dashboard"]
+  B["Service: latency, error rate"] --> E
+  C["Data: feature distributions, nulls"] --> E
+  D["Model: confidence, prediction mix"] --> E
+  E --> F["Alerting rules — page on-call"]`} />
+
+## Alerting on model-specific signals, not just system signals
+
+A model can have zero errors and normal latency while still silently
+degrading — alerting rules need to include model-behavior signals, not just
+infrastructure health:
+
+```yaml
+# Prometheus alerting rule
+groups:
+  - name: model_health
+    rules:
+      - alert: PredictionConfidenceDropped
+        expr: avg_over_time(model_prediction_confidence[1h]) < 0.6
+        for: 30m
+        annotations:
+          summary: "Average model confidence dropped below 0.6 for 30+ minutes"
+
+      - alert: PredictionClassImbalanceShift
+        expr: rate(model_predictions_total{class="fraud"}[1h]) / rate(model_predictions_total[1h]) > 0.15
+        for: 15m
+        annotations:
+          summary: "Fraud prediction rate spiked above 15% — investigate model or data issue"
+```
+
+A sudden spike in predicted fraud rate, for instance, is often the first
+visible symptom of either genuine attack activity *or* a broken upstream
+feature pipeline — the alert doesn't tell you which, but it tells you to
+look, well before a human would otherwise notice.
+
+## Closing the loop: monitoring feeding back into retraining
+
+The point of model monitoring in a mature MLOps setup isn't just
+observability — it's an input to automated action:
+
+```python
+def check_model_health():
+    confidence_avg = query_prometheus("avg_over_time(model_prediction_confidence[24h])")
+    drift_share = run_drift_report()
+
+    if confidence_avg < 0.65 or drift_share > 0.3:
+        trigger_airflow_dag("retrain_and_evaluate")
+        notify_slack("#ml-alerts", "Model health degraded — retraining triggered")
+```
+
+This is the same closed loop as CI/CD's quality gates, applied continuously
+in production rather than only at deploy time: monitor, detect degradation,
+trigger a response — ideally before end users or downstream business metrics
+are meaningfully affected.

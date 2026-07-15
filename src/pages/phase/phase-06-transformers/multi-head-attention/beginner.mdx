@@ -1,0 +1,77 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Multi-Head Attention"
+level: beginner
+phaseSlug: "phase-06-transformers"
+phaseName: "Transformers"
+topicSlug: "multi-head-attention"
+estReadTime: 6
+resources:
+  - type: article
+    title: "Jay Alammar — The Illustrated Transformer"
+    url: "https://jalammar.github.io/illustrated-transformer/"
+  - type: docs
+    title: "PyTorch — torch.nn.MultiheadAttention"
+    url: "https://pytorch.org/docs/stable/generated/torch.nn.MultiheadAttention.html"
+---
+
+## Why one "view" of attention isn't enough
+
+Imagine three different editors reading the same sentence: "The trophy didn't fit in
+the suitcase because it was too big." One editor tracks *what refers to what*
+(pronoun resolution), another tracks *grammar structure* (subject/verb/object),
+another tracks *tone*. Each editor is doing "attention" over the same sentence, but
+each is looking for something different.
+
+**Multi-head attention** is exactly this: instead of running attention once, the
+Transformer runs it several times in parallel — each "head" with its own learned
+`Q`, `K`, `V` projections — so each head can specialize in a different kind of
+relationship. The results from all heads are then combined.
+
+### A simplified picture
+
+```python
+import numpy as np
+
+def softmax(x, axis=-1):
+    e = np.exp(x - np.max(x, axis=axis, keepdims=True))
+    return e / e.sum(axis=axis, keepdims=True)
+
+def one_head(X, Wq, Wk, Wv):
+    Q, K, V = X @ Wq, X @ Wk, X @ Wv
+    weights = softmax(Q @ K.T / np.sqrt(Q.shape[-1]))
+    return weights @ V
+
+X = np.random.randn(4, 8)   # 4 words, 8-dim embeddings
+
+# Two heads, each working with a smaller 4-dim slice
+np.random.seed(0)
+Wq1, Wk1, Wv1 = [np.random.randn(8, 4) for _ in range(3)]
+Wq2, Wk2, Wv2 = [np.random.randn(8, 4) for _ in range(3)]
+
+head1_out = one_head(X, Wq1, Wk1, Wv1)   # this head might learn syntax
+head2_out = one_head(X, Wq2, Wk2, Wv2)   # this head might learn coreference
+
+combined = np.concatenate([head1_out, head2_out], axis=-1)
+print(combined.shape)  # (4, 8) — heads concatenated back to original width
+```
+
+Each head gets a smaller slice of the total dimensionality (here, 4 dims each instead
+of one head using all 8), runs its own independent attention, and the outputs are
+concatenated back together — so the total compute is comparable to a single big head,
+but the model gets multiple specialized "perspectives" instead of one averaged one.
+
+## Try it yourself
+
+If a model has `d_model = 512` and uses `8` attention heads, what dimension does each
+individual head operate in (before the outputs are concatenated back to 512)?
+
+<details>
+<summary>Solution</summary>
+
+`512 / 8 = 64`. Each head works with 64-dimensional `Q`, `K`, `V` vectors, and the 8
+heads' 64-dim outputs are concatenated back into a single 512-dim vector — this is
+the standard split used in the original Transformer paper (`d_model = 512`,
+`h = 8`, `d_k = d_v = 64`).
+
+</details>

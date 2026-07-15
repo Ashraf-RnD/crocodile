@@ -1,0 +1,101 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Memory"
+level: expert
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "memory"
+estReadTime: 12
+resources:
+  - type: article
+    title: "MemGPT / Letta — Memory-Augmented LLM Agents"
+    url: "https://arxiv.org/abs/2310.08560"
+  - type: docs
+    title: "LangGraph — Memory Store API"
+    url: "https://langchain-ai.github.io/langgraph/concepts/memory/"
+---
+
+## Memory as an OS paging problem
+
+The framing that has proven most productive (introduced by the MemGPT paper) is to
+treat context-window management like virtual memory in an operating system: the
+context window is fast, limited "RAM," and an external store (vector DB, structured
+store) is slow, effectively unlimited "disk." The system's job is to page relevant
+information *in* to the context window when needed and evict stale information *out*
+when it isn't — and critically, to give the *model itself* tools to manage this
+paging (`save_memory`, `search_memory` as callable functions) rather than having it
+be purely an external, invisible-to-the-model process. This self-directed memory
+management is what separates modern long-context agents from simple "always retrieve
+top-k and stuff it in" pipelines.
+
+## Write-time vs. read-time memory strategies
+
+Two architecturally distinct approaches, often combined:
+
+- **Write-time (extraction-based)**: after each interaction, an explicit process
+  (often a separate, cheaper model call) extracts durable facts and writes them to
+  storage. Read is then a simple retrieval. This front-loads cost onto every
+  conversation (even ones that produce no useful memories) but keeps read-time fast
+  and predictable.
+- **Read-time (reasoning-based)**: raw conversation history is stored largely
+  unprocessed, and at read time the system (or model) reasons over the relevant raw
+  history to reconstruct what's needed. This defers cost to query time and can
+  surface nuance a rigid extraction schema would lose, at the cost of higher
+  per-query latency and cost.
+
+Production systems typically use a hybrid: cheap, structured extraction for clearly
+factual, stable information (preferences, entities, IDs), and read-time retrieval over
+raw episodic history for anything nuanced or context-dependent.
+
+## Memory staleness and conflict resolution
+
+Long-term memory introduces a problem RAG-over-static-documents mostly avoids: facts
+change, and old and new facts can directly contradict each other ("user prefers dark
+mode" written last month, "user prefers light mode" said today). Naive retrieval
+returns both with no signal about which is current. Mitigations:
+
+- Timestamp every memory and bias retrieval/ranking toward recency for
+  preference-type facts specifically (not for stable facts like "user's name").
+  Handle it explicitly — as a first-class property of the memory record, not an
+  implicit ordering.
+- Treat memory writes as *updates*, not pure appends, when a new statement clearly
+  supersedes an old one — this requires an explicit reconciliation step (often another
+  model call: "does this new fact contradict any existing memory? if so, mark the old
+  one superseded") rather than letting contradictions silently accumulate.
+- Expose provenance to the model at read time ("as of March, the user preferred X")
+  rather than presenting retrieved memories as unconditionally current truth.
+
+## Privacy, scoping, and the multi-tenant memory boundary
+
+Long-term memory that spans sessions is inherently a data-retention and privacy
+surface: it's personal data, persisted, and retrievable in ways a single stateless API
+call is not. This raises concerns absent from short-term memory:
+
+- **Tenant/user isolation must be enforced at the storage layer**, not just by
+  convention in application code — a vector store query without a hard `user_id`
+  filter is a cross-tenant data leak waiting to happen, especially once memory
+  retrieval is exposed as a tool the model itself can invoke with
+  model-influenced arguments.
+- **Right-to-deletion compliance** (GDPR/CCPA-style) requires memory stores to support
+  actual deletion of a user's records, which is nontrivial once facts have been
+  embedded, cached, or summarized into other derived memories — deletion needs to
+  cascade, not just remove the original write.
+
+## Trade-offs across memory architectures
+
+| Architecture | Recall quality | Cost | Staleness handling |
+|---|---|---|---|
+| Full history replay (no memory system) | Perfect within window, zero beyond it | Grows unbounded with conversation length | N/A — no persistence |
+| Summarization + trimming | Good, lossy compression of old detail | Moderate — periodic summarization calls | Implicit, no explicit conflict resolution |
+| Vector-retrieval long-term memory | Good for well-phrased queries, weak on exact recall | Storage + embedding + retrieval cost per turn | Requires explicit recency/versioning logic |
+| Self-directed (model calls memory tools, MemGPT-style) | Highest — model decides what's relevant | Highest — extra tool-call round trips | Model can actively query for and reconcile conflicts |
+
+## Evaluating memory systems
+
+Standard RAG evals (retrieval precision/recall) only capture half the picture. Memory
+systems specifically need eval for **temporal consistency** (does the system correctly
+prefer newer facts over contradicted older ones) and **cross-session task success**
+(does a multi-session task actually complete correctly using only what was
+persisted) — a memory system can score well on isolated retrieval quality while still
+failing the actual product goal if it never captures the right facts to persist in the
+first place.

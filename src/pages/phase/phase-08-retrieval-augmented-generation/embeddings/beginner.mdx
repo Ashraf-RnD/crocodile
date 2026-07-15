@@ -1,0 +1,84 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Embeddings"
+level: beginner
+phaseSlug: "phase-08-retrieval-augmented-generation"
+phaseName: "Retrieval-Augmented Generation"
+topicSlug: "embeddings"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "sentence-transformers — Quickstart"
+    url: "https://www.sbert.net/docs/quickstart.html"
+  - type: article
+    title: "OpenAI — Embeddings guide"
+    url: "https://platform.openai.com/docs/guides/embeddings"
+---
+
+## Turning meaning into numbers
+
+An **embedding** is a list of numbers (a vector) that represents the *meaning* of a
+piece of text. The key property: texts with similar meaning get vectors that are close
+together, and texts with different meaning get vectors that are far apart — even if
+the words themselves don't overlap at all.
+
+"How do I reset my password?" and "I forgot my login credentials" share almost no
+words, but a good embedding model places their vectors near each other, because
+that's what makes semantic search possible: you can find relevant text by meaning, not
+just by keyword matching.
+
+## Your first embedding
+
+```python
+from sentence_transformers import SentenceTransformer
+
+model = SentenceTransformer("all-MiniLM-L6-v2")
+
+sentences = [
+    "How do I reset my password?",
+    "I forgot my login credentials",
+    "What's the weather like today?",
+]
+vectors = model.encode(sentences)
+print(vectors.shape)  # (3, 384) — 3 sentences, 384 numbers each
+```
+
+Every sentence becomes a 384-dimensional vector. That number (384) is fixed by the
+model you chose — different models produce different-sized vectors.
+
+## Measuring "closeness"
+
+To compare two vectors, we use **cosine similarity** — a score from -1 to 1 (in
+practice, usually 0 to 1 for text) that measures how aligned two vectors are,
+regardless of their length:
+
+```python
+from sentence_transformers.util import cos_sim
+
+similarity = cos_sim(vectors[0], vectors[1])  # password reset vs login credentials
+print(similarity)  # tensor([[0.72]]) — high, similar meaning
+
+similarity2 = cos_sim(vectors[0], vectors[2])  # password reset vs weather
+print(similarity2)  # tensor([[0.05]]) — low, unrelated
+```
+
+This is the entire mechanism behind semantic search: embed the user's question, embed
+every candidate document, and return the documents whose vectors are closest to the
+question's vector.
+
+## Try it yourself
+
+Would the sentences `"The cat sat on the mat"` and `"A feline rested on the rug"` have
+high or low cosine similarity with a good embedding model? What about `"The cat sat on
+the mat"` and `"The cat is black"`?
+
+<details>
+<summary>Solution</summary>
+
+`"The cat sat on the mat"` and `"A feline rested on the rug"` should have **high**
+similarity — nearly identical meaning, almost no shared words, which is exactly the
+case embeddings are built to handle. `"The cat sat on the mat"` and `"The cat is
+black"` share the word "cat" and topic (cats) but describe different facts, so a good
+model gives them **moderate** similarity — related but not equivalent, correctly
+distinguishing topical overlap from semantic equivalence.
+</details>

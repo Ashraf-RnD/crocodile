@@ -1,0 +1,84 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Batch Normalization"
+level: intermediate
+phaseSlug: "phase-04-deep-learning"
+phaseName: "Deep Learning"
+topicSlug: "batch-normalization"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "PyTorch — BatchNorm2d documentation"
+    url: "https://pytorch.org/docs/stable/generated/torch.nn.BatchNorm2d.html"
+  - type: docs
+    title: "PyTorch — SyncBatchNorm"
+    url: "https://pytorch.org/docs/stable/generated/torch.nn.SyncBatchNorm.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Train mode vs. eval mode: running statistics
+
+BatchNorm behaves *differently* depending on `model.train()` vs `model.eval()`,
+which trips up more beginners in production code than almost any other layer type:
+
+- **Training**: normalizes using the *current batch's* mean/variance, and updates
+  running estimates (`running_mean`, `running_var`) via an exponential moving
+  average for later use.
+- **Eval/inference**: uses the stored `running_mean`/`running_var` instead of the
+  current batch's statistics — because at inference time you might see a batch size
+  of 1, where per-batch statistics would be meaningless or highly unstable.
+
+```python
+model.train()
+out_train = bn_layer(x)     # uses this batch's stats, updates running stats
+
+model.eval()
+with torch.no_grad():
+    out_eval = bn_layer(x)  # uses stored running stats, doesn't update them
+```
+
+Forgetting `model.eval()` before validation/inference is one of the most common
+silent bugs in PyTorch code — metrics look plausible but are subtly wrong because
+BatchNorm (and Dropout) are still behaving as if training.
+
+<Mermaid client:visible code={`flowchart TB
+  subgraph Train ["model.train()"]
+    T1["Normalize using THIS batch's mean/var"] --> T2["Update running_mean, running_var"]
+  end
+  subgraph Eval ["model.eval()"]
+    E1["Normalize using STORED running_mean/var"] --> E2["No updates to running stats"]
+  end`} />
+
+## BatchNorm and batch size sensitivity
+
+Because training-mode BatchNorm computes statistics from the current batch, very
+small batch sizes (common when GPU memory is limited, e.g. batch size 2-4 for large
+models) produce noisy, unstable mean/variance estimates — actively hurting training
+rather than helping it. This is a well-known practical failure mode: teams training
+large models with small per-GPU batches often switch to alternatives (GroupNorm,
+LayerNorm) specifically to sidestep this batch-size dependency.
+
+## Multi-GPU training: SyncBatchNorm
+
+In standard `DistributedDataParallel` training, each GPU computes BatchNorm
+statistics only from its *local* slice of the batch — effectively shrinking the
+statistical batch size by the number of GPUs. `SyncBatchNorm` synchronizes
+statistics across all GPUs before normalizing, restoring the intended "global batch"
+behavior at the cost of extra communication overhead:
+
+```python
+model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
+model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
+```
+
+This matters specifically when per-GPU batch size is already small (common in
+memory-constrained multi-GPU vision training) — without it, BatchNorm's benefit can
+degrade as GPU count increases even though total batch size grows.
+
+## Where it's placed relative to the activation
+
+Most architectures place BatchNorm *before* the activation
+(`Linear -> BatchNorm -> ReLU`), following the original paper. Some later
+architectures experiment with placing it after — evidence is mixed and
+architecture-specific, so the original ordering remains the safe default unless a
+specific architecture's published recipe says otherwise.

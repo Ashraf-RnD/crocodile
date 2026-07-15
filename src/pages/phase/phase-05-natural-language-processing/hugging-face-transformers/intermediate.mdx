@@ -1,0 +1,132 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Hugging Face Transformers"
+level: intermediate
+phaseSlug: "phase-05-natural-language-processing"
+phaseName: "Natural Language Processing"
+topicSlug: "hugging-face-transformers"
+estReadTime: 11
+resources:
+  - type: docs
+    title: "Hugging Face — Fine-tuning a pretrained model"
+    url: "https://huggingface.co/docs/transformers/training"
+  - type: docs
+    title: "Hugging Face — AutoClasses documentation"
+    url: "https://huggingface.co/docs/transformers/model_doc/auto"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Below the pipeline: model, tokenizer, and the training loop
+
+`pipeline()` is convenient but hides everything. Real projects usually work directly
+with the `AutoTokenizer` + `AutoModel` pair, which lets you control batching, device
+placement, and training:
+
+<Mermaid client:visible code={`flowchart LR
+  A[Raw text] --> B["AutoTokenizer\n(text -> input_ids + attention_mask)"]
+  B --> C["AutoModel\n(forward pass on GPU/CPU)"]
+  C --> D["Logits / hidden states"]
+  D --> E["Task head\n(classification, generation, etc.)"]`} />
+
+```python
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+import torch
+
+model_name = "distilbert-base-uncased-finetuned-sst-2-english"
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForSequenceClassification.from_pretrained(model_name)
+
+inputs = tokenizer(
+    ["Great product!", "Terrible service."],
+    padding=True, truncation=True, return_tensors="pt",
+)
+
+with torch.no_grad():
+    outputs = model(**inputs)
+
+probs = torch.softmax(outputs.logits, dim=-1)
+print(probs)
+# tensor([[0.0006, 0.9994],   -- positive
+#         [0.9988, 0.0012]])  -- negative
+```
+
+The `Auto*` classes (`AutoTokenizer`, `AutoModel`, `AutoConfig`) inspect the
+checkpoint's config and automatically load the right architecture — you rarely need
+to import a model-specific class directly, which is what makes swapping one
+checkpoint for another usually a one-line change.
+
+## Fine-tuning with the `Trainer` API
+
+Rather than hand-writing a training loop, the `Trainer` class handles gradient
+accumulation, mixed precision, logging, and checkpointing:
+
+```python
+from transformers import TrainingArguments, Trainer
+from datasets import load_dataset
+
+dataset = load_dataset("imdb")
+tokenized = dataset.map(
+    lambda x: tokenizer(x["text"], truncation=True, padding="max_length"),
+    batched=True,
+)
+
+training_args = TrainingArguments(
+    output_dir="./results",
+    per_device_train_batch_size=16,
+    num_train_epochs=3,
+    evaluation_strategy="epoch",
+    fp16=True,               # mixed precision, faster on modern GPUs
+)
+
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    train_dataset=tokenized["train"],
+    eval_dataset=tokenized["test"],
+)
+trainer.train()
+```
+
+This pairs naturally with the `datasets` library, which handles memory-mapped,
+streaming access to large datasets without loading everything into RAM at once —
+essential once your training set is larger than available memory.
+
+## Parameter-efficient fine-tuning (PEFT / LoRA)
+
+Full fine-tuning updates every weight in the model, which is expensive for large
+models. The `peft` library integrates with Transformers to fine-tune only a small set
+of additional adapter weights (LoRA) while freezing the base model:
+
+```python
+from peft import LoraConfig, get_peft_model
+
+lora_config = LoraConfig(
+    r=8, lora_alpha=16,
+    target_modules=["q_lin", "v_lin"],  # attention projection layers
+    lora_dropout=0.1,
+)
+model = get_peft_model(model, lora_config)
+model.print_trainable_parameters()
+# trainable params: 147,456 || all params: 66,955,010 || trainable%: 0.22
+```
+
+Training only ~0.2% of parameters dramatically cuts GPU memory requirements and
+storage cost per fine-tuned task, which is why LoRA-style fine-tuning has become the
+default approach for adapting large pretrained models to specific tasks rather than
+full fine-tuning.
+
+## The Hub as a shared model registry
+
+Every model, dataset, and tokenizer used above is pulled from the **Hugging Face
+Hub** — a public (or private, for organizations) registry functioning like GitHub for
+ML artifacts. Pushing your own fine-tuned model back is one call:
+
+```python
+model.push_to_hub("your-username/my-fine-tuned-model")
+tokenizer.push_to_hub("your-username/my-fine-tuned-model")
+```
+
+This shared-registry model is a big part of why the ecosystem moves fast — a new
+architecture or checkpoint published on the Hub is immediately usable by anyone via
+the same `AutoModel.from_pretrained(...)` call, without needing custom loading code
+per model.

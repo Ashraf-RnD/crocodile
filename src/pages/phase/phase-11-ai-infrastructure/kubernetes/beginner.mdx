@@ -1,0 +1,89 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Kubernetes"
+level: beginner
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "kubernetes"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "Kubernetes Docs — Deployments"
+    url: "https://kubernetes.io/docs/concepts/workloads/controllers/deployment/"
+---
+
+## A manager for your containers
+
+You've packaged your model-serving app into a Docker container. Now you need to run
+several copies of it reliably, in production, without babysitting them manually — if
+one crashes, something should restart it; if traffic grows, something should add more
+copies. That "something" is **Kubernetes**: a system that runs your containers across
+a cluster of machines, restarts ones that die, and scales the number of running copies
+up or down.
+
+Think of it like a restaurant manager who doesn't cook, but makes sure enough cooks
+are on shift, replaces one who walks off the line, and calls in extra help on a busy
+night — without you having to phone each cook individually.
+
+## The basic building blocks
+
+A **Pod** is the smallest unit Kubernetes runs — usually one container (your app) plus
+its configuration. You almost never create a Pod directly, though; you create a
+**Deployment**, which tells Kubernetes "keep N copies of this Pod running at all
+times," and Kubernetes handles the restarting and scheduling for you.
+
+```yaml
+# deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-inference-app
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: my-inference-app
+  template:
+    metadata:
+      labels:
+        app: my-inference-app
+    spec:
+      containers:
+        - name: inference
+          image: my-inference-image:latest
+          ports:
+            - containerPort: 8000
+```
+
+```bash
+kubectl apply -f deployment.yaml
+kubectl get pods                 # see the 3 running copies
+kubectl delete pod <pod-name>    # kill one on purpose — watch Kubernetes replace it
+```
+
+That last command is worth actually trying: delete a Pod and Kubernetes creates a
+fresh replacement within seconds, because the Deployment's job is to keep the actual
+count matching the desired count of 3, always.
+
+## Why this matters for ML serving
+
+Model-serving containers are exactly the kind of workload that benefits most from
+this: they crash occasionally (OOM on a bad request), need to scale with traffic, and
+often run identically across many replicas. Kubernetes turns "keep 3 copies of my
+model server alive and healthy" from a manual, error-prone chore into a declarative
+one-time description of what you want.
+
+## Try it yourself
+
+You set `replicas: 3` in a Deployment and one Pod crashes due to an out-of-memory
+error. Without you doing anything, what does Kubernetes do, and how many Pods will be
+running a few seconds later?
+
+<details>
+<summary>Solution</summary>
+
+Kubernetes' Deployment controller continuously compares the desired replica count (3)
+against the actual running count. When one Pod crashes, the actual count drops to 2,
+so the controller schedules a new Pod to bring it back to 3 — no manual restart
+needed. This self-healing behavior is one of Kubernetes' core value propositions.
+</details>

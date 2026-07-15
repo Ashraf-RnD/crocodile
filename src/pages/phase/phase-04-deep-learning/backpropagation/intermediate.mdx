@@ -1,0 +1,92 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Backpropagation"
+level: intermediate
+phaseSlug: "phase-04-deep-learning"
+phaseName: "Deep Learning"
+topicSlug: "backpropagation"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "CS231n — Backpropagation notes"
+    url: "https://cs231n.github.io/optimization-2/"
+  - type: docs
+    title: "PyTorch — nn.Module and training loops"
+    url: "https://pytorch.org/tutorials/beginner/basics/buildmodel_tutorial.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The chain rule, layer by layer
+
+For a network with layers `L1 -> L2 -> L3 -> loss`, backpropagation computes the
+gradient of the loss with respect to each layer's parameters by multiplying local
+derivatives along the path back from the loss:
+
+```
+dLoss/dW1 = dLoss/dL3 * dL3/dL2 * dL2/dL1 * dL1/dW1
+```
+
+Each layer only needs to know its own local derivative (how its output changes with
+its input, and with its own weights) — it doesn't need to understand the rest of the
+network. This locality is exactly what makes backprop composable: you can stack
+arbitrary layers and the same algorithm works unchanged.
+
+<Mermaid client:visible code={`flowchart RL
+  Loss --> L3["Layer 3: dLoss/dL3"]
+  L3 --> L2["Layer 2: dL3/dL2"]
+  L2 --> L1["Layer 1: dL2/dL1"]
+  L1 --> W1["dLoss/dW1 = product of the chain"]`} />
+
+## A full training step in production code
+
+```python
+import torch.nn as nn
+
+model = nn.Sequential(
+    nn.Linear(784, 256),
+    nn.ReLU(),
+    nn.Linear(256, 10),
+)
+criterion = nn.CrossEntropyLoss()
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+
+for images, labels in dataloader:
+    optimizer.zero_grad()
+    logits = model(images)              # forward pass
+    loss = criterion(logits, labels)    # how wrong were we?
+    loss.backward()                     # backprop: computes grads for every weight
+    optimizer.step()                    # apply the update
+```
+
+Every `nn.Module` you use (`Linear`, `Conv2d`, `ReLU`, ...) has both a forward
+computation and a corresponding backward rule already registered with autograd —
+that's why writing `loss.backward()` is enough to backpropagate through an entire
+deep network in one line.
+
+## Vanishing and exploding gradients, intuitively
+
+Because the chain rule *multiplies* derivatives layer by layer, a deep network's
+early-layer gradients are a product of many terms. If those terms are consistently
+less than 1 (common with saturating activations like sigmoid/tanh), the product
+shrinks toward zero as it travels backward — **vanishing gradients** — and early
+layers barely update. If terms are consistently greater than 1, the product explodes.
+
+This is why ReLU (derivative is exactly 1 for positive inputs, not a shrinking
+fraction) largely replaced sigmoid/tanh in hidden layers, and why architectural
+tricks like residual connections and batch normalization exist — both are, in part,
+direct responses to keeping gradients well-behaved as they backpropagate through
+many layers.
+
+## Debugging with gradient inspection
+
+A useful diagnostic in real training code is checking gradient norms per layer:
+
+```python
+for name, param in model.named_parameters():
+    if param.grad is not None:
+        print(name, param.grad.norm().item())
+```
+
+Gradients near zero in early layers, or exploding to very large values anywhere,
+are the first thing experienced practitioners check when a network isn't learning —
+long before assuming the architecture or data is wrong.

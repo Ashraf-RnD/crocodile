@@ -1,0 +1,104 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Chunking"
+level: expert
+phaseSlug: "phase-08-retrieval-augmented-generation"
+phaseName: "Retrieval-Augmented Generation"
+topicSlug: "chunking"
+estReadTime: 12
+resources:
+  - type: article
+    title: "Anthropic — Contextual Retrieval"
+    url: "https://www.anthropic.com/news/contextual-retrieval"
+  - type: article
+    title: "Chroma Research — Evaluating Chunking Strategies for Retrieval"
+    url: "https://research.trychroma.com/evaluating-chunking"
+---
+
+## Chunking as an information-loss problem
+
+Every chunking strategy is a lossy compression decision: you're deciding what context
+to keep next to what text, and what context to discard. The core failure mode is that
+a chunk, read in isolation, often loses the referent it needs to be retrievable or
+useful — "the policy took effect in that year" means nothing without knowing which
+policy and which year, even if the sentence was perfectly clear inside its original
+paragraph. Chunk size and boundary choice are really proxies for a harder question:
+*how much disambiguating context does this piece of text need to carry on its own?*
+
+## Contextual chunking: fixing the isolation problem directly
+
+Rather than hoping overlap or larger chunks preserve enough context, **contextual
+retrieval** (popularized by Anthropic) prepends a short LLM-generated summary of each
+chunk's place in the document before embedding it:
+
+```python
+def contextualize_chunk(llm, full_document, chunk):
+    prompt = f"""<document>{full_document}</document>
+Here is a chunk from this document:
+<chunk>{chunk}</chunk>
+Give a short, succinct context (1-2 sentences) to situate this chunk within the
+overall document, for the purpose of improving search retrieval. Answer only with
+the context."""
+    context = llm.invoke(prompt).content
+    return f"{context}\n\n{chunk}"
+
+# "This chunk is from the Q3 2023 SEC filing for Acme Corp, discussing revenue growth
+#  in the enterprise segment.\n\n[original chunk text]"
+```
+
+This adds an LLM call per chunk at ingestion time (expensive, but a one-time,
+offline cost, and cacheable with prompt caching against the shared full-document
+context) in exchange for a substantial gain in retrieval accuracy — Anthropic reported
+roughly a 35% reduction in failed retrievals when combined with BM25 hybrid search,
+and closer to 49% when combined with reranking too. The trade-off is squarely
+ingestion-time compute cost against query-time retrieval quality.
+
+## Chunk size is a bias-variance trade-off, not a single "right" number
+
+| Chunk size | Retrieval precision | Context sufficiency | Failure mode |
+|---|---|---|---|
+| Very small (~50-100 tokens) | High — narrow, focused embeddings match queries precisely | Low — LLM often lacks context to answer fully | "Needle" retrieved but answer is incomplete or wrong without neighbors |
+| Medium (~300-500 tokens) | Balanced | Balanced | Reasonable default; still splits mid-idea sometimes |
+| Large (~1000+ tokens) | Low — embedding is an average over multiple topics, dilutes similarity to any single query | High — LLM has ample context | Relevant chunk buried under irrelevant text, may get dropped by reranker's top-k cutoff |
+| Whole-document | Very low — embedding barely distinguishes intent | Maximum | Effectively defeats the purpose of retrieval; you're back to long-context stuffing |
+
+The practical resolution most production systems converge on is **decoupling
+retrieval granularity from generation granularity**: embed and index small, precise
+chunks (child chunks), but when a child chunk is retrieved, pass its parent section or
+neighboring chunks to the LLM. LlamaIndex's `AutoMergingRetriever` and the
+"parent-document retriever" pattern in LangChain implement exactly this — search
+against leaves, generate with the branch.
+
+## Structural vs. semantic vs. agentic chunking, and when each earns its cost
+
+- **Structural** (Markdown headers, HTML DOM, code AST) is nearly free at ingestion
+  time and highly reliable *when the document format is trustworthy* — but breaks down
+  on scanned PDFs, inconsistent Word exports, or auto-generated HTML with no
+  meaningful structure.
+- **Semantic** (embedding-similarity breakpoints) recovers meaningful boundaries in
+  unstructured prose but costs an embedding call per sentence at ingestion and is
+  sensitive to the breakpoint threshold — too aggressive and you fragment excessively,
+  too lax and you're back to large undifferentiated chunks.
+- **Agentic/LLM-driven chunking** (asking an LLM to propose chunk boundaries directly,
+  or to extract self-contained propositions) gives the highest-quality boundaries but
+  is the most expensive per document and introduces LLM-specific failure modes (an LLM
+  can hallucinate boundaries or silently drop content) that require validation against
+  the source text.
+
+The right choice per corpus is rarely "use the fanciest technique everywhere" — most
+production systems mix strategies: structural splitting for well-formatted docs (API
+references, internal wikis), a fallback semantic or recursive splitter for messy
+inputs, and contextual chunking layered on top of whichever splitter is used, since it
+addresses a different failure mode (isolation) than any splitter alone.
+
+## Chunk boundaries interact with your reranker and eval loop, not just your retriever
+
+Changing chunk size silently changes the recall@k your reranker sees, because smaller
+chunks mean more total chunks compete for the same top-k slots — a corpus that used to
+produce 3 relevant chunks in the top 10 might now produce 8 near-duplicate fragments
+of the same 3 answers, crowding out other relevant content. This is why chunking
+strategy should be evaluated end-to-end (retrieval recall *and* final answer
+correctness on a held-out QA set), not chosen in isolation and assumed to be a solved,
+independent step of the pipeline — a chunking change that looks like an improvement in
+raw embedding similarity scores can still regress final answer quality if it
+interacts badly with your top-k and reranking configuration.

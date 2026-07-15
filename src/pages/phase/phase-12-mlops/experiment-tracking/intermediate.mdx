@@ -1,0 +1,110 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Experiment Tracking"
+level: intermediate
+phaseSlug: "phase-12-mlops"
+phaseName: "MLOps"
+topicSlug: "experiment-tracking"
+estReadTime: 9
+resources:
+  - type: article
+    title: "ML Experiment Tracking: What It Is, Why It Matters"
+    url: "https://neptune.ai/blog/ml-experiment-tracking"
+  - type: docs
+    title: "W&B — Organizing Experiments with Tags and Groups"
+    url: "https://docs.wandb.ai/guides/runs/tags/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## What to track beyond the obvious
+
+Params and metrics are table stakes. Production teams also track dimensions
+that make runs reproducible and comparable months later:
+
+- **Code version**: the exact git commit that produced the run
+- **Data version**: a hash/URI pointing at the exact dataset used (from DVC,
+  a feature store snapshot, or a dataset artifact)
+- **Environment**: library versions, hardware (GPU type), container image digest
+- **Random seeds**: for genuine reproducibility of stochastic training
+
+```python
+import mlflow, subprocess
+
+with mlflow.start_run():
+    mlflow.log_param("git_commit", subprocess.check_output(
+        ["git", "rev-parse", "HEAD"]).decode().strip())
+    mlflow.log_param("data_version", "dvc:8d7e9f3a")
+    mlflow.log_param("seed", 42)
+    mlflow.log_param("cuda_version", torch.version.cuda)
+    # ... training ...
+```
+
+Without code+data version tracking, "reproduce this run" is often impossible
+even with all the hyperparameters logged — the same hyperparameters against a
+different data snapshot or a since-changed preprocessing function produce a
+different model.
+
+## Organizing runs at scale: experiments, tags, and groups
+
+A single flat list of hundreds of runs becomes unusable quickly. Both MLflow
+and W&B support hierarchical organization:
+
+```python
+# MLflow: separate experiments per project/model
+mlflow.set_experiment("fraud-detection/xgboost-tuning")
+
+# W&B: tags and groups for cross-cutting organization
+wandb.init(
+    project="fraud-detection",
+    group="xgboost-hyperparameter-sweep-2024-06",
+    tags=["candidate", "prod-data-v3"],
+    job_type="train",
+)
+```
+
+`group` lets you fold many individual sweep trials into one collapsible unit
+in the UI; `tags` let you filter across groups (e.g. "show me every run
+trained against `prod-data-v3` regardless of which sweep it came from").
+
+<Mermaid client:visible code={`flowchart TB
+  P["Project: fraud-detection"] --> E1["Experiment: xgboost-tuning"]
+  P --> E2["Experiment: neural-net-baseline"]
+  E1 --> R1["Run: trial-1 (tag: prod-data-v3)"]
+  E1 --> R2["Run: trial-2 (tag: prod-data-v3)"]
+  E1 --> R3["Run: trial-3 (tag: prod-data-v4)"]`} />
+
+## Comparing runs to make a decision, not just recording them
+
+Tracking becomes useful only when it drives a decision. A common production
+pattern is an automated comparison gate in a retraining pipeline:
+
+```python
+import mlflow
+
+client = mlflow.MlflowClient()
+current_prod = client.get_model_version_by_alias("fraud-detector", "production")
+prod_metrics = client.get_run(current_prod.run_id).data.metrics
+
+new_run = mlflow.active_run()
+new_metrics = mlflow.get_run(new_run.info.run_id).data.metrics
+
+if new_metrics["f1_score"] > prod_metrics["f1_score"] + 0.01:
+    print("Candidate beats production by a meaningful margin — promote")
+else:
+    print("Candidate does not clear the promotion bar — keep current model")
+```
+
+This "champion vs. challenger" comparison, backed by tracked metrics rather
+than a manual eyeball check, is the backbone of most automated retraining
+pipelines — the tracking system isn't just a record, it's the input to a
+promotion decision.
+
+## Team conventions matter more than the tool
+
+The most common experiment-tracking failure isn't choosing the wrong tool —
+it's inconsistent logging across a team. If half the team logs `lr` and the
+other half logs `learning_rate`, cross-run comparison breaks silently.
+Production teams typically enforce a shared training harness (a base
+`Trainer` class or a config schema) that standardizes exactly which
+params/metrics get logged and under what names, so tracking discipline isn't
+left to individual habit.

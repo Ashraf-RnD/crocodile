@@ -1,0 +1,75 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "LLaMA"
+level: beginner
+phaseSlug: "phase-14-research-literacy"
+phaseName: "Research Literacy"
+topicSlug: "llama"
+estReadTime: 7
+resources:
+  - type: article
+    title: "LLaMA: Open and Efficient Foundation Language Models"
+    url: "https://arxiv.org/abs/2302.13971"
+  - type: article
+    title: "Training Compute-Optimal Large Language Models (Chinchilla)"
+    url: "https://arxiv.org/abs/2203.15556"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The problem before this paper
+
+By early 2023, the most capable language models — GPT-3, PaLM, Chinchilla — were
+closed. You couldn't download their weights, inspect them, or run them on your
+own hardware; you could only call them through a paid API. That put a hard
+ceiling on what researchers and smaller companies could study or build. There was
+also a subtler problem: those huge models (100B+ parameters) were optimized
+mainly for training efficiency, not for the cost of actually *using* them
+afterward — and a model gets used far more times than it gets trained.
+
+## The core idea, in plain language
+
+Meta's LLaMA team asked a different question than "how do we get the best model
+for a fixed training budget?" (the question Chinchilla had just answered). They
+asked: "if we know a model will be run millions of times after training, what's
+the best model for a fixed *inference* budget?" The answer: train a smaller model
+for much longer than the "compute-optimal" point, on far more data than similarly
+sized models had ever seen — because a smaller model that's cheaper to run every
+single day is worth more in practice than a larger model that's marginally
+better but far more expensive to serve.
+
+A useful analogy: imagine two ways to get a great cook. You could hire a
+world-class chef who costs a fortune per hour to keep on staff (a huge model,
+expensive at inference), or you could take a talented apprentice and have them
+practice the same dishes for years until they're excellent — cheaper to keep
+around and nearly as good (a smaller model trained on far more data than usual).
+LLaMA showed the "apprentice" approach could match or beat much larger models,
+and — critically — Meta released the resulting weights for researchers to use.
+
+<Mermaid client:visible code={`flowchart LR
+  A["Closed, huge models (GPT-3-era)"] --> B["Best accuracy per training FLOP"]
+  C["LLaMA: smaller model, way more training tokens"] --> D["Best accuracy per inference cost, openly released"]`} />
+
+## Why it mattered
+
+LLaMA's 13B-parameter model reportedly outperformed GPT-3's 175B-parameter model
+on most benchmarks, despite being over 10x smaller — a striking demonstration
+that training data volume mattered more than raw parameter count once you
+account for inference cost. And because the weights were released (initially to
+researchers, then more broadly with LLaMA 2), LLaMA became the foundation an
+entire ecosystem of open fine-tunes, research, and self-hosted deployments was
+built on top of — something a closed API model could never enable.
+
+## Try it yourself
+
+Can you explain the core idea of this paper in one sentence to a non-technical
+friend?
+
+<details>
+<summary>Solution</summary>
+
+Something like: "Instead of building the biggest possible model, this project
+trained a smaller model for much longer on much more data — making it cheaper to
+run afterward while still matching or beating far bigger models — and then gave
+away the resulting model for anyone to use and build on."
+
+</details>

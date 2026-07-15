@@ -1,0 +1,134 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Logistic Regression"
+level: intermediate
+phaseSlug: "phase-03-machine-learning"
+phaseName: "Machine Learning"
+topicSlug: "logistic-regression"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "scikit-learn: LogisticRegression API reference"
+    url: "https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.LogisticRegression.html"
+  - type: docs
+    title: "scikit-learn: Pipeline and composite estimators"
+    url: "https://scikit-learn.org/stable/modules/compose.html"
+---
+
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Intermediate: Logistic Regression
+
+Logistic regression learns a **linear decision boundary**: in 2D feature space it's a straight
+line, in higher dimensions a hyperplane. Everything on one side gets pushed toward class 1,
+everything on the other toward class 0. The sigmoid doesn't bend that boundary — it just converts
+the signed distance from it into a probability. If your classes truly aren't separable by a
+straight line, no amount of tuning will fix that; you need engineered features (interactions,
+polynomial terms) or a different model.
+
+<Mermaid client:visible code={`flowchart LR
+  A[Raw features] --> B[StandardScaler]
+  B --> C[LogisticRegression]
+  C --> D[Linear score z = wx + b]
+  D --> E[Sigmoid]
+  E --> F[Probability 0-1]
+  F --> G[Threshold]
+  G --> H[Class label]`} />
+
+## Regularization with C
+
+scikit-learn's `LogisticRegression` regularizes by default. The `C` parameter is the **inverse**
+of regularization strength: small `C` means stronger regularization (simpler, more conservative
+coefficients, less overfitting); large `C` lets the model fit the training data more closely.
+
+```python
+from sklearn.linear_model import LogisticRegression
+
+# strong regularization: shrinks coefficients aggressively, good when
+# features are noisy or you have few samples relative to feature count
+conservative = LogisticRegression(C=0.1)
+
+# weak regularization: trusts the training data more
+flexible = LogisticRegression(C=10.0)
+```
+
+`penalty` controls the type of regularization (`'l2'` by default, `'l1'` for sparse/feature
+selection, `'elasticnet'` for a mix) — but not every solver supports every penalty, so check
+compatibility (`saga` supports all of them).
+
+## Imbalanced classes
+
+If 99% of your data is class 0, the default decision threshold and equal class weighting will
+bias the model toward predicting the majority class. `class_weight='balanced'` reweights the
+loss inversely proportional to class frequency, so mistakes on the minority class cost more
+during training:
+
+```python
+model = LogisticRegression(class_weight="balanced")
+```
+
+This changes what the model optimizes for, not the raw probabilities' calibration — it's still
+worth tuning your decision threshold separately (see below).
+
+## Multi-class: one-vs-rest vs. softmax
+
+For more than two classes, `LogisticRegression` supports two strategies:
+
+- **One-vs-rest (OvR)**: trains one binary classifier per class ("is it class A or not?") and
+  picks the highest-scoring one.
+- **Multinomial (softmax)**: trains a single model that directly optimizes a joint probability
+  distribution over all classes — generally better calibrated when classes are mutually
+  exclusive.
+
+```python
+model = LogisticRegression(multi_class="multinomial", solver="lbfgs")
+```
+
+Modern scikit-learn versions pick multinomial by default for solvers that support it, so this is
+often automatic — but it's worth being explicit in production code.
+
+## A realistic worked example
+
+Unscaled features slow down (or prevent) convergence for gradient-based solvers, because the
+loss surface becomes elongated and hard to navigate. Always scale features, and wrap the
+pipeline so scaling parameters are learned only on training data:
+
+```python
+from sklearn.datasets import load_breast_cancer
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import classification_report
+
+X, y = load_breast_cancer(return_X_y=True)
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, stratify=y, random_state=42
+)
+
+pipe = Pipeline([
+    ("scaler", StandardScaler()),
+    ("clf", LogisticRegression(C=1.0, class_weight="balanced", max_iter=1000)),
+])
+
+pipe.fit(X_train, y_train)
+
+probs = pipe.predict_proba(X_test)[:, 1]
+preds = pipe.predict(X_test)
+
+print(classification_report(y_test, preds))
+```
+
+## Pitfall: 0.5 isn't always the right threshold
+
+`predict()` applies a 0.5 cutoff to `predict_proba()` internally. For business decisions — fraud
+review, medical screening, churn intervention — the cost of a false positive rarely equals the
+cost of a false negative. Work directly with `predict_proba` and pick a threshold that matches
+your cost trade-off:
+
+```python
+probs = pipe.predict_proba(X_test)[:, 1]
+custom_preds = (probs >= 0.3).astype(int)  # more sensitive to catching positives
+```
+
+Tune this threshold against a validation set using precision-recall curves rather than guessing.

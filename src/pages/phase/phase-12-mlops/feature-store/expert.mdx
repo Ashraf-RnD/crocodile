@@ -1,0 +1,112 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Feature Store"
+level: expert
+phaseSlug: "phase-12-mlops"
+phaseName: "MLOps"
+topicSlug: "feature-store"
+estReadTime: 12
+resources:
+  - type: article
+    title: "Feature Stores for ML — A Comprehensive Guide (Chip Huyen)"
+    url: "https://huyenchip.com/2020/12/27/real-time-machine-learning.html"
+  - type: docs
+    title: "Tecton — Feature Freshness and Latency Trade-offs"
+    url: "https://www.tecton.ai/blog/what-is-a-feature-store/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The freshness/latency/cost triangle
+
+Every online feature has a real trade-off between how fresh it is, how fast
+it can be served, and how much it costs to keep updated:
+
+- **Precomputed batch features**: cheap to serve (a key-value lookup), but
+  only as fresh as the last materialization job — a feature like "purchase
+  count in the last hour" computed nightly is nearly a day stale by the time
+  it matters for fraud detection.
+- **Streaming-updated features**: fresher (seconds to minutes), but requires
+  running and operating a streaming pipeline (Flink/Kafka Streams) per
+  feature group, which is real infrastructure cost and operational burden
+  beyond what most teams need for slow-moving features.
+- **On-demand/synchronous features**: computed at request time directly from
+  raw data (e.g. calling an external API for real-time exchange rate) —
+  freshest possible, but adds request latency and a new failure mode
+  (if the on-demand computation fails or times out, does inference fail too?).
+
+Production feature stores let you mix all three per feature group, and the
+real engineering skill is correctly classifying which category each feature
+actually needs — over-engineering a slow-moving feature into a streaming
+pipeline wastes infrastructure spend, while under-provisioning a
+fraud-relevant feature to nightly batch defeats the model's purpose.
+
+<Mermaid client:visible code={`flowchart TB
+  A["Feature: demographic data"] -->|freshness: days OK| B["Batch, nightly materialization"]
+  C["Feature: transaction velocity"] -->|freshness: minutes needed| D["Streaming pipeline"]
+  E["Feature: live currency rate"] -->|freshness: seconds needed| F["On-demand, synchronous API call"]
+  F -.risk.-> G["Added request latency + new failure mode"]`} />
+
+## Online/offline store consistency is an operational guarantee, not a given
+
+The core promise of a feature store — training and serving see the same
+feature values — only holds if the online and offline stores actually stay
+in sync. In practice this breaks down when:
+
+- **Materialization lag**: if the online store hasn't been refreshed since
+  the last upstream data change, live requests get stale values while a
+  concurrent training job pulling from the (more current) offline store gets
+  different ones — the two stores briefly disagree, and predictions served
+  during that window are effectively using features the model wasn't
+  actually trained on.
+- **Backfill correctness**: reprocessing historical data (a bug fix in a
+  feature's transformation logic) must be backfilled into both the offline
+  store (for future training data) and, carefully, not corrupt currently
+  serving online values — getting this backfill sequencing wrong is a
+  frequent source of production feature store incidents.
+
+Teams operating feature stores at scale treat online/offline staleness as a
+monitored SLA (e.g. "online store lag must stay under 5 minutes"), not an
+assumed property of the system.
+
+## Entity key design determines join performance forever
+
+The entity keys chosen when a feature view is defined (e.g. `user_id` vs.
+`user_id + merchant_id`) fix the granularity at which that feature can ever
+be joined or served. Changing entity key granularity later isn't a config
+change — it's redefining and re-backfilling the feature view from scratch,
+because the online store's key-value layout is built around the original
+entity. Teams that under-design entity keys early (e.g. modeling only
+`user_id` when they'll eventually need `user_id + device_id` for a
+device-level fraud signal) pay for that decision with a costly migration
+later — entity schema design deserves the same upfront rigor as a database
+schema, because it has similar migration costs.
+
+## When a feature store is the wrong tool
+
+Feature stores solve a real problem, but they're not free — running Feast or
+Tecton-scale infrastructure is a genuine operational commitment (an online
+store like DynamoDB/Redis, a batch materialization pipeline, and a metadata
+service to maintain). For a small team with one or two models and features
+that are cheaply recomputed at request time from a fast primary database,
+introducing a feature store can be premature infrastructure investment —
+the training-serving skew problem it solves is real, but a simpler mitigation
+(a shared feature-computation library imported by both training and serving
+code, with strong test coverage asserting they produce identical output) can
+close the gap at much lower operational cost for teams below a certain scale
+of feature/model count.
+
+## Trade-offs across feature store approaches
+
+| Concern | Feast (open source) | Tecton (managed) | Shared library (no feature store) |
+|---|---|---|---|
+| Setup/ops cost | Moderate — self-hosted stores | Low — managed | Lowest — no new infra |
+| Point-in-time correctness | Built-in | Built-in | Manual, error-prone |
+| Streaming feature support | Requires separate integration | Native | Manual |
+| Feature reuse/discovery | Registry included | Registry + governance UI | None — ad hoc |
+| Best fit | Teams wanting control, avoiding vendor lock-in | Teams prioritizing time-to-value | Small teams, few models, low feature reuse need |
+
+The decision to adopt a feature store should track the actual cost of
+training-serving skew incidents an org has experienced (or the number of
+models sharing features) — not tool popularity. Below a certain scale, the
+operational overhead of running a feature store exceeds the cost of the
+problem it solves.

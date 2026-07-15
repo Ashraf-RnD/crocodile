@@ -1,0 +1,78 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Context Management"
+level: beginner
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "context-management"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "OpenAI — Context Window Documentation"
+    url: "https://platform.openai.com/docs/models"
+  - type: article
+    title: "Anthropic — Context Windows"
+    url: "https://docs.anthropic.com/en/docs/build-with-claude/context-windows"
+---
+
+## Think of it as a whiteboard with limited space
+
+A model's **context window** is like a whiteboard of fixed size: everything it needs
+to "see" to answer — the conversation so far, any documents, your instructions — has
+to fit on that board at once. Write too much and you either run out of room (an
+error) or the model starts losing track of things written early on because there's
+just so much to take in.
+
+### Context windows are measured in tokens, not characters
+
+A token is roughly ¾ of a word in English. `gpt-4o-mini` has a 128,000-token context
+window; that's roughly 300 pages of text — generous, but not infinite, and every
+message, tool schema, and system prompt counts against it.
+
+```python
+import tiktoken
+
+enc = tiktoken.encoding_for_model("gpt-4o-mini")
+text = "Context management means paying attention to what's in the prompt."
+print(len(enc.encode(text)))  # count tokens before you send the request
+```
+
+### What happens when you go over the limit
+
+```python
+from openai import OpenAI
+client = OpenAI()
+
+huge_document = "word " * 200_000  # way more tokens than fit
+
+try:
+    client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": huge_document}],
+    )
+except Exception as e:
+    print(e)  # a context_length_exceeded error
+```
+
+The fix isn't "use a bigger model" by default — it's deciding what actually needs to
+be in the prompt. A 50-page PDF probably doesn't need to be sent in full if the user
+only asked about one paragraph.
+
+### Try it yourself
+
+You're building a chatbot. After 40 turns, the conversation history is getting long
+and you're worried about hitting the context limit. Name two different strategies you
+could use to keep the conversation working without just deleting everything.
+
+<details>
+<summary>Solution</summary>
+
+1. **Trim** — keep only the most recent N turns, dropping the oldest ones.
+2. **Summarize** — periodically compress older turns into a short summary and keep
+   that summary plus the recent turns, instead of the full raw history.
+
+Both are covered in depth in the intermediate lesson — the short version: trimming is
+simpler but loses information outright, summarizing costs an extra model call but
+preserves the gist of what was dropped.
+
+</details>

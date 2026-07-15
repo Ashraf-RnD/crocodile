@@ -1,0 +1,94 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "QLoRA"
+level: intermediate
+phaseSlug: "phase-14-research-literacy"
+phaseName: "Research Literacy"
+topicSlug: "qlora"
+estReadTime: 10
+resources:
+  - type: article
+    title: "QLoRA: Efficient Finetuning of Quantized LLMs (original paper)"
+    url: "https://arxiv.org/abs/2305.14314"
+  - type: docs
+    title: "bitsandbytes documentation"
+    url: "https://huggingface.co/docs/bitsandbytes/main/en/index"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+_This lesson covers QLoRA's technical mechanism. For a hands-on fine-tuning
+walkthrough, see Phase 10: Fine-tuning._
+
+## Three components, stacked together
+
+QLoRA is best understood as three separate techniques combined, each solving a
+distinct part of the memory problem:
+
+### 1. 4-bit NormalFloat (NF4) quantization
+
+Rather than a generic 4-bit integer format, QLoRA introduces **NF4**, a data
+type specifically designed for weights that are approximately normally
+distributed (which pretrained neural network weights typically are). NF4
+places its quantization levels so that each level is used with roughly equal
+frequency, minimizing information loss compared to a uniform-spacing 4-bit
+scheme for this specific weight distribution.
+
+### 2. Double quantization
+
+Quantization requires storing a scaling constant per block of weights so
+values can be reconstructed. QLoRA additionally quantizes *those scaling
+constants themselves* (using 8-bit floats), squeezing out further memory —
+roughly an extra 0.5 bits per parameter on average, which matters at
+tens-of-billions-of-parameters scale.
+
+### 3. Paged optimizers
+
+Training can still hit occasional GPU memory spikes (e.g. from long sequences).
+QLoRA uses NVIDIA's unified memory to automatically page optimizer state
+between GPU and CPU memory when needed, preventing out-of-memory crashes
+without manually engineering around worst-case memory usage.
+
+<Mermaid client:visible code={`flowchart TB
+  W["Pretrained weights"] --> Q["Quantize to 4-bit NF4"]
+  Q --> DQ["Double-quantize the scaling constants"]
+  DQ --> Frozen["Frozen 4-bit base model in GPU memory"]
+  Frozen --> FWD["Forward pass: dequantize on-the-fly to bf16"]
+  FWD --> Compute["Compute with LoRA adapters (trained in bf16)"]
+  Compute --> Grad["Gradients flow only into LoRA A/B matrices"]`} />
+
+## Compute happens in higher precision, storage doesn't
+
+A critical detail: the 4-bit weights are **dequantized back to bf16 on the fly**
+for the actual matrix multiplication in each forward/backward pass, then
+discarded — the model is never computed on directly in 4-bit. This means QLoRA
+saves *memory* (what's resident in GPU RAM) without meaningfully changing the
+*numerical precision* of the actual computation, which is why quality stays
+close to full-precision fine-tuning despite the aggressive storage compression.
+
+```python
+from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+from peft import LoraConfig, get_peft_model
+import torch
+
+bnb_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_quant_type="nf4",
+    bnb_4bit_use_double_quant=True,
+    bnb_4bit_compute_dtype=torch.bfloat16,   # dequantize to bf16 for compute
+)
+
+model = AutoModelForCausalLM.from_pretrained(
+    "meta-llama/Llama-2-65b-hf", quantization_config=bnb_config
+)
+
+lora_config = LoraConfig(r=8, lora_alpha=16, target_modules=["q_proj", "v_proj"])
+model = get_peft_model(model, lora_config)  # only LoRA params are trainable
+```
+
+## Memory footprint, roughly
+
+For a 65B-parameter model: full 16-bit weights alone need ~130GB; QLoRA's 4-bit
+weights need roughly ~33-35GB, plus a small amount for LoRA adapter parameters,
+gradients, and optimizer state (which only scale with the tiny trainable
+parameter count, not the full model) — the combination is what fits the whole
+setup on a single 48GB GPU.

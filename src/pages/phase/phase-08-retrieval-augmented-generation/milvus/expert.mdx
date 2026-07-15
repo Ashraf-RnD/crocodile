@@ -1,0 +1,101 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Milvus"
+level: expert
+phaseSlug: "phase-08-retrieval-augmented-generation"
+phaseName: "Retrieval-Augmented Generation"
+topicSlug: "milvus"
+estReadTime: 13
+resources:
+  - type: article
+    title: "Milvus — Architecture overview"
+    url: "https://milvus.io/docs/architecture_overview.md"
+  - type: docs
+    title: "Milvus — Disk-based index (DiskANN)"
+    url: "https://milvus.io/docs/disk_index.md"
+---
+
+## Disaggregated storage/compute as the core scaling bet
+
+Milvus's defining architectural choice is separating four concerns into independently
+scalable components: a stateless **proxy** layer (query routing, request validation),
+**query nodes** (serve reads, hold hot data in memory/local cache), **data nodes**
+(handle writes, flush to durable storage), and **object storage** (S3/MinIO — durable,
+cheap, but higher-latency source of truth), coordinated via etcd for metadata and
+Pulsar/Kafka for the write-ahead log. This is a fundamentally different bet than
+single-process embedded vector stores: it trades operational complexity (multiple
+services, a message queue, object storage, coordination service — real infrastructure
+to run and monitor) for the ability to scale query throughput, write throughput, and
+storage capacity independently, which matters once a single machine's RAM can no
+longer hold the working set of hot vectors.
+
+## Index type selection is a first-class production decision
+
+Milvus supports multiple ANN index types with materially different trade-off profiles,
+and the right choice depends on corpus size, memory budget, and recall requirements:
+
+| Index type | Memory footprint | Build time | Query speed | Best for |
+|---|---|---|---|---|
+| FLAT | Full — no compression | None (exact) | Slow (exact scan) | Small corpora (under 100k) where exact recall matters more than speed |
+| IVF_FLAT | Full vectors, clustered | Moderate | Fast | Medium corpora, decent recall/speed balance |
+| IVF_SQ8 | ~4x smaller (scalar quantized) | Moderate | Fast | Memory-constrained deployments accepting minor recall loss |
+| HNSW | Full vectors + graph overhead | Slower to build | Fastest for high recall | Latency-sensitive queries, moderate-to-large corpora with sufficient RAM |
+| DiskANN | Mostly on-disk, small in-memory footprint | Slow | Slower than in-memory HNSW but far cheaper per vector | Very large corpora (100M+) where holding everything in RAM is not economical |
+
+DiskANN is the notable Milvus-specific option among these: it's designed to serve
+approximate search directly from SSD with a small in-memory index, trading some query
+latency for a dramatic reduction in required RAM — the practical enabler for
+billion-scale collections on commodity hardware rather than requiring proportionally
+enormous memory.
+
+## Segment-based storage and compaction
+
+Milvus organizes data into immutable **segments** (similar in spirit to LSM-tree
+SSTables) — new writes accumulate into a growing segment, which is sealed and indexed
+once it reaches a size threshold, and small segments are periodically merged via
+compaction. This has direct operational implications: query latency and recall can
+temporarily dip right after a burst of writes, because newly written data may
+initially be served from an unindexed or brute-force-searched growing segment before
+compaction and indexing catch up. High-throughput ingestion pipelines should account
+for this lag rather than assuming freshly-inserted vectors are immediately served with
+the same query performance as fully-indexed, compacted data.
+
+## Partitioning for multi-tenancy and time-based data
+
+Milvus supports **partitions** within a collection — a coarser-grained grouping than
+a metadata filter, used to physically segregate data so queries scoped to one
+partition avoid scanning others entirely:
+
+```python
+client.create_partition(collection_name="support_docs", partition_name="tenant_acme")
+client.insert(collection_name="support_docs", partition_name="tenant_acme", data=rows)
+
+results = client.search(
+    collection_name="support_docs",
+    partition_names=["tenant_acme"],  # search scoped to one partition only
+    data=[query_vector], limit=5,
+)
+```
+
+This is the Milvus-specific analog to Qdrant's custom sharding by payload key: for
+multi-tenant RAG systems with a bounded, known set of tenants, partitioning by tenant
+avoids paying the cost of filtering across the full collection on every query. The
+trade-off is a practical ceiling on partition count (partitions carry real per-
+partition overhead), so this pattern suits dozens-to-low-hundreds of tenants better
+than a system with millions of individual tenants, where metadata filtering (or
+sharding by a hashed tenant bucket) is the more appropriate mechanism.
+
+## Operating Milvus vs. Zilliz Cloud
+
+Self-hosting Milvus at production scale means operating etcd, Pulsar/Kafka, object
+storage, and the Milvus components themselves as a coordinated distributed system —
+meaningfully more operational surface area than a single-binary vector database. Zilliz
+Cloud (Milvus's managed offering, from the team that created Milvus) absorbs this
+complexity at a cost premium. Given the genuine operational weight of self-hosted
+Milvus, the case for self-hosting is strongest when an organization is already running
+Kubernetes-native distributed infrastructure with the SRE capacity to absorb another
+stateful distributed system, or has scale/cost requirements a managed tier can't meet
+economically — for most teams, especially below tens-of-millions-of-vectors scale, a
+lighter-weight vector database (or Milvus Lite/managed Zilliz) is the more
+proportionate choice, since Milvus's architectural strengths are specifically about
+scale that many RAG deployments never reach.

@@ -1,0 +1,97 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Decoder"
+level: expert
+phaseSlug: "phase-06-transformers"
+phaseName: "Transformers"
+topicSlug: "decoder"
+estReadTime: 12
+resources:
+  - type: article
+    title: "Efficient Memory Management for Large Language Model Serving with PagedAttention (vLLM)"
+    url: "https://arxiv.org/abs/2309.06180"
+  - type: article
+    title: "Fast Inference from Transformers via Speculative Decoding"
+    url: "https://arxiv.org/abs/2211.17192"
+---
+
+## Why decoder-only won over encoder-decoder for general-purpose LLMs
+
+The original Transformer, T5, and BART all use encoder-decoder architectures — a
+strong choice when the task has a clear "source" and "target" (translation,
+summarization). Yet the dominant large-scale LLMs (GPT-3/4, LLaMA, Claude's
+predecessors architecturally) are decoder-only. The key reasons this became the
+default for general-purpose systems:
+
+- **Task uniformity** — a decoder-only model treats "instructions," "context," and
+  "generation" as one continuous sequence, meaning a single pretraining objective
+  (next-token prediction) transfers to essentially unlimited task formats via
+  prompting, without needing a task-specific encoder/decoder split.
+- **Simpler scaling story** — one stack of layers, one set of scaling laws, one
+  KV-cache design to optimize — versus an encoder-decoder's two separate stacks with
+  cross-attention bridging them, which complicates both training and serving
+  infrastructure.
+- **In-context learning emerges naturally** — because the "prompt" is literally part
+  of the sequence the decoder attends to causally, few-shot examples placed in the
+  prompt directly influence generation without any architectural change, a property
+  that turned out to be central to how LLMs are actually used in production.
+
+Encoder-decoder architectures haven't disappeared — T5-family and BART-family models
+remain strong choices for well-defined seq2seq tasks with abundant paired data — but
+for open-ended, instruction-following, general-purpose systems, decoder-only won on
+engineering simplicity and prompting flexibility, not on any strict theoretical
+superiority.
+
+## Inference-time systems engineering: where the real complexity lives
+
+At inference, autoregressive decoding is inherently sequential — token `t+1` depends
+on token `t`. This has produced an entire subfield of serving optimizations:
+
+- **KV cache paging (vLLM's PagedAttention)** — treats the KV cache like virtual
+  memory pages rather than one contiguous allocation per request, letting many
+  concurrent requests share GPU memory efficiently and eliminating the fragmentation
+  that plagued naive fixed-size cache allocation.
+- **Continuous batching** — instead of waiting for a whole batch of requests to
+  finish before starting the next batch, new requests are spliced into a running
+  batch as soon as any sequence finishes, dramatically improving GPU utilization for
+  variable-length generation workloads.
+- **Speculative decoding** — a small, fast "draft" model proposes several tokens
+  ahead, and the large target model verifies them in a single parallel forward pass,
+  accepting the longest correct prefix. Because verification (parallel) is cheaper
+  than sequential generation of the same number of tokens, this yields real wall-clock
+  speedups with mathematically identical output distribution to standard decoding
+  (accept/reject sampling preserves the target model's distribution exactly).
+
+None of these change the decoder's mathematical definition — they change how the
+same causally-masked computation is scheduled and cached on real hardware, which is
+often where the majority of production inference cost is actually won or lost.
+
+## Cross-attention cost in encoder-decoder decoders
+
+In an encoder-decoder decoder, every layer's cross-attention sublayer attends to the
+*entire* (fixed) encoder output at every generation step. Unlike self-attention's KV
+cache — which grows as generation proceeds — the cross-attention K/V from the
+encoder are computed **once** and reused unchanged for the whole generation, since
+the source sequence doesn't change. This is a meaningful efficiency asymmetry
+between the two attention types within the same decoder block, and it's why
+encoder-decoder inference cost scales differently with source length vs. generated
+length than a decoder-only model's cost scales with total sequence length.
+
+## Trade-off summary
+
+| | Decoder-only (GPT, LLaMA) | Encoder-decoder (T5, BART) |
+|---|---|---|
+| Cross-attention sublayer | None | Present, attends to fixed encoder output |
+| Best suited for | Open-ended generation, chat, in-context learning | Well-defined seq2seq: translation, summarization |
+| KV cache growth during generation | Self-attention cache grows with output length | Self-attention cache grows; cross-attention cache fixed after encoding |
+| Serving infrastructure complexity | Single stack to optimize | Two stacks + bridging logic |
+| Dominant use in modern general-purpose LLMs | Yes (near-universal) | Niche (specialized seq2seq tasks) |
+
+## The practical engineering takeaway
+
+Understanding the decoder purely as "self-attention with a causal mask" is
+necessary but not sufficient for production work — the interesting engineering
+challenges (KV cache memory management, batching strategy, speculative decoding)
+all live in *how* that causally-masked computation gets executed efficiently across
+many concurrent requests, which is a substantially different problem from the
+training-time question of how the decoder architecture itself is defined.

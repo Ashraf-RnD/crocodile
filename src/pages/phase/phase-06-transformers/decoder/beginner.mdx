@@ -1,0 +1,82 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Decoder"
+level: beginner
+phaseSlug: "phase-06-transformers"
+phaseName: "Transformers"
+topicSlug: "decoder"
+estReadTime: 6
+resources:
+  - type: article
+    title: "Jay Alammar — The Illustrated GPT-2"
+    url: "https://jalammar.github.io/illustrated-gpt2/"
+  - type: docs
+    title: "Hugging Face — GPT2LMHeadModel (a decoder-only model)"
+    url: "https://huggingface.co/docs/transformers/en/model_doc/gpt2"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The decoder's job: generate, one token at a time
+
+While the encoder reads a whole passage at once, the **decoder** writes — one word
+at a time, left to right, the way a person writes a sentence without knowing exactly
+how it will end. At each step it can only see the words already written (plus,
+in encoder-decoder models, the full source input) — never the words it hasn't
+generated yet.
+
+This "no peeking at the future" rule is enforced with a **causal mask**: when
+computing self-attention for word 5, the model is only allowed to attend to words
+1 through 5, never word 6 or beyond.
+
+<Mermaid client:visible code={`flowchart LR
+  W1["Word 1"] --> W2["Word 2"]
+  W2 --> W3["Word 3"]
+  W3 --> W4["Word 4 (being generated)"]
+  W1 -.can see.-> W4
+  W2 -.can see.-> W4
+  W3 -.can see.-> W4
+  W5["Word 5 (not yet written)"] -.blocked.-> W4`} />
+
+### A minimal causal mask example
+
+```python
+import numpy as np
+
+def softmax(x, axis=-1):
+    e = np.exp(x - np.max(x, axis=axis, keepdims=True))
+    return e / e.sum(axis=axis, keepdims=True)
+
+seq_len = 4
+scores = np.random.randn(seq_len, seq_len)   # pretend raw attention scores
+
+# Causal mask: position i can only attend to positions <= i
+causal_mask = np.tril(np.ones((seq_len, seq_len)))
+masked_scores = np.where(causal_mask == 1, scores, -np.inf)
+
+weights = softmax(masked_scores)
+print(np.round(weights, 2))
+# Notice row 0 only has weight in column 0,
+# row 1 only has weight in columns 0-1, etc.
+```
+
+Every row shows a word only "spreading" its attention over itself and earlier words
+— never later ones. This single constraint is what makes text generation possible:
+at inference time, the model generates word 1, then uses words 1 to predict word 2,
+then uses words 1-2 to predict word 3, and so on.
+
+## Try it yourself
+
+GPT-style models are decoder-only. Given the causal masking rule above, explain in
+one sentence why you can't feed a GPT model the *entire* sentence at once and ask it
+to fill in a *missing word in the middle* the way BERT can.
+
+<details>
+<summary>Solution</summary>
+
+Because the causal mask prevents any position from attending to words that come
+after it, a GPT-style decoder physically cannot use information from words *after*
+the blank to help predict it — it can only use what came before, so "fill in the
+middle" tasks require either a bidirectional encoder (like BERT) or specialized
+infilling training objectives, not a plain left-to-right causal decoder.
+
+</details>

@@ -1,0 +1,92 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Multi-Agent Systems"
+level: expert
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "multi-agent-systems"
+estReadTime: 13
+resources:
+  - type: article
+    title: "Anthropic — How We Built Our Multi-Agent Research System"
+    url: "https://www.anthropic.com/engineering/multi-agent-research-system"
+  - type: article
+    title: "Cognition — Don't Build Multi-Agents"
+    url: "https://cognition.ai/blog/dont-build-multi-agents"
+---
+
+## The core tension: parallelism and specialization vs. coordination cost
+
+Multi-agent systems trade single-agent simplicity for two potential wins — parallel
+execution (independent sub-tasks run concurrently) and specialization (narrower
+context and tool sets per agent improve per-task accuracy) — against a real,
+non-obvious cost: **coordination overhead compounds the same way sequential-step
+error does in single agents, but now across agents that can't fully observe each
+other's internal reasoning.** Anthropic's own writeup on their multi-agent research
+system reports it using roughly 15x the tokens of a single-agent chat interaction for
+comparable tasks — the parallelism and quality gains have to justify that real,
+substantial cost multiplier, and often the honest answer is that for well-scoped
+tasks, they don't.
+
+## The contrarian case: when multi-agent hurts more than it helps
+
+Cognition's widely-discussed engineering post makes a sharp counter-argument worth
+taking seriously: splitting a task across agents that each only see a fragment of
+context tends to produce **inconsistent, hard-to-debug results** precisely because no
+single agent has the full picture needed to catch cross-cutting errors — a sub-agent
+can confidently produce locally-correct output that's globally wrong (inconsistent
+tone across sections written by different writer agents, contradictory conclusions
+across parallel research agents) and nothing in the architecture catches this unless
+the supervisor is explicitly designed to reconcile it. The practical takeaway: default
+to a single, well-scoped agent with a good context and tool set; move to multi-agent
+only when a task decomposes into genuinely independent sub-problems whose results
+don't need tight cross-consistency, or when parallelism is worth the coordination
+cost for latency reasons.
+
+## Failure modes unique to multi-agent coordination
+
+- **Context loss at hand-off boundaries.** Each hand-off between agents is a lossy
+  compression point — the receiving agent only knows what the sending agent chose to
+  communicate, not everything the sending agent actually reasoned through. Subtle
+  but important context can silently vanish at every hand-off.
+- **Inconsistent shared-state races.** In topologies where agents write to shared
+  state concurrently (parallel workers updating a shared plan or memory store),
+  standard concurrency concerns apply — last-write-wins semantics on a shared field
+  can silently discard one agent's legitimate update.
+- **Cascading misclassification.** In supervisor topologies, an early routing mistake
+  (supervisor sends a task to the wrong specialized agent) often isn't caught until
+  much later, since downstream agents generally trust that their input was routed
+  correctly rather than re-verifying it.
+- **Runaway inter-agent loops.** Peer-to-peer or debate topologies without a hard
+  termination condition can oscillate indefinitely (agent A revises based on agent
+  B's critique, B critiques the revision, ad infinitum) — this needs the same
+  max-iteration guardrails as a single agent's tool loop, applied at the
+  inter-agent level too.
+
+## Observability requirements that differ from single-agent systems
+
+Debugging a multi-agent trajectory requires reconstructing not just what each agent
+did, but the full hand-off graph — which agent invoked which, with what context, and
+what came back. This needs distributed-tracing-style instrumentation (a shared trace
+ID propagated across every agent invocation, structured logging of every hand-off
+payload) rather than a single flat conversation log, because a bug in a multi-agent
+system frequently isn't localized to one agent's behavior — it's in what one agent
+communicated (or failed to communicate) to another.
+
+## Trade-offs across topologies
+
+| Topology | Parallelism | Consistency | Debuggability | Best fit |
+|---|---|---|---|---|
+| Sequential pipeline | None — strictly ordered | High — each stage sees prior stage's full output | High — linear trace | Tasks with a clear, fixed stage order |
+| Supervisor/orchestrator-worker | Workers can run concurrently | Moderate — supervisor can reconcile conflicts | High — single point of coordination to trace | Tasks needing dynamic routing across specialized skills |
+| Peer-to-peer / debate | Depends on design | Lower — no single reconciling authority | Low — hard to trace non-linear exchanges | Adversarial review, multi-perspective critique |
+| Single agent, broad tools (no multi-agent) | None | Highest — one continuous context | Highest — one trajectory | Most tasks; default unless decomposition is clearly justified |
+
+## A pragmatic decision rule
+
+Before building a multi-agent system, verify the task actually has **decomposable,
+loosely-coupled sub-problems** — if the sub-tasks need to stay tightly consistent with
+each other (matching tone, non-contradictory conclusions, shared running state), the
+coordination cost of multi-agent will likely cost more in engineering and token spend
+than it saves, and a single agent with well-organized context and a broader tool set
+is very often both simpler to build and more reliable in practice.

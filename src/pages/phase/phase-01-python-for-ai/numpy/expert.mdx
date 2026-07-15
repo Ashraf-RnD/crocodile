@@ -1,0 +1,125 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "NumPy"
+level: expert
+phaseSlug: "phase-01-python-for-ai"
+phaseName: "Python for AI"
+topicSlug: "numpy"
+estReadTime: 12
+resources:
+  - type: docs
+    title: "NumPy — Internals: memory layout of ndarray"
+    url: "https://numpy.org/doc/stable/reference/arrays.ndarray.html"
+  - type: article
+    title: "NumPy — Copies and views"
+    url: "https://numpy.org/doc/stable/user/basics.copies.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Views vs. copies: the bug that costs you a debugging afternoon
+
+Slicing a NumPy array does **not** copy data — it returns a *view*, a new array
+object that shares the same underlying memory buffer. Mutating a view mutates the
+original. This is a deliberate performance choice (avoiding needless copies of
+potentially gigabyte-sized arrays) but it's also the source of one of the most
+common silent bugs in data pipelines.
+
+```python
+import numpy as np
+
+data = np.array([1, 2, 3, 4, 5])
+window = data[1:4]      # a VIEW, not a copy
+window[0] = 999
+print(data)              # [  1 999   3   4   5] — original mutated!
+
+safe_window = data[1:4].copy()  # explicit copy breaks the shared memory link
+```
+
+**Rule of thumb**: basic slicing (`a[1:4]`, `a[:, 0]`) returns a view. Fancy indexing
+(`a[[1, 3, 4]]`) and boolean masking (`a[a > 2]`) always return a copy. If you're
+about to mutate a sliced array and aren't sure which you have, call `.copy()`
+explicitly — it's cheap insurance against a bug that only shows up when two
+"unrelated" arrays start changing together.
+
+<Mermaid client:visible code={`flowchart LR
+  D["data buffer in memory"] --> S1["Basic slice a[1:4] — VIEW, shares buffer"]
+  D --> S2["Boolean mask a[a>2] — COPY, new buffer"]
+  S1 -->|mutate| D
+  S2 -.mutate.-> D2["separate buffer, original untouched"]`} />
+
+## Memory layout: C-order vs. Fortran-order, and why it matters
+
+NumPy arrays are stored as a flat 1D memory buffer plus a *stride* pattern that
+tells NumPy how to interpret it as N dimensions. By default arrays are **row-major
+(C order)**: consecutive elements in memory belong to the same row.
+
+```python
+a = np.arange(12).reshape(3, 4)
+print(a.strides)  # (32, 8) on a 64-bit float — 32 bytes to next row, 8 to next col
+
+# Iterating over rows is cache-friendly (sequential memory access)
+for row in a:
+    ...  # fast
+
+# Iterating over columns jumps around memory — much slower for large arrays
+for col in a.T:
+    ...  # a.T is a view with swapped strides, not a real transpose in memory
+```
+
+This matters directly for performance: operations that walk memory sequentially hit
+the CPU cache efficiently; operations that stride across a large array (like
+column-wise access on a huge row-major matrix) thrash the cache. Libraries like
+PyTorch inherit this exact same strides concept — a `.T` on a PyTorch tensor is also
+just a view with swapped strides, and calling `.contiguous()` forces a real copy
+into cache-friendly layout, which is why you sometimes see that call right before a
+performance-critical op.
+
+## `dtype` and silent overflow/precision bugs
+
+NumPy arrays are fixed-type. Mixing incompatible operations silently upcasts, or —
+worse — silently overflows for fixed-width integer types.
+
+```python
+a = np.array([200, 100], dtype=np.int8)   # int8 range: -128 to 127
+print(a + a)   # [-112  -56]  — silently wraps around, no error!
+
+b = np.array([1, 2, 3], dtype=np.float32)
+c = np.array([1, 2, 3], dtype=np.float64)
+print((b + c).dtype)  # float64 — NumPy upcasts to the wider type automatically
+```
+
+In ML pipelines this shows up as: normalizing `uint8` image pixels (`0-255`) without
+casting to `float32` first, causing arithmetic to overflow or truncate; or
+accumulating losses in `float16` and losing precision on long training runs. Always
+be deliberate about `dtype` when working with anything that will feed a model.
+
+## Vectorization vs. `numba`/Cython — when NumPy alone isn't enough
+
+Vectorized NumPy is fast because each op is one call into optimized C, but it still
+materializes intermediate arrays. A chain of vectorized ops on a huge array can
+allocate several full-size temporaries, which costs both memory and cache
+bandwidth. When the transform doesn't vectorize cleanly (data-dependent branching,
+iterative recurrences), the standard escalation path is:
+
+| Approach | Best for | Cost |
+|---|---|---|
+| Plain Python loop | Prototyping, tiny data | Slowest, pure interpreter overhead |
+| Vectorized NumPy | Most array math | Allocates temporary arrays per op |
+| `np.einsum` | Complex multi-array contractions | Avoids intermediates, but harder to read |
+| Numba `@njit` | Loops with branching NumPy can't vectorize | JIT compile time on first call |
+| Cython / C extension | Hot loops needing full control | Build complexity, separate compile step |
+
+`np.einsum` deserves special mention: expressions like
+`np.einsum('bik,bkj->bij', A, B)` (batched matrix multiply) compute the result
+without allocating the large intermediates a naive chain of `np.matmul`/`np.sum`
+calls would — this is the same style of index notation used to describe attention
+score computation in transformer papers.
+
+## Trade-off summary
+
+| Decision | Gains | Costs |
+|---|---|---|
+| Slicing (view) over `.copy()` | Zero-copy, fast, low memory | Shared mutation bugs if not careful |
+| C-order (default) vs. Fortran-order | Row-wise ops are cache-friendly | Column-wise ops on large arrays are slow |
+| Narrow `dtype` (`int8`, `float16`) | Lower memory, faster on some hardware | Silent overflow / precision loss |
+| `einsum` over chained ops | No intermediate allocations | Steeper learning curve to read/write |

@@ -1,0 +1,95 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "LangChain"
+level: expert
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "langchain"
+estReadTime: 12
+resources:
+  - type: docs
+    title: "LangChain — Runnable Interface"
+    url: "https://python.langchain.com/docs/concepts/runnables/"
+  - type: article
+    title: "LangChain — Why We Built LangGraph"
+    url: "https://blog.langchain.dev/langgraph/"
+---
+
+## The Runnable abstraction is the actual architecture
+
+Every LangChain component — prompts, models, parsers, retrievers, tools — implements
+the same `Runnable` interface (`.invoke`, `.batch`, `.stream`, their async
+equivalents, plus `.astream_events` for fine-grained streaming of nested steps). The
+`|` operator you see in every LCEL example isn't syntactic sugar over something
+bespoke — it's composing `Runnable` objects into a `RunnableSequence`, which is itself
+a `Runnable`. This uniformity is what makes arbitrary nesting and composition
+"just work": a chain built from other chains behaves identically to a single
+component with respect to streaming, batching, and async, because they all satisfy
+the same interface contract. Understanding this is what separates debugging LCEL
+chains effectively from treating `|` as unexplained magic.
+
+## Why the ecosystem moved from AgentExecutor to LangGraph
+
+Early LangChain agent abstractions (`AgentExecutor`) hid the agent loop behind a
+single opaque `.run()` call — convenient initially, but it became a real limitation
+once teams needed custom control flow: conditional branching, human-in-the-loop
+pauses, cycles more complex than "call tool, call model, repeat," or persistence
+across process restarts. LangGraph exists specifically because that opacity doesn't
+scale to production agent requirements — it exposes the control flow as an explicit
+graph you author, rather than a fixed loop the framework owns. In current practice,
+LangChain provides the model/prompt/tool/retriever building blocks, and LangGraph
+provides the orchestration layer on top for anything beyond a simple, mostly-linear
+chain — they're complementary, not competing, and most non-trivial LangChain
+applications today use both.
+
+## Callbacks and observability as a first-class concern
+
+LangChain's callback system (`BaseCallbackHandler`) hooks into every stage of
+execution — chain start/end, LLM call start/end with token usage, tool invocation,
+retriever calls — which is what LangSmith (LangChain's tracing/observability product)
+and third-party alternatives (Langfuse, Helicone) build on. In production, treat
+callback-based tracing as non-optional: without it, debugging *why* a chain produced
+a particular output requires re-running with print statements sprinkled through
+custom code, versus inspecting a structured trace showing every intermediate
+input/output, latency, and token count per step after the fact.
+
+```python
+import os
+os.environ["LANGCHAIN_TRACING_V2"] = "true"
+os.environ["LANGCHAIN_API_KEY"] = "..."
+# Every chain invocation is now automatically traced to LangSmith,
+# including nested steps inside retrievers, tools, and sub-chains.
+```
+
+## Version churn and the real maintenance cost
+
+LangChain's API surface has changed substantially across major versions (the
+0.0.x → 0.1 → 0.2/0.3 transitions each restructured imports, deprecated patterns like
+`LLMChain` in favor of LCEL composition, and split the package into
+`langchain-core`/`langchain-community`/provider-specific packages). This is a real,
+non-hypothetical maintenance cost: code written against an older tutorial frequently
+breaks against current versions, and pinning versions tightly is common practice in
+production LangChain deployments specifically because of this churn — a trade-off
+against always having access to the latest patterns and integrations.
+
+## Trade-offs: LangChain vs. a lighter-weight custom stack
+
+| Dimension | Raw provider SDK (OpenAI/Anthropic SDK) | LangChain |
+|---|---|---|
+| Provider portability | None — rewrite per provider | High — swap models with minimal code changes |
+| Learning curve | Low — matches provider docs directly | Higher — framework-specific abstractions (LCEL, Runnables) |
+| Debuggability | Very direct — you see exactly what's sent | Requires understanding the abstraction layer, or tracing tooling |
+| Ecosystem (retrievers, vector stores, tool integrations) | You build/integrate yourself | Large pre-built integration catalog |
+| Version stability | Provider SDKs are comparatively stable | Historically higher churn across versions |
+| Best fit | Small apps, single provider, full control desired | Multi-provider apps, heavy retrieval/tool integration needs |
+
+## A pragmatic take on when to reach for LangChain
+
+For a single API call with one provider, LangChain adds an abstraction layer that
+doesn't pay for itself — the raw SDK is simpler and more transparent. LangChain earns
+its complexity budget specifically when you need provider portability, a large
+pre-built integration surface (vector stores, document loaders, tool ecosystem), or
+are already committed to LangGraph for orchestration and want the surrounding
+components to compose cleanly with it. Evaluate this per project, not as a default
+choice — plenty of production LLM systems deliberately use the raw provider SDK plus
+custom code instead, and that's a legitimate architectural choice, not a lesser one.

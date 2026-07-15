@@ -1,0 +1,115 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Drift Detection"
+level: intermediate
+phaseSlug: "phase-12-mlops"
+phaseName: "MLOps"
+topicSlug: "drift-detection"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "Evidently AI — Drift Detection Methods"
+    url: "https://docs.evidentlyai.com/user-guide/customization/options-for-statistical-tests"
+  - type: docs
+    title: "NannyML — Performance Estimation Without Labels"
+    url: "https://nannyml.readthedocs.io/en/stable/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Choosing the right statistical test per feature type
+
+A single drift-detection method doesn't fit every feature type. Production
+monitoring pipelines pick tests based on the data:
+
+```python
+from scipy.stats import ks_2samp, chi2_contingency
+import numpy as np
+
+def detect_drift(reference, current, feature_type):
+    if feature_type == "numeric":
+        stat, p_value = ks_2samp(reference, current)
+        return p_value < 0.05
+    elif feature_type == "categorical":
+        ref_counts = reference.value_counts()
+        cur_counts = current.value_counts()
+        contingency = np.array([ref_counts, cur_counts.reindex(ref_counts.index, fill_value=0)])
+        stat, p_value, _, _ = chi2_contingency(contingency)
+        return p_value < 0.05
+```
+
+For high-dimensional feature sets, teams often use **Population Stability
+Index (PSI)** as a single summary score per feature, since running dozens of
+individual statistical tests produces multiple-comparison noise:
+
+```python
+def population_stability_index(reference, current, bins=10):
+    breakpoints = np.percentile(reference, np.linspace(0, 100, bins + 1))
+    ref_pct = np.histogram(reference, breakpoints)[0] / len(reference)
+    cur_pct = np.histogram(current, breakpoints)[0] / len(current)
+    ref_pct = np.clip(ref_pct, 1e-6, None)
+    cur_pct = np.clip(cur_pct, 1e-6, None)
+    return np.sum((cur_pct - ref_pct) * np.log(cur_pct / ref_pct))
+
+# PSI < 0.1: no significant change
+# PSI 0.1-0.25: moderate shift, monitor
+# PSI > 0.25: significant shift, investigate
+```
+
+## Automating drift checks as a pipeline stage
+
+Drift detection is most valuable when it runs on a schedule and feeds
+directly into an alerting or retraining trigger, not as a one-off notebook
+check:
+
+```python
+# Airflow task, run daily
+from evidently.report import Report
+from evidently.metric_preset import DataDriftPreset
+
+def check_drift(**context):
+    reference_data = load_reference_snapshot()
+    current_data = load_last_24h_predictions()
+
+    report = Report(metrics=[DataDriftPreset()])
+    report.run(reference_data=reference_data, current_data=current_data)
+    result = report.as_dict()
+
+    drift_share = result["metrics"][0]["result"]["share_of_drifted_columns"]
+    if drift_share > 0.3:
+        trigger_retraining_dag()
+        send_alert(f"Drift detected in {drift_share:.0%} of features")
+```
+
+<Mermaid client:visible code={`flowchart LR
+  A["Daily scheduled job"] --> B["Load reference vs. live data window"]
+  B --> C["Run drift report (Evidently/NannyML)"]
+  C --> D{"Drift share > threshold?"}
+  D -->|yes| E["Trigger retraining DAG + alert on-call"]
+  D -->|no| F["Log result, no action"]`} />
+
+## Performance estimation without waiting for labels
+
+The hardest part of drift monitoring in production: you often don't have
+ground-truth labels immediately (e.g. "was this loan actually defaulted on"
+takes months to know). Tools like NannyML estimate model performance
+degradation from input drift and prediction confidence patterns *before*
+labels arrive, giving an early warning that pure label-based monitoring
+(which lags by definition) can't provide:
+
+```python
+import nannyml as nml
+
+estimator = nml.CBPE(
+    y_pred_proba="prediction_proba",
+    y_pred="prediction",
+    problem_type="classification_binary",
+    metrics=["roc_auc"],
+)
+estimator.fit(reference_data)
+results = estimator.estimate(analysis_data)
+results.plot().show()
+```
+
+This distinction — monitoring inputs (fast, always available) vs. monitoring
+outcomes (accurate, but delayed) — is central to building a drift-detection
+system that catches problems early enough to act on them.

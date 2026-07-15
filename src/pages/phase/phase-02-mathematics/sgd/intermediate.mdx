@@ -1,0 +1,61 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "SGD"
+level: intermediate
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "sgd"
+estReadTime: 8
+resources:
+  - type: article
+    title: "A Recipe for Training Neural Networks (Karpathy)"
+    url: "https://karpathy.github.io/2019/04/25/recipe/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Batch size as a first-class hyperparameter
+
+Batch size affects far more than memory usage:
+
+- **Small batches** (8-32): noisier gradient estimates, more updates per epoch, often
+  better generalization, but less GPU parallelism per step
+- **Large batches** (256-4096+): smoother gradient estimates, fewer updates per epoch,
+  much better hardware utilization, but typically need a larger (and carefully
+  scheduled) learning rate to match small-batch performance, and can generalize worse
+  without countermeasures
+
+<Mermaid client:visible code={`flowchart TB
+  Small["Small batch"] --> N1["Noisy gradient, many updates"]
+  Large["Large batch"] --> N2["Smooth gradient, few updates, needs LR scaling"]`} />
+
+## Weight decay: SGD's built-in regularization
+
+`torch.optim.SGD(..., weight_decay=1e-4)` adds a small penalty proportional to the
+weight's own magnitude at every step, pulling weights gently toward zero. This is
+literally the same math as L2 regularization added directly to the loss — SGD's
+`weight_decay` parameter is one specific, common way to implement it.
+
+```python
+# these two produce equivalent effective updates:
+optimizer = torch.optim.SGD(model.parameters(), lr=0.01, weight_decay=1e-4)
+# vs. manually adding to the loss:
+loss = base_loss + 1e-4 * sum((p**2).sum() for p in model.parameters())
+```
+
+## Learning rate as the most important hyperparameter to tune
+
+Of every hyperparameter, learning rate has the largest effect on whether training
+succeeds at all. A common practical approach: run a quick "LR range test" — increase
+the learning rate exponentially over a few hundred steps and watch where the loss
+starts diverging — to find a reasonable ballpark before committing to a full training
+run, rather than guessing blind or exhaustively grid-searching from scratch.
+
+## SGD vs. adaptive optimizers: when plain SGD still wins
+
+Despite Adam's popularity, well-tuned SGD with momentum still frequently matches or
+beats Adam on final generalization for image classification (ResNets, vision
+transformers), particularly with a good learning rate schedule. Adam's convenience
+(less tuning needed, more forgiving of a bad initial learning rate) is why it's the
+default for language model training and rapid prototyping, not necessarily because it
+always produces a better final model — this is a real, practitioner-relevant trade-off,
+not a settled "always use X" answer.

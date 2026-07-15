@@ -1,0 +1,101 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Dense Networks"
+level: intermediate
+phaseSlug: "phase-04-deep-learning"
+phaseName: "Deep Learning"
+topicSlug: "dense-networks"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "PyTorch — nn.Module documentation"
+    url: "https://pytorch.org/docs/stable/generated/torch.nn.Module.html"
+  - type: docs
+    title: "PyTorch — torch.nn.init"
+    url: "https://pytorch.org/docs/stable/nn.init.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Subclassing nn.Module for real models
+
+Beyond simple `nn.Sequential` stacks, production models subclass `nn.Module`
+directly, which gives full control over the forward pass (branching, multiple
+inputs, reused sub-layers):
+
+```python
+import torch.nn as nn
+import torch.nn.functional as F
+
+class MLPClassifier(nn.Module):
+    def __init__(self, in_features, hidden, num_classes, dropout=0.2):
+        super().__init__()
+        self.fc1 = nn.Linear(in_features, hidden)
+        self.fc2 = nn.Linear(hidden, hidden)
+        self.fc3 = nn.Linear(hidden, num_classes)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        x = F.relu(self.fc1(x))
+        x = self.dropout(x)
+        x = F.relu(self.fc2(x))
+        return self.fc3(x)   # raw logits — loss function applies softmax internally
+
+model = MLPClassifier(in_features=20, hidden=64, num_classes=3)
+```
+
+Returning raw logits (not softmax probabilities) from `forward()` is standard
+practice — `nn.CrossEntropyLoss` expects logits and applies `log_softmax` internally
+for numerical stability, so applying softmax yourself first is a common bug.
+
+<Mermaid client:visible code={`flowchart LR
+  In["Input (20 features)"] --> FC1["Linear(20, 64) + ReLU"]
+  FC1 --> DO["Dropout(0.2)"]
+  DO --> FC2["Linear(64, 64) + ReLU"]
+  FC2 --> FC3["Linear(64, 3)"]
+  FC3 --> Out["Logits (3 classes)"]`} />
+
+## Choosing activation functions
+
+`ReLU` is the default, but production code often reaches for variants depending on
+the failure mode observed:
+
+- **ReLU** — fast, simple, but can suffer "dying ReLU" (neurons stuck outputting 0
+  forever if they fall into the negative region during training).
+- **LeakyReLU / GELU** — allow a small gradient for negative inputs (LeakyReLU) or a
+  smoother curve (GELU, used throughout transformers) to avoid dead neurons.
+- **Sigmoid/Tanh** — mostly reserved for output layers (binary classification,
+  gating mechanisms) rather than hidden layers, due to vanishing gradients at scale.
+
+## Weight initialization isn't automatic magic
+
+PyTorch initializes `nn.Linear` weights reasonably by default (Kaiming-uniform), but
+custom architectures sometimes need explicit initialization to train reliably,
+especially very deep or unusually structured networks:
+
+```python
+def init_weights(module):
+    if isinstance(module, nn.Linear):
+        nn.init.kaiming_normal_(module.weight, nonlinearity="relu")
+        nn.init.zeros_(module.bias)
+
+model.apply(init_weights)
+```
+
+## A full training loop
+
+```python
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+criterion = nn.CrossEntropyLoss()
+
+model.train()
+for x, y in dataloader:
+    optimizer.zero_grad()
+    logits = model(x)
+    loss = criterion(logits, y)
+    loss.backward()
+    optimizer.step()
+```
+
+`model.train()` vs `model.eval()` matters here too — layers like `Dropout` and
+`BatchNorm` behave differently depending on mode, a common source of silently wrong
+evaluation metrics when forgotten.

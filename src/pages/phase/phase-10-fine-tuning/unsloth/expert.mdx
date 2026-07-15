@@ -1,0 +1,100 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Unsloth"
+level: expert
+phaseSlug: "phase-10-fine-tuning"
+phaseName: "Fine-tuning"
+topicSlug: "unsloth"
+estReadTime: 12
+resources:
+  - type: docs
+    title: "Unsloth — how the kernels work (technical blog posts)"
+    url: "https://unsloth.ai/blog"
+  - type: docs
+    title: "Unsloth — multi-GPU and production deployment notes"
+    url: "https://docs.unsloth.ai/"
+---
+
+## Manual backprop as the actual source of the speedup
+
+The headline claim ("2x faster, 70% less memory") is often attributed vaguely to
+"optimized kernels," but the more precise engineering story is that Unsloth replaces
+PyTorch's *automatic* differentiation for specific operations (RoPE, RMSNorm, the LoRA
+matmuls, cross-entropy) with *manually derived* backward passes written directly as
+Triton kernels. Autograd is general-purpose: it builds a graph and computes gradients
+correctly for arbitrary compositions of operations, at the cost of graph-traversal
+overhead and often suboptimal fusion of adjacent operations. A manually-derived
+backward pass for a *known, fixed* sequence of operations can fuse multiple steps into
+a single kernel launch and skip storing intermediate activations autograd would
+otherwise retain. This is a classic "general tool vs. hand-tuned specific tool"
+trade-off — Unsloth pays an upfront engineering cost (deriving and maintaining correct
+gradients by hand per supported architecture) to buy a runtime speed and memory win
+that a general-purpose framework can't match without equivalent hand-tuning.
+
+## The support-surface constraint this implies
+
+Because Unsloth's speedups depend on operation-specific hand-derived kernels, it
+inherently cannot support arbitrary novel architectures the day they're released — each
+new architecture family (a new positional encoding scheme, a new normalization variant,
+a new attention pattern) requires new kernel work before Unsloth's fast path applies.
+This is the direct engineering consequence of the manual-backprop approach, not a
+business decision — it's the trade-off for the speedup itself. Production teams
+building on genuinely novel or research-stage architectures should expect a lag before
+Unsloth support lands, and should verify a target architecture's presence in Unsloth's
+supported list before committing to it as critical-path infrastructure, rather than
+assuming universal `transformers` compatibility carries over.
+
+## Where memory savings actually come from, layer by layer
+
+Unsloth's memory reduction isn't a single trick — it stacks several:
+
+- **Fused kernels** avoid materializing large intermediate tensors that a naive
+  multi-step PyTorch implementation would otherwise allocate (e.g. avoiding a separate
+  buffer for the pre-softmax attention scores when the fused kernel can go straight
+  from QK^T to the output).
+- **`use_gradient_checkpointing="unsloth"`** offloads activations to CPU RAM
+  asynchronously in a way tuned to overlap with GPU compute, reducing the wall-clock
+  penalty gradient checkpointing normally imposes versus PyTorch's default
+  checkpointing implementation.
+- **4-bit base weights (via bitsandbytes integration)** stack on top of the above the
+  same way they would in a QLoRA setup — Unsloth doesn't replace this, it's compatible
+  with and builds on it.
+
+The compounding effect across these is why Unsloth's memory reduction on top of QLoRA
+is meaningfully more than QLoRA alone, but it's worth being clear that not all of the
+saving is novel to Unsloth — a meaningful fraction is just correctly and efficiently
+combining existing techniques (4-bit quantization, gradient checkpointing) that a naive
+Hugging Face script often applies less tightly.
+
+## The single-GPU design center and what it means for scale-out
+
+Unsloth's core open-source kernels and memory optimizations are designed and validated
+around single-GPU training. Multi-GPU distributed training (via DeepSpeed/FSDP-style
+sharding) is a separate, commercially-licensed capability. This matters for
+architecture decisions at the point where a fine-tuning workload outgrows one GPU:
+teams need to either budget for Unsloth's paid multi-GPU offering, or fall back to
+plain `transformers`+`peft`+`accelerate`+`deepspeed` and lose Unsloth's per-GPU
+speedups in exchange for open, standard multi-GPU scaling. There isn't currently a
+"best of both worlds" free path for multi-GPU Unsloth training — this is a genuine
+build-vs-buy decision point, not a configuration detail.
+
+## Trade-off summary
+
+| Dimension | Plain transformers + PEFT + TRL | Unsloth |
+|---|---|---|
+| Single-GPU training speed | Baseline | ~1.5-2x faster (architecture-dependent) |
+| Single-GPU memory usage | Baseline | 50-70% lower (architecture-dependent) |
+| Architecture coverage | Any `transformers`-supported model | Popular architectures with maintained kernels only |
+| Multi-GPU scaling | Fully open (DeepSpeed/FSDP) | Requires paid tier |
+| Debugging transparency | Standard PyTorch autograd, easier to step through | Custom kernels are harder to inspect/debug when something goes wrong |
+| Time-to-first-working-script | Slightly more setup for quantization/checkpointing tuning | Optimized defaults out of the box |
+
+## The practical decision
+
+Reach for Unsloth by default for single-GPU LoRA/QLoRA/DPO fine-tuning on a supported
+architecture — the speed and memory wins are large enough that there's rarely a reason
+not to, given how close the API stays to standard TRL usage. Fall back to plain
+`transformers`+`peft`+`trl` when working with an unsupported or bleeding-edge
+architecture, when multi-GPU scaling is required without a commercial license, or when
+debugging a subtle training issue benefits from standard, inspectable PyTorch autograd
+rather than opaque fused kernels.

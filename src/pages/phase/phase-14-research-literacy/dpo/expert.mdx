@@ -1,0 +1,107 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "DPO"
+level: expert
+phaseSlug: "phase-14-research-literacy"
+phaseName: "Research Literacy"
+topicSlug: "dpo"
+estReadTime: 12
+resources:
+  - type: article
+    title: "Direct Preference Optimization (original paper)"
+    url: "https://arxiv.org/abs/2305.18290"
+  - type: article
+    title: "KTO: Model Alignment as Prospect Theoretic Optimization"
+    url: "https://arxiv.org/abs/2402.01306"
+---
+
+_This lesson is a critical analysis of the DPO paper. The practical
+"how do I actually run DPO fine-tuning" guide lives in Phase 10:
+Fine-tuning; the two are complementary._
+
+## What the paper actually contributed vs. prior work
+
+RLHF (Christiano et al., 2017; applied to LLMs by InstructGPT, 2022) had
+already established that optimizing a KL-constrained reward objective against
+human preferences produces well-aligned models. DPO's contribution wasn't a
+new alignment *goal* — it targets the exact same KL-constrained
+reward-maximization objective as RLHF — but a new, exact **reparameterization**
+showing that objective's optimal solution can be reached by directly
+optimizing the policy's own log-probability ratios on preference pairs,
+without ever instantiating a separate reward model or running an RL rollout
+loop. The paper proves this reparameterization is mathematically equivalent to
+the RLHF objective under the Bradley-Terry preference model, not merely an
+approximation — a theoretically grounded simplification rather than an
+empirical shortcut, backed up with experiments showing DPO matches or exceeds
+PPO-based RLHF on several tasks while being far simpler and more stable to
+train.
+
+## Limitations
+
+- **Purely offline.** DPO trains on a fixed, pre-collected preference dataset
+  and never samples fresh responses from the policy during training — RLHF's
+  online rollouts let the reward model evaluate the *current* policy's actual
+  outputs as it changes, giving it a moving target to correct against; DPO's
+  reference distribution is fixed at the start, which can make it less robust
+  to distribution shift as the policy diverges from its initial behavior over
+  training.
+- **Sensitive to the reference model.** Since DPO's implicit reward is
+  defined *relative to* `π_ref`, a poorly chosen or poorly calibrated
+  reference model can bias the entire training signal — the reference isn't
+  incidental, it's baked directly into the objective.
+- **Can overfit to the preference data's specific distribution**, including
+  its idiosyncrasies or biases in how responses were compared, more directly
+  than a separately trained reward model (which can sometimes generalize
+  better past the exact seen comparisons).
+- **Doesn't inherently support more nuanced feedback signals** like scalar
+  ratings, multi-turn credit assignment, or process-level supervision
+  (rewarding intermediate reasoning steps, not just final outputs) as
+  naturally as reward-model-based RL — this gap motivated the follow-up work
+  below.
+
+## What came after
+
+- **IPO (Identity Preference Optimization)** addressed a specific overfitting
+  failure mode in DPO's loss where, with certain data, the sigmoid loss can
+  push probabilities toward extremes rather than converging to a sensible
+  preference margin, by proposing a bounded alternative loss.
+- **KTO (Kahneman-Tversky Optimization)** removed the requirement for paired
+  preference data entirely, using only a binary "good/bad" signal per
+  response (grounded in prospect theory), which is often cheaper to collect
+  at scale than pairwise comparisons.
+- **ORPO** merged the supervised fine-tuning and preference-alignment stages
+  into a single training pass, removing the need for a separate SFT warm-start
+  before preference tuning.
+- **SimPO** removed the reference model dependency entirely, replacing DPO's
+  reference-relative reward with a length-normalized reward computed directly
+  from the policy, simplifying the pipeline further and reducing memory (no
+  frozen reference model copy needed during training).
+- Across labs, DPO and its descendants displaced PPO-based RLHF as the
+  default alignment technique for most open-weight model releases, precisely
+  because of the training stability and engineering simplicity the original
+  paper's reparameterization unlocked — PPO-based RLHF remains in use
+  primarily at frontier labs with the infrastructure and expertise to run it
+  reliably at scale, and is increasingly reserved for cases needing online,
+  iterative preference collection.
+
+## How it's actually used in production today
+
+DPO (or one of its simplified descendants — KTO, ORPO, SimPO) is the default
+final alignment stage for the overwhelming majority of open-weight
+instruction-tuned models released today, applied after standard supervised
+fine-tuning on a base model. Its appeal in production is exactly what the
+paper promised: it slots into a normal supervised-training pipeline (no RL
+infrastructure, no reward model to serve or maintain during training), making
+preference alignment achievable by teams without dedicated RL engineering
+resources — which is most teams.
+
+## Comparison: PPO-based RLHF vs. DPO
+
+| Dimension | PPO-based RLHF | DPO |
+|---|---|---|
+| Separate reward model | Required | Not required — reward is implicit in the policy |
+| Training loop type | Reinforcement learning (online rollouts) | Supervised, classification-style loss |
+| Stability / tuning difficulty | Notoriously sensitive to hyperparameters | Comparable to standard fine-tuning |
+| Compute / infrastructure needs | High (policy + reward model + value model, online sampling) | Lower (policy + frozen reference, offline data) |
+| Preference data usage | Trains reward model, then used indirectly via RL | Used directly in the training loss |
+| Adapts to a policy that has drifted during training | Yes, via online rollouts | No, preference data and reference are fixed upfront |

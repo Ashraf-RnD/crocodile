@@ -1,0 +1,60 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Matrix Multiplication"
+level: expert
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "matrix-multiplication"
+estReadTime: 10
+resources:
+  - type: article
+    title: "NVIDIA — Tensor Core matmul programming guide"
+    url: "https://docs.nvidia.com/deeplearning/performance/mixed-precision-training/index.html"
+---
+
+## FLOPs, memory bandwidth, and arithmetic intensity
+
+A matmul of `(m, k) @ (k, n)` costs `2·m·k·n` FLOPs but only needs to read `m·k + k·n`
+elements from memory. As matrices grow, compute grows faster than memory traffic —
+matmul becomes **compute-bound**, which is exactly why GPUs dedicate enormous silicon
+to matrix multiply units (Tensor Cores) rather than general memory bandwidth. Smaller
+operations (elementwise ops, small matmuls, activation functions) are often
+**memory-bound** instead — the bottleneck is moving data, not computing on it. This
+distinction (arithmetic intensity: FLOPs per byte moved) is the core reasoning tool
+for any GPU performance analysis, and it's why "kernel fusion" (combining several
+memory-bound ops into one pass) gives real speedups while fusing two compute-bound
+matmuls usually doesn't.
+
+## Strassen and sub-cubic algorithms — and why they're rarely used
+
+Naive matmul is `O(n^3)`. Strassen's algorithm achieves `O(n^2.807)` by trading
+multiplications for additions. In practice, deep learning frameworks don't use it: the
+crossover point where Strassen wins is very large, its numerical stability is worse,
+and it doesn't map cleanly onto GPU Tensor Core hardware which is optimized for the
+straightforward blocked/tiled `O(n^3)` algorithm executed at massive parallelism.
+Theoretical complexity and real-world hardware-optimized throughput are different
+questions.
+
+## Tiling and the memory hierarchy
+
+GPU matmul kernels (and CPU BLAS libraries like MKL/OpenBLAS) don't naively read from
+main memory for every element — they **tile** the computation: load small blocks of
+`A` and `B` into fast on-chip memory (shared memory / L1 cache), compute a partial
+result, and reuse those blocks across many multiply-adds before evicting them. This is
+why matmul performance is dramatically sensitive to matrix size and shape relative to
+tile size — production kernels (cuBLAS, cuDNN) select from dozens of tuned kernel
+variants based on the exact shapes involved, which is why the same logical matmul can
+run at very different effective FLOPs/sec depending on dimensions.
+
+## Precision-dependent throughput
+
+| Format | Relative Tensor Core throughput | Typical use |
+|---|---|---|
+| FP32 | 1x (baseline) | Reference / debugging |
+| TF32 | ~4-8x | Default "free" speedup on Ampere+ GPUs, minor precision loss |
+| FP16/BF16 | ~8-16x | Standard mixed-precision training |
+| INT8 | ~16-32x | Quantized inference |
+
+This is why declaring a model's "FLOPs" without specifying precision is meaningless
+for real throughput comparisons — the same matmul can be many times faster purely by
+changing dtype, independent of any algorithmic change.

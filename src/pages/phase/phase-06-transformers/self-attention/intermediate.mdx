@@ -1,0 +1,91 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Self-Attention"
+level: intermediate
+phaseSlug: "phase-06-transformers"
+phaseName: "Transformers"
+topicSlug: "self-attention"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "PyTorch — torch.nn.MultiheadAttention"
+    url: "https://pytorch.org/docs/stable/generated/torch.nn.MultiheadAttention.html"
+  - type: article
+    title: "The Annotated Transformer (Harvard NLP)"
+    url: "https://nlp.seas.harvard.edu/annotated-transformer/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Building a real self-attention layer
+
+Unlike the toy example at the beginner level, a real self-attention layer learns
+**three separate linear projections** so that `Q`, `K`, and `V` are different views
+of the same input — this separation is what lets a token learn to look for something
+different from what it advertises about itself.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class SelfAttention(nn.Module):
+    def __init__(self, d_model, causal=False):
+        super().__init__()
+        self.q_proj = nn.Linear(d_model, d_model)
+        self.k_proj = nn.Linear(d_model, d_model)
+        self.v_proj = nn.Linear(d_model, d_model)
+        self.out_proj = nn.Linear(d_model, d_model)
+        self.causal = causal
+
+    def forward(self, x):
+        # x: (batch, seq_len, d_model) — same tensor produces Q, K, and V
+        q, k, v = self.q_proj(x), self.k_proj(x), self.v_proj(x)
+        out = F.scaled_dot_product_attention(q, k, v, is_causal=self.causal)
+        return self.out_proj(out)
+
+layer = SelfAttention(d_model=64)
+x = torch.randn(2, 10, 64)   # batch=2, seq_len=10, d_model=64
+out = layer(x)
+print(out.shape)  # torch.Size([2, 10, 64]) — same shape as input, context-enriched
+```
+
+The defining feature is `Q`, `K`, and `V` all coming from **the same input tensor `x`**
+— this is what "self" in self-attention means, as opposed to cross-attention (used in
+encoder-decoder models), where queries come from one sequence and keys/values from
+another.
+
+<Mermaid client:visible code={`flowchart TB
+  X["Input sequence X"] --> Qp["Q proj"]
+  X --> Kp["K proj"]
+  X --> Vp["V proj"]
+  Qp --> Attn["Scaled dot-product attention"]
+  Kp --> Attn
+  Vp --> Attn
+  Attn --> Out["Context-aware output (same shape as X)"]`} />
+
+## Self-attention vs. cross-attention
+
+| | Self-attention | Cross-attention |
+|---|---|---|
+| Q comes from | sequence A | sequence A (e.g. decoder) |
+| K, V come from | sequence A (same) | sequence B (e.g. encoder output) |
+| Used in | BERT, GPT layers, encoder/decoder layers | encoder-decoder bridge (e.g. T5, original Transformer decoder) |
+
+## Where it shows up in production models
+
+- **BERT** stacks self-attention layers with no causal mask — every token sees every
+  other token in both directions, ideal for understanding tasks.
+- **GPT** stacks self-attention layers *with* a causal mask (`is_causal=True` above)
+  — each token only sees itself and earlier tokens, required for autoregressive
+  generation.
+- **Vision Transformers (ViT)** apply the exact same mechanism to image patches
+  instead of word tokens — self-attention is modality-agnostic as long as you can
+  tokenize your input into a sequence.
+
+## A subtlety: self-attention has no notion of order
+
+Because self-attention compares every token to every other token via dot products,
+shuffling the input sequence would shuffle the output identically — the mechanism
+itself is **permutation-equivariant**. This is why positional encoding (covered
+separately) is not optional in Transformers: without it, "dog bites man" and
+"man bites dog" would look identical to a pure self-attention layer.

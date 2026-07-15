@@ -1,0 +1,103 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "NumPy"
+level: intermediate
+phaseSlug: "phase-01-python-for-ai"
+phaseName: "Python for AI"
+topicSlug: "numpy"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "NumPy — Broadcasting"
+    url: "https://numpy.org/doc/stable/user/basics.broadcasting.html"
+  - type: article
+    title: "Real Python — NumPy Array Programming"
+    url: "https://realpython.com/numpy-array-programming/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Broadcasting: NumPy's most-used trick
+
+Broadcasting lets NumPy apply an operation between arrays of *different* shapes
+without you writing a loop or manually repeating data. This is exactly how you
+normalize a batch of feature vectors, subtract a mean image from a batch of images,
+or add a bias vector to every row of a matrix in a neural net layer.
+
+```python
+import numpy as np
+
+# A batch of 3 samples, each with 4 features
+batch = np.array([
+    [1.0, 2.0, 3.0, 4.0],
+    [5.0, 6.0, 7.0, 8.0],
+    [9.0, 10.0, 11.0, 12.0],
+])
+
+feature_mean = batch.mean(axis=0)   # shape (4,) — mean of each column
+feature_std = batch.std(axis=0)     # shape (4,)
+
+normalized = (batch - feature_mean) / feature_std  # shape (3, 4)
+```
+
+`batch` has shape `(3, 4)` and `feature_mean` has shape `(4,)` — NumPy "stretches"
+the smaller array across the missing dimension so the subtraction lines up
+element-wise per row. No loop, no manual tiling.
+
+<Mermaid client:visible code={`flowchart TB
+  B["batch shape (3, 4)"] --> Op["subtract"]
+  M["feature_mean shape (4,)"] -->|"broadcast to (3, 4)"| Op
+  Op --> R["result shape (3, 4)"]`} />
+
+### The broadcasting rule in one sentence
+
+Two dimensions are compatible if they're equal, or one of them is 1. NumPy compares
+shapes from the *right*, padding missing dimensions with 1.
+
+```python
+a = np.ones((3, 4))       # (3, 4)
+b = np.ones((4,))         # (4,)   -> treated as (1, 4) -> broadcasts to (3, 4)
+c = np.ones((3, 1))       # (3, 1) -> broadcasts to (3, 4)
+d = np.ones((5,))         # (5,)   -> incompatible with (3, 4), raises ValueError
+```
+
+This is the exact same rule that governs shape mismatches in PyTorch tensors — once
+you understand it here, tensor shape errors in model code become much easier to
+debug.
+
+## `axis` is the parameter you'll fight with most
+
+Reductions (`sum`, `mean`, `max`, ...) need to know *which* dimension to collapse.
+
+```python
+grades = np.array([
+    [90, 85, 70],   # student A
+    [60, 75, 80],   # student B
+])
+
+grades.mean(axis=0)  # [75. 80. 75.]  — average per column (per assignment)
+grades.mean(axis=1)  # [81.67 71.67]  — average per row (per student)
+```
+
+A quick mental model: `axis=0` moves *down* the rows (collapses rows), `axis=1`
+moves *across* columns (collapses columns). This is the same convention pandas and
+PyTorch use.
+
+## Vectorizing instead of looping
+
+```python
+def normalize_slow(rows):
+    result = []
+    for row in rows:
+        row_min, row_max = min(row), max(row)
+        result.append([(x - row_min) / (row_max - row_min) for x in row])
+    return result
+
+# vs. the vectorized version, ~50-100x faster on large arrays
+def normalize_fast(arr):
+    row_min = arr.min(axis=1, keepdims=True)
+    row_max = arr.max(axis=1, keepdims=True)
+    return (arr - row_min) / (row_max - row_min)
+```
+
+`keepdims=True` keeps the reduced axis as size 1 instead of dropping it, which is
+often exactly what broadcasting needs to line the shapes back up.

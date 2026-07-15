@@ -1,0 +1,73 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Segment Anything"
+level: expert
+phaseSlug: "phase-09-multimodal-ai"
+phaseName: "Multimodal AI"
+topicSlug: "segment-anything"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "SAM 2 (video segmentation) — Meta AI"
+    url: "https://ai.meta.com/sam2/"
+  - type: article
+    title: "Segment Anything (original paper)"
+    url: "https://arxiv.org/abs/2304.02643"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## SAM vs SAM 2: adding memory for video
+
+The original SAM operates on a single image with no notion of time. **SAM 2** extends
+the same prompt-based interface to video by adding a **memory bank**: after segmenting
+an object in one frame (via a click or box), SAM 2 propagates that mask forward through
+subsequent frames using a lightweight memory attention mechanism, re-identifying the
+object even through brief occlusion — without re-prompting every frame.
+
+<Mermaid client:visible code={`flowchart LR
+  A[Frame 1: user click] --> B[Mask generated]
+  B --> C[Store in memory bank]
+  C --> D[Frame 2: memory attention]
+  D --> E[Propagated mask]
+  E --> F[Frame 3: memory attention]
+  F --> G[Propagated mask, no reprompt]`} />
+
+This is what makes SAM 2 usable for video editing tools (Meta's own products use it) and
+object-tracking pipelines — it turns single-click segmentation into single-click
+*tracking*.
+
+## Zero-shot generalization vs domain-specific fine-tuning
+
+SAM's headline strength — segmenting objects it's never explicitly seen — is also its
+sharpest limitation in specialized domains. It was trained on the SA-1B dataset (11M
+natural images), so it generalizes remarkably well to everyday photos but noticeably
+worse on domains with different visual statistics:
+
+| Domain | Zero-shot SAM quality | Typical production approach |
+|---|---|---|
+| Everyday photos, e-commerce | Excellent | Use SAM directly |
+| Satellite/aerial imagery | Moderate, boundary noise on small objects | Fine-tune on domain data or use specialized models |
+| Medical imaging (CT/MRI) | Poor on low-contrast tissue boundaries | Fine-tune SAM's mask decoder on labeled medical masks, freeze the image encoder |
+| Industrial defect detection | Moderate, misses subtle texture defects | Combine SAM's masks with a separate classifier for defect-specific decisions |
+
+The common fine-tuning pattern freezes SAM's expensive ViT image encoder (its
+generic visual features transfer reasonably well) and only fine-tunes the lightweight
+mask decoder on domain-labeled data — this needs far less labeled data and compute than
+training a segmentation model from scratch.
+
+## Backbone size is a latency/accuracy dial
+
+SAM ships three ViT backbone sizes (`vit_b`, `vit_l`, `vit_h`), and picking one is a
+real production trade-off, not a default-and-forget choice:
+
+- `vit_b` (~375MB): fastest, suitable for near-real-time interactive tools
+- `vit_h` (~2.6GB): highest mask quality, but multi-hundred-millisecond inference even
+  on a good GPU — usually reserved for offline/batch annotation pipelines, not live UIs
+
+## Edge cases that still fail
+
+Thin structures (wires, individual hairs, chain-link fences) and transparent or
+reflective objects (glass, water) remain hard for SAM — the mask decoder tends to
+either miss thin structures entirely or overshoot onto adjacent background, since these
+violate the "coherent region with a clear boundary" assumption baked into how masks are
+represented and supervised during training.

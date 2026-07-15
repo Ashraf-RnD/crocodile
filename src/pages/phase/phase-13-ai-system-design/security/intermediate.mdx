@@ -1,0 +1,104 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Security"
+level: intermediate
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "security"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "OWASP — Top 10 for Large Language Model Applications"
+    url: "https://owasp.org/www-project-top-10-for-large-language-model-applications/"
+  - type: article
+    title: "Simon Willison — Prompt injection explained"
+    url: "https://simonwillison.net/2022/Sep/12/prompt-injection/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The AI-specific threat model
+
+Beyond standard application security (auth, transport encryption, input
+validation), AI systems introduce threats specific to how LLMs process
+untrusted text and take action. The OWASP Top 10 for LLM Applications is a
+useful checklist; the highest-impact ones for system design are prompt
+injection, insecure output handling, excessive agency, and sensitive
+information disclosure.
+
+<Mermaid client:visible code={`flowchart TB
+  Input["User input / retrieved content / tool output"] --> Sanitize["Input handling:<br/>treat as untrusted, never as instructions"]
+  Sanitize --> Model["LLM"]
+  Model --> OutputCheck["Output handling:<br/>never execute/render raw model output unsanitized"]
+  OutputCheck --> ToolGate{"Tool call requested?"}
+  ToolGate -->|yes| Auth["Authorization check:<br/>is this action allowed for this user/context?"]
+  Auth -->|allowed| Execute["Execute with least-privilege credentials"]
+  Auth -->|denied| Block["Blocked, logged"]
+  ToolGate -->|no| Respond["Return text response"]`} />
+
+## Prompt injection: direct and indirect
+
+- **Direct injection**: the user directly types an attempt to override
+  system instructions ("ignore previous instructions...").
+- **Indirect injection**: malicious instructions are embedded in content the
+  model reads as part of its context — a web page fetched during search, a
+  document uploaded for summarization, an email the model is asked to
+  triage — and the model treats that embedded text as instructions to
+  follow. This is harder to defend against because the attacker never talks
+  to your system directly; they poison content your system later ingests.
+
+Mitigations don't eliminate the risk (this is an open problem, not a solved
+one) but reduce it: clearly delimiting untrusted content in the prompt,
+instructing the model explicitly to treat retrieved/uploaded content as
+data rather than instructions, and — most importantly — never granting the
+model's output direct, unchecked authority over sensitive actions.
+
+## Insecure output handling
+
+Treating LLM output as automatically safe to execute, render, or store is a
+real vulnerability class: if the model's text output gets passed directly
+into a shell command, a SQL query, or rendered as HTML without escaping, an
+attacker who can influence the model's output (via prompt injection or
+otherwise) can achieve command injection, SQL injection, or XSS — this is
+the exact same class of bug as trusting any other unsanitized user input,
+just one layer removed through the model.
+
+```python
+# Vulnerable: model output executed directly
+os.system(llm_response)  # never do this
+
+# Better: model output constrained to a safe, validated action space
+action = parse_and_validate(llm_response, allowed_actions=ALLOWED_TOOLS)
+if action:
+    execute_tool(action)
+```
+
+## Excessive agency
+
+Giving an AI agent broad tool access "to be flexible" is a common but
+risky default. Least-privilege applies here just as it does to any
+system: an agent that only needs to *read* calendar events shouldn't also
+have permission to *delete* them, and a support bot shouldn't have the same
+database credentials as an internal admin tool. Scoping each agent's actual
+tool permissions tightly limits the blast radius if the agent is
+manipulated into misbehaving.
+
+## Sensitive information disclosure
+
+LLMs can inadvertently leak information they were given in context —
+system prompts, retrieved documents containing other users' data, or
+training data memorization. Practical mitigations: never put secrets
+(API keys, internal credentials) in a system prompt the model could be
+tricked into repeating, apply access control *before* retrieval so a RAG
+system never fetches a document the requesting user isn't authorized to
+see in the first place (rather than trusting the model not to repeat it),
+and treat "the model refused to reveal X" as a soft mitigation, not a hard
+guarantee.
+
+## Authentication and authorization still apply fully
+
+None of the above replaces standard practice: authenticate every request,
+authorize every action against the actual requesting user's permissions
+(not the AI system's own broad service credentials), encrypt data in
+transit and at rest, and log access to sensitive operations. AI-specific
+threats are additive to standard application security, not a replacement
+for it.

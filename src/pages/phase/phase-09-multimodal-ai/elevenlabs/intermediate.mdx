@@ -1,0 +1,78 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "ElevenLabs"
+level: intermediate
+phaseSlug: "phase-09-multimodal-ai"
+phaseName: "Multimodal AI"
+topicSlug: "elevenlabs"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "ElevenLabs — Streaming text to speech"
+    url: "https://elevenlabs.io/docs/api-reference/streaming"
+  - type: docs
+    title: "ElevenLabs — Voice cloning"
+    url: "https://elevenlabs.io/docs/product/voices/voice-cloning"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Streaming for low-latency voice agents
+
+Generating a full audio file before playback starts is fine for an audiobook, but far
+too slow for a live voice agent — waiting for an entire response to synthesize before
+the user hears anything feels broken. ElevenLabs supports streaming synthesis, sending
+audio chunks as they're generated:
+
+<Mermaid client:visible code={`flowchart LR
+  A[LLM generates response text] --> B["Stream text to TTS\nas it's produced"]
+  B --> C["ElevenLabs streams\naudio chunks back"]
+  C --> D[Play audio as it arrives]
+  D --> E["User hears response\nbefore full text is done"]`} />
+
+```python
+audio_stream = client.text_to_speech.stream(
+    voice_id="JBFqnCBsd6RMkjVDRZzb",
+    text=llm_response_text,
+    model_id="eleven_flash_v2_5",  # optimized for low latency
+)
+
+for chunk in audio_stream:
+    play_chunk(chunk)  # send to an audio output buffer immediately
+```
+
+`eleven_flash_v2_5` trades a small amount of voice quality for meaningfully lower
+time-to-first-audio-byte — the right choice for conversational agents, where perceived
+responsiveness matters more than studio-grade audio fidelity.
+
+## Voice cloning
+
+Beyond preset voices, ElevenLabs supports cloning a voice from a short sample —
+commonly used for narrators who want a consistent branded voice across content, or
+for accessibility tools that preserve a user's own voice after they lose the ability
+to speak:
+
+```python
+voice = client.voices.add(
+    name="narrator_voice",
+    files=["sample_1.mp3", "sample_2.mp3"],  # a few minutes of clean audio
+)
+
+audio = client.text_to_speech.convert(
+    voice_id=voice.voice_id,
+    text="This is the cloned voice speaking new text.",
+    model_id="eleven_multilingual_v2",
+)
+```
+
+A handful of minutes of clean, single-speaker audio is usually enough for a
+recognizable clone — production quality clones typically use more, cleaner source
+audio and multiple takes.
+
+## Where this shows up in production
+
+- **IVR/phone systems**: dynamic, natural-sounding prompts instead of robotic
+  pre-recorded menus
+- **Audiobook/narration pipelines**: batch-converting long-form text with consistent
+  voice and pacing
+- **Voice agents**: streaming TTS chained directly after an LLM's streaming text
+  output, so speech generation starts before the LLM has finished its full response

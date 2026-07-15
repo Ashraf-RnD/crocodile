@@ -1,0 +1,82 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "TensorRT-LLM"
+level: beginner
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "tensorrt-llm"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "NVIDIA TensorRT-LLM — Documentation"
+    url: "https://nvidia.github.io/TensorRT-LLM/"
+---
+
+## A model compiler, not just a runner
+
+When you load a model with plain PyTorch or Hugging Face `transformers`, Python
+interprets your model layer-by-layer, every single forward pass. **TensorRT-LLM** takes
+a different approach: it compiles your model *ahead of time* into a specialized binary
+called an "engine" — fusing operations, picking the fastest kernel implementations for
+your exact GPU, and removing Python's per-step overhead entirely. Think of the
+difference between an interpreted script and a compiled executable: same logic, but the
+compiled version has been optimized specifically for the machine it runs on.
+
+This upfront compilation step is the key trade-off to understand: you pay compile time
+once, and in exchange every subsequent inference request runs dramatically faster.
+
+## The two-step workflow
+
+Unlike vLLM, where you point at a Hugging Face model folder and it just runs,
+TensorRT-LLM requires you to *build* an engine first:
+
+```bash
+# Step 1: convert the Hugging Face checkpoint into TensorRT-LLM's format
+python convert_checkpoint.py \
+  --model_dir ./llama-3-8b-hf \
+  --output_dir ./llama-3-8b-converted \
+  --dtype float16
+
+# Step 2: compile the converted checkpoint into a GPU-specific engine
+trtllm-build \
+  --checkpoint_dir ./llama-3-8b-converted \
+  --output_dir ./llama-3-8b-engine \
+  --gemm_plugin float16 \
+  --max_batch_size 8
+```
+
+The result in `./llama-3-8b-engine` is a compiled artifact tied to the GPU architecture
+you built it on (e.g. an H100) — it won't run on a different GPU family without
+rebuilding.
+
+## Why bother compiling at all
+
+The build step lets TensorRT-LLM do things a general-purpose runtime can't:
+
+- **Kernel fusion** — combine several small GPU operations (e.g. attention + softmax +
+  matmul steps) into one larger, faster kernel, cutting launch overhead.
+- **Hardware-specific tuning** — pick the best-performing kernel variant for your
+  specific GPU (H100 vs A100 vs L40S), something a generic runtime can't do without
+  knowing the target hardware in advance.
+- **No Python interpreter in the hot path** — the compiled engine executes as native
+  GPU code, avoiding Python's per-op dispatch cost.
+
+The cost is flexibility: swapping to a different model, or even just changing the max
+batch size significantly, generally means rebuilding the engine — a process that can
+take several minutes to over an hour depending on model size.
+
+## Try it yourself
+
+You have a model you plan to serve at massive, stable scale for months, and a model
+you're actively experimenting with and swapping out every day during research. Which
+one is a better fit for TensorRT-LLM's build-then-serve workflow, and why?
+
+<details>
+<summary>Solution</summary>
+
+The stable, long-running production model is the better fit. You pay the engine-build
+cost once and then benefit from the compiled performance for as long as the model stays
+unchanged. The actively-changing research model would force you to rebuild the engine
+constantly, turning TensorRT-LLM's biggest strength (ahead-of-time optimization) into
+wasted iteration time — a load-and-run runtime like vLLM fits that workflow much better.
+</details>

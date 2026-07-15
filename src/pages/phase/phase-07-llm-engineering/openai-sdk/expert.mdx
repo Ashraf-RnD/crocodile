@@ -1,0 +1,119 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "OpenAI SDK"
+level: expert
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "openai-sdk"
+estReadTime: 12
+resources:
+  - type: docs
+    title: "OpenAI — Batch API"
+    url: "https://platform.openai.com/docs/guides/batch"
+  - type: docs
+    title: "OpenAI — Prompt Caching"
+    url: "https://platform.openai.com/docs/guides/prompt-caching"
+---
+
+## Cost engineering: the Batch API and prompt caching
+
+For workloads without a hard real-time latency requirement (bulk classification,
+offline evaluation, dataset labeling), the **Batch API** processes requests
+asynchronously within a 24-hour window at roughly half the per-token cost of
+synchronous calls:
+
+```python
+# 1. Upload a JSONL file of requests
+batch_input = client.files.create(file=open("requests.jsonl", "rb"), purpose="batch")
+
+# 2. Create the batch job
+batch = client.batches.create(
+    input_file_id=batch_input.id,
+    endpoint="/v1/chat/completions",
+    completion_window="24h",
+)
+
+# 3. Poll for completion, then download results
+status = client.batches.retrieve(batch.id)
+if status.status == "completed":
+    results = client.files.content(status.output_file_id)
+```
+
+Combined with **automatic prompt caching** (OpenAI caches repeated prompt prefixes
+≥1024 tokens automatically, no explicit opt-in required, unlike Anthropic's explicit
+`cache_control` markers), the cost profile of a well-engineered high-volume pipeline
+can differ from a naive one by a large multiple — this is a real architectural lever,
+not a minor optimization, at any meaningful production request volume.
+
+## Idempotency keys for safe retries
+
+Any retry logic (whether the SDK's built-in retries or your own) risks duplicate
+side effects if a request actually succeeded server-side but the response was lost
+before your client saw it (a timeout on an otherwise-completed request). The SDK
+supports idempotency keys to make retries provably safe:
+
+```python
+response = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=messages,
+    extra_headers={"Idempotency-Key": request_uuid},
+)
+```
+
+Without this, a naive retry-on-timeout policy can occasionally cause a request to be
+processed twice server-side — usually harmless for a stateless completion, but a real
+concern for any endpoint with side effects (e.g. functions that trigger the Batch API
+or Assistants API's persistent resources).
+
+## Structured Outputs internals: `strict` mode constraints
+
+`strict: true` mode compiles your JSON schema into a constrained decoding grammar,
+which comes with real schema restrictions you need to design around: every object
+requires `additionalProperties: false`, every field must be present in `required`
+(optionality is expressed via nullable types, not omission), and there are limits on
+schema nesting depth and total property count. These aren't arbitrary API
+limitations — they're a direct consequence of what's tractable to compile into an
+efficient constrained-decoding grammar at inference time. Designing your Pydantic
+models with these constraints in mind from the start avoids late discovery of schema
+incompatibilities.
+
+## Multi-modal and the Responses API's tool orchestration
+
+The Responses API's built-in tools (web search, file search, code interpreter,
+computer use) run *server-side* — OpenAI's infrastructure executes the tool call and
+feeds the result back into the same model turn, rather than your code executing a
+custom function and round-tripping the result yourself:
+
+```python
+response = client.responses.create(
+    model="gpt-4o",
+    input="Analyze this CSV and tell me the trend",
+    tools=[{"type": "code_interpreter", "container": {"type": "auto"}}],
+    attachments=[{"file_id": uploaded_file.id, "tools": [{"type": "code_interpreter"}]}],
+)
+```
+
+This trades control (you can't inspect or modify the sandboxed execution the way you
+can a custom `TOOLS = {"name": fn}` dispatch) for meaningfully less integration work
+for well-trodden capabilities — a real trade-off between "build it yourself for full
+control" and "use OpenAI's hosted implementation for less engineering effort."
+
+## Trade-offs: raw SDK vs. framework abstraction (recap from a systems view)
+
+| Concern | Raw OpenAI SDK | Framework (LangChain, etc.) on top |
+|---|---|---|
+| Latency/cost transparency | Full visibility into every request | Some abstraction overhead to reason through |
+| Provider portability | None — OpenAI-specific | High, if designed for multi-provider |
+| Access to newest OpenAI-specific features (Batch API, Responses API tools) | Immediate | Often lags behind official SDK releases |
+| Boilerplate for common patterns (retries, agent loops) | You write it | Provided, at the cost of an abstraction layer |
+
+## Operational practices at scale
+
+Production systems calling the OpenAI SDK at volume should: track token usage and
+cost per logical request type (not just aggregate spend) to catch regressions when a
+prompt or model change silently increases token consumption; set per-request and
+per-user rate limiting independent of OpenAI's own limits, to fail gracefully rather
+than cascading a burst of `429`s; and pin `model` to a specific dated snapshot
+(`gpt-4o-2024-08-06` rather than the floating `gpt-4o` alias) for anything where
+consistent behavior across silent model updates matters more than always running the
+newest default version.

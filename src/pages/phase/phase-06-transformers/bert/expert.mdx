@@ -1,0 +1,97 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "BERT"
+level: expert
+phaseSlug: "phase-06-transformers"
+phaseName: "Transformers"
+topicSlug: "bert"
+estReadTime: 12
+resources:
+  - type: article
+    title: "RoBERTa: A Robustly Optimized BERT Pretraining Approach"
+    url: "https://arxiv.org/abs/1907.11692"
+  - type: article
+    title: "ELECTRA: Pre-training Text Encoders as Discriminators Rather Than Generators"
+    url: "https://arxiv.org/abs/2003.10555"
+---
+
+## MLM's pretrain/finetune mismatch, and why it's a real (if minor) issue
+
+Masked Language Modeling trains BERT to predict tokens replaced with a literal
+`[MASK]` token, but `[MASK]` never appears in real downstream fine-tuning data — this
+is a distributional mismatch between pretraining and fine-tuning. BERT's original
+recipe partially addresses this: of the 15% of tokens selected for masking, only 80%
+are replaced with `[MASK]`, 10% are replaced with a random token, and 10% are left
+unchanged — forcing the model to maintain accurate representations even for tokens
+that look "normal," rather than only learning to react to the artificial `[MASK]`
+symbol. This detail is easy to skip past but is a deliberate mitigation for a genuine
+train/inference distribution gap.
+
+## RoBERTa: an ablation study that became its own model
+
+RoBERTa's core finding was that BERT was significantly **undertrained** relative to
+its architecture's actual capacity. By removing NSP, training with much larger
+batches, more data, longer training, and dynamic (rather than static) masking
+patterns, RoBERTa achieved meaningfully better downstream results using the *exact
+same architecture* as BERT. This is a critical lesson for interpreting any
+architecture paper's reported results: architecture and training recipe are
+separable variables, and a well-known architecture's true ceiling is often
+underestimated by the specific hyperparameters its introducing paper happened to use.
+
+## ELECTRA: a more sample-efficient pretraining objective
+
+MLM only computes a loss on the ~15% of masked positions per example — the other 85%
+of tokens contribute nothing to the gradient for that forward pass, which is
+sample-inefficient. **ELECTRA** replaces MLM with **replaced token detection**: a
+small generator model replaces some tokens with plausible alternatives, and the main
+model (a discriminator, architecturally similar to BERT) predicts, for *every*
+token, whether it was replaced or original. Because the loss is computed over all
+positions rather than just masked ones, ELECTRA reaches comparable downstream
+performance to BERT/RoBERTa using substantially less pretraining compute — a
+demonstration that the pretraining *objective*, independent of the underlying
+encoder architecture, is a major lever on pretraining efficiency.
+
+## Bidirectionality's structural ceiling: why BERT can't generate
+
+BERT's bidirectionality isn't just a training detail — it's architecturally
+incompatible with autoregressive generation. Every layer's self-attention has full
+access to the entire input, including positions "after" the one being computed;
+there is no way to causally mask this without fundamentally changing what the model
+is. This is why encoder-decoder (T5, BART) and decoder-only (GPT) models remain
+necessary for generation tasks, and why BERT-style pretraining, despite its
+downstream classification strength, never became the basis for general-purpose text
+generation systems. Some hybrid approaches exist (e.g., using MLM-style pretraining
+for a decoder that's later adapted, or T5's span-corruption objective which borrows
+BERT's masking spirit within an encoder-decoder frame), but pure bidirectional
+encoders and autoregressive decoders remain structurally distinct model families for
+this reason.
+
+## Distillation: shrinking BERT for production latency budgets
+
+BERT-base (110M parameters) is often still too slow/large for latency-sensitive
+production serving. **DistilBERT** uses knowledge distillation — training a smaller
+student model to match a larger teacher's output distributions (and intermediate
+representations) rather than training from raw text alone — to retain about 97% of
+BERT's language understanding capability at roughly 60% of the size and 60% faster
+inference. This is a standard production pattern: use the full-size model to
+establish a quality ceiling, then distill for deployment where latency or cost
+constraints make the full model impractical.
+
+## Trade-off summary
+
+| Variant | Key change from BERT | Effect |
+|---|---|---|
+| RoBERTa | Removes NSP, more data/compute, dynamic masking | Better downstream accuracy, same architecture |
+| ELECTRA | Replaced-token-detection objective instead of MLM | Much better compute efficiency for equivalent quality |
+| DistilBERT | Knowledge distillation to a smaller student | ~40% smaller, ~60% faster, small accuracy trade-off |
+| DeBERTa | Disentangled content/position attention | Better accuracy at similar scale, more complex attention computation |
+
+## The practical engineering takeaway
+
+"BERT" in production usage today rarely means the original 2018 checkpoint —
+it means the *encoder-pretraining paradigm* BERT established, with RoBERTa-style
+training recipes, ELECTRA-style objectives, or distilled variants chosen based on
+the specific accuracy/latency/compute trade-off a given deployment needs. Treating
+these as interchangeable "BERT variants" without understanding what specifically
+changed in each is a common source of confusion when comparing benchmark numbers
+across papers.

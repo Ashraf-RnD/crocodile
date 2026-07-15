@@ -1,0 +1,99 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Quantization"
+level: intermediate
+phaseSlug: "phase-11-ai-infrastructure"
+phaseName: "AI Infrastructure"
+topicSlug: "quantization"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "bitsandbytes — 4-bit and 8-bit Quantization"
+    url: "https://huggingface.co/docs/bitsandbytes/main/en/index"
+  - type: article
+    title: "GPTQ: Accurate Post-Training Quantization for GPTs"
+    url: "https://arxiv.org/abs/2210.17323"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The precision spectrum, with real numbers
+
+For a 7B-parameter model, here's roughly what each precision level costs in weight
+memory alone (activations, KV cache, and optimizer state are separate):
+
+| Precision | Bytes/param | ~Memory (7B model) | Typical use |
+|---|---|---|---|
+| FP32 | 4 | ~28GB | Training, rarely used for inference |
+| FP16 / BF16 | 2 | ~14GB | Default inference precision |
+| INT8 | 1 | ~7GB | Memory-constrained serving |
+| INT4 | 0.5 | ~3.5-4GB | Local/consumer hardware, edge |
+
+Each step down roughly halves memory and — with the right kernels — increases
+throughput, since moving fewer bytes from GPU memory to compute units is often the
+actual bottleneck (LLM inference is heavily memory-bandwidth-bound, not compute-bound).
+
+## PTQ vs QAT
+
+**Post-training quantization (PTQ)** takes an already-trained model and quantizes it
+afterward, no retraining involved — fast (minutes to hours) and the dominant approach
+for LLMs, because retraining a multi-billion-parameter model just to quantize it is
+usually not worth the cost. **Quantization-aware training (QAT)** simulates
+quantization *during* training or fine-tuning, so the model learns weights that are
+robust to the eventual rounding — higher final accuracy, but requires a full
+training/fine-tuning run, which is expensive and slow. In practice, PTQ (often with a
+calibration step) is what you reach for first; QAT is reserved for cases where PTQ's
+accuracy loss is unacceptable and you have the compute budget to fine-tune.
+
+## Calibration: why PTQ needs sample data
+
+Naively rounding every weight independently ("round-to-nearest") ignores how weights
+actually get used during inference. Better PTQ methods run a small **calibration
+dataset** (a few hundred representative prompts) through the model, observe the actual
+range and distribution of activations layer by layer, and choose quantization
+parameters (scale/zero-point) that minimize error on the ranges the model actually
+sees — rather than the theoretical min/max of the weights alone. This is why
+quantization tools ask for a calibration dataset, not just the model weights:
+
+```python
+from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+import torch
+
+bnb_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_quant_type="nf4",           # normal-float 4-bit, tuned for weight distributions
+    bnb_4bit_compute_dtype=torch.bfloat16,  # compute happens in bf16, weights stored in 4-bit
+    bnb_4bit_use_double_quant=True,       # quantize the quantization constants too
+)
+
+model = AutoModelForCausalLM.from_pretrained(
+    "meta-llama/Llama-3.1-8B-Instruct",
+    quantization_config=bnb_config,
+    device_map="auto",
+)
+```
+
+`bnb_4bit_compute_dtype` matters: weights sit in memory as 4-bit, but are dequantized
+to bf16 on the fly for the actual matrix multiply — this is why quantization saves
+memory but doesn't always save as much latency as you'd hope without fused kernels.
+
+## The quantization workflow
+
+<Mermaid client:visible code={`flowchart LR
+  A["Trained FP16/BF16 model"] --> B["Calibrate: run sample prompts, record activation ranges"]
+  B --> C["Quantize: compute scale/zero-point, round weights"]
+  C --> D["Validate: check perplexity / task accuracy vs baseline"]
+  D --> E["Deploy: serve quantized model"]
+  D -->|accuracy drop too large| F["Try smarter scheme (GPTQ/AWQ) or QAT"]`} />
+
+Validation is not optional — always compare perplexity or downstream task accuracy
+against the unquantized baseline before shipping. A model that "loads fine" can still
+have silently degraded outputs on tasks the quick smoke test didn't cover.
+
+## When 8-bit is enough vs when you need 4-bit
+
+INT8 is close to a free lunch — accuracy loss is usually negligible, and it's the
+safer default when memory isn't the tightest constraint. INT4 saves substantially more
+memory but starts to show measurable accuracy degradation with naive rounding,
+especially on reasoning-heavy tasks — which is why production 4-bit deployments
+usually reach for smarter schemes (GPTQ, AWQ, or GGUF k-quants) rather than plain
+round-to-nearest INT4.

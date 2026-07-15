@@ -1,0 +1,91 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "DeepSeek-V3"
+level: intermediate
+phaseSlug: "phase-14-research-literacy"
+phaseName: "Research Literacy"
+topicSlug: "deepseek-v3"
+estReadTime: 11
+resources:
+  - type: article
+    title: "DeepSeek-V3 Technical Report"
+    url: "https://arxiv.org/abs/2412.19437"
+  - type: article
+    title: "DeepSeek-V3's Architectural Revolution — technical breakdown"
+    url: "https://www.rohan-paul.com/p/deepseek-v3-technical-report-they"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Multi-head Latent Attention (MLA): compressing the KV cache
+
+During autoregressive generation, a Transformer must cache the key and value
+vectors of every previous token so it doesn't recompute them — the **KV
+cache** — and this cache's memory cost grows with context length and model
+size, often becoming the dominant memory cost at inference time. **MLA**
+compresses the keys and values into a much smaller latent vector before
+caching, and reconstructs the full-size keys/values from that latent
+representation on demand:
+
+```python
+# Conceptual sketch — not the exact paper implementation
+def mla_compress(x, W_down, W_up_k, W_up_v):
+    latent = x @ W_down          # compress to a small latent dimension
+    # only `latent` is cached, not the full-size K and V
+    k = latent @ W_up_k          # reconstructed on demand
+    v = latent @ W_up_v
+    return k, v, latent           # cache `latent`, discard k, v after use
+```
+
+This gives most of the memory savings of aggressive KV-cache compression
+techniques (like grouped-query attention) while preserving more of standard
+multi-head attention's representational quality, since the latent
+reconstruction is learned rather than simply sharing raw key/value
+projections across heads.
+
+## DeepSeekMoE: fine-grained experts plus shared experts
+
+Rather than a modest number of large experts (as in Mixtral), DeepSeek-V3
+uses **many smaller, more specialized experts**, giving the router finer
+control over which specific combination of narrow specializations best suits
+each token. It also designates a small number of **shared experts** that
+process every token unconditionally, intended to capture common knowledge so
+the routed experts don't each have to redundantly relearn it.
+
+<Mermaid client:visible code={`flowchart TB
+  Tok["Input token"] --> Shared["Shared experts (always active)"]
+  Tok --> Router["Router"]
+  Router --> R1["Routed expert (selected)"]
+  Router --> R2["Routed expert (selected)"]
+  Router -.skipped.-> R3["Routed expert (not selected)"]
+  Shared --> Combine["Combine outputs"]
+  R1 --> Combine
+  R2 --> Combine
+  Combine --> Out["Layer output"]`} />
+
+## Auxiliary-loss-free load balancing
+
+Classic MoE load balancing (see the Mixture of Experts lesson) adds an
+auxiliary loss term that can interfere with the main training objective if
+weighted too strongly. DeepSeek-V3 instead maintains a per-expert bias term
+added to routing scores, adjusted up or down after each batch based on how
+overused or underused that expert was recently — nudging routing toward
+balance without directly injecting a competing loss gradient into the main
+optimization.
+
+## Multi-token prediction (MTP)
+
+Instead of only predicting the single next token at each position, DeepSeek-V3
+adds auxiliary heads that predict several tokens ahead during training. This
+denser training signal per forward pass improves data efficiency, and the
+same mechanism can optionally be reused at inference time for a form of
+speculative decoding to speed up generation.
+
+## FP8 mixed-precision training
+
+Where most prior frontier training used 16-bit (bf16/fp16) precision
+throughout, DeepSeek-V3 performs large portions of training computation in
+**8-bit floating point**, with careful precision management (higher precision
+kept for numerically sensitive accumulations) to avoid the training
+instability low-precision arithmetic can otherwise cause — a major
+contributor to the reported training compute savings, since 8-bit operations
+are roughly twice as fast as 16-bit ones on supporting hardware.

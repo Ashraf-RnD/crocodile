@@ -1,0 +1,79 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "LlamaIndex"
+level: beginner
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "llamaindex"
+estReadTime: 7
+resources:
+  - type: docs
+    title: "LlamaIndex — Starter Tutorial"
+    url: "https://docs.llamaindex.ai/en/stable/getting_started/starter_example/"
+  - type: docs
+    title: "LlamaIndex — High-Level Concepts"
+    url: "https://docs.llamaindex.ai/en/stable/getting_started/concepts/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Think of it as a librarian for your documents
+
+An LLM can't answer questions about your company's internal PDFs — it's never seen
+them. **LlamaIndex** is a library purpose-built for connecting LLMs to your own data:
+it reads your documents, organizes them so relevant pieces can be found quickly, and
+hands the right excerpts to the model when you ask a question. This overall pattern
+is called **RAG** (retrieval-augmented generation), and LlamaIndex is one of the two
+dominant libraries for building it (alongside LangChain).
+
+<Mermaid client:visible code={`flowchart LR
+  Docs[Your documents] --> Index[LlamaIndex builds a searchable index]
+  Q[Your question] --> Index
+  Index --> Retrieve[Finds the most relevant chunks]
+  Retrieve --> LLM[LLM answers using those chunks]
+  LLM --> A[Answer, grounded in your data]`} />
+
+### A minimal RAG example
+
+```python
+from llama_index.core import VectorStoreIndex, SimpleDirectoryReader
+
+# Load every file in a folder (PDFs, text files, markdown, etc.)
+documents = SimpleDirectoryReader("./company_docs").load_data()
+
+# Build a searchable index over them
+index = VectorStoreIndex.from_documents(documents)
+
+# Ask a question — LlamaIndex retrieves relevant chunks and asks the LLM
+query_engine = index.as_query_engine()
+response = query_engine.query("What is our company's refund policy?")
+print(response)
+```
+
+Four lines of actual logic: load documents, build an index, create a query engine,
+ask a question. Under the hood, LlamaIndex split your documents into chunks, turned
+each chunk into a vector embedding, and — when you asked your question — found the
+chunks most similar to it and fed them to the LLM as context.
+
+### Why not just paste the whole document into the prompt?
+
+For one small file, you could. LlamaIndex earns its keep once you have more documents
+than could ever fit in a context window — hundreds of PDFs, a whole wiki, years of
+support tickets. Instead of sending everything, it finds just the handful of relevant
+paragraphs for each specific question.
+
+### Try it yourself
+
+You have a folder of 200 customer support transcripts and want to ask "What are the
+most common complaints about shipping delays?" Would you paste all 200 transcripts
+into one prompt, or use LlamaIndex-style retrieval? Why?
+
+<details>
+<summary>Solution</summary>
+
+Use retrieval. 200 transcripts would almost certainly exceed any context window (and
+even if it fit, it would be slow and expensive to process every time). LlamaIndex
+would index all 200 once, then for this specific question retrieve only the
+transcripts whose content is most relevant to "shipping delays" — a much smaller,
+focused set the model can actually reason over well.
+
+</details>

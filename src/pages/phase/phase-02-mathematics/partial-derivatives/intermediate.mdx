@@ -1,0 +1,66 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Partial Derivatives"
+level: intermediate
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "partial-derivatives"
+estReadTime: 8
+resources:
+  - type: docs
+    title: "PyTorch — computing gradients for every parameter"
+    url: "https://pytorch.org/tutorials/beginner/blitz/autograd_tutorial.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The gradient points in the direction of steepest increase
+
+Geometrically, the gradient vector `∇f = [∂f/∂x1, ∂f/∂x2, ...]` points in the
+direction where `f` increases fastest, and its magnitude tells you how steep that
+increase is. Gradient descent moves in the *opposite* direction — steepest decrease —
+which is why every optimizer update looks like `weights -= learning_rate * gradient`.
+
+<Mermaid client:visible code={`flowchart LR
+  Point["Current weights"] --> Grad["Compute gradient (all partials)"]
+  Grad --> Neg["Negate it: steepest DEcrease direction"]
+  Neg --> Update["weights = weights - lr * gradient"]`} />
+
+## Computing millions of partial derivatives efficiently
+
+You never compute partial derivatives one at a time in practice — that would mean
+millions of separate forward passes. Backpropagation computes *all* partial
+derivatives in a single backward pass through the computation graph, reusing
+intermediate results via the chain rule. This is why a backward pass costs roughly the
+same as a forward pass (a small constant factor more), regardless of how many
+parameters the model has.
+
+```python
+import torch
+w = torch.tensor([1.0, 2.0, 3.0], requires_grad=True)
+loss = (w ** 2).sum()
+loss.backward()
+print(w.grad)  # tensor([2., 4., 6.]) — all 3 partial derivatives, one backward() call
+```
+
+## Partial derivatives with respect to a matrix (Jacobian)
+
+When both the input and output are multi-dimensional, the collection of all partial
+derivatives forms a **Jacobian matrix** — each entry `J[i][j] = ∂output_i/∂input_j`.
+Every layer in a neural network implicitly has a Jacobian describing how its output
+changes with respect to its input; backpropagation is, formally, repeated
+Jacobian-vector products chained together, not scalar partial derivatives one at a
+time — the scalar view is a useful mental model, but the matrix view is what's
+actually computed under the hood for anything beyond a single scalar function.
+
+## Gradient checking: verifying your math is right
+
+When implementing a custom differentiable operation, compare the analytic gradient
+(from your derivative formula) against a numerical approximation to catch bugs:
+
+```python
+def gradient_check(f, grad_f, x, h=1e-5):
+    numerical = (f(x + h) - f(x - h)) / (2 * h)
+    analytic = grad_f(x)
+    relative_error = abs(numerical - analytic) / (abs(numerical) + abs(analytic) + 1e-8)
+    return relative_error < 1e-5
+```

@@ -1,0 +1,7 @@
+---
+import PhaseIndexPage from "../../../components/PhaseIndexPage.astro";
+import nav from "../../../data/roadmap-nav.json";
+
+const phase = nav.phases.find((p) => p.slug === "phase-11-ai-infrastructure");
+---
+<PhaseIndexPage phase={phase} />

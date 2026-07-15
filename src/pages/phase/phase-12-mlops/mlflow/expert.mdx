@@ -1,0 +1,103 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "MLflow"
+level: expert
+phaseSlug: "phase-12-mlops"
+phaseName: "MLOps"
+topicSlug: "mlflow"
+estReadTime: 12
+resources:
+  - type: docs
+    title: "MLflow Tracking Server — Scalability & Backend Stores"
+    url: "https://mlflow.org/docs/latest/tracking/backend-stores.html"
+  - type: article
+    title: "MLflow vs. Weights & Biases vs. SageMaker Experiments"
+    url: "https://neptune.ai/blog/best-ml-experiment-tracking-tools"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The tracking server as a stateful bottleneck
+
+At small scale, a single MLflow tracking server backed by SQLite works fine. At
+team scale it becomes a shared, stateful dependency with real failure modes:
+
+- **Write contention**: hundreds of concurrent training jobs (e.g. a
+  hyperparameter sweep launching 200 trials) hammer the backend store with
+  `log_metric` calls per step. SQLite cannot handle this — Postgres/MySQL with
+  connection pooling is mandatory beyond single-user usage.
+- **Artifact store as the real bottleneck**: logging a 7B-parameter checkpoint
+  as an artifact on every run isn't free — it's a multi-GB upload to S3 per
+  trial. High-frequency sweeps should log large checkpoints only for the final
+  or best run, not every trial, or use `log_artifact` asynchronously.
+- **No built-in multi-tenancy isolation**: experiments are a flat namespace by
+  default. Large orgs need naming conventions or a proxy layer enforcing
+  per-team access control, since MLflow's own auth story (basic auth added in
+  2.x) is thin compared to enterprise IAM expectations.
+
+## Autologging's hidden cost: metric logging frequency
+
+`mlflow.pytorch.autolog()` and similar integrations log at the granularity the
+framework's callback hooks expose — often every training step. For a long run
+with millions of steps, this can produce enormous metric history tables and
+slow down the UI's run-comparison queries. In production, teams often disable
+step-level autologging and manually log at epoch granularity, or configure
+`log_every_n_steps` where the integration supports it — a case where the
+convenience default is wrong for the production workload it was tuned to
+demo well on.
+
+## Model Registry stage transitions are not a safety mechanism
+
+A common mistake: treating `transition_model_version_stage(..., stage="Production")`
+as if it atomically and safely swaps traffic. It does not — it's a metadata
+update. If your serving layer polls `models:/name/Production` and caches the
+loaded model in memory, there's a window where different replicas serve
+different versions until they all refresh. For true zero-downtime promotion
+you need:
+
+- A serving layer that either reloads on a registry webhook/event, or
+- A blue/green deployment where the new version is validated with shadow
+  traffic *before* the alias flips, decoupling "registry state" from
+  "what's actually receiving production traffic"
+
+MLflow's registry is a source of truth for *intent*, not a live traffic
+router — conflating the two is a frequent production incident cause.
+
+<Mermaid client:visible code={`flowchart TB
+  R["Model Registry: alias = Production"] -.metadata only.-> S1["Serving replica 1 (stale cache)"]
+  R -.metadata only.-> S2["Serving replica 2 (refreshed)"]
+  S1 -->|serves OLD version| U1[Users]
+  S2 -->|serves NEW version| U2[Users]
+  Note["Registry flip alone does not guarantee consistent rollout"]`} />
+
+## Migrating away: what MLflow doesn't solve
+
+MLflow's tracking and registry cover experiment metadata and model versioning
+well, but teams frequently pair it with other tools rather than rely on it
+alone:
+
+- **Feature consistency**: MLflow has no concept of feature freshness or
+  online/offline parity — that's a feature store's job (Feast, Tecton).
+- **Data versioning**: `log_artifact` on a dataset file works for small data,
+  but MLflow doesn't diff or dedupe large datasets the way DVC does — logging
+  a dataset hash/URI as a parameter and versioning the data separately is the
+  more scalable pattern.
+- **Pipeline orchestration**: MLflow Projects/Pipelines exist but are far less
+  capable than Airflow/Kubeflow for DAGs with retries, backfills, and
+  cross-team scheduling — most production stacks use MLflow purely for
+  tracking/registry and orchestrate training with a dedicated scheduler.
+
+## Trade-offs vs. managed alternatives
+
+| Concern | Self-hosted MLflow | Managed (Databricks MLflow, SageMaker) |
+|---|---|---|
+| Setup cost | You provision DB + object store + server | Zero — included in platform |
+| Cost model | Infra cost only, scales with usage | Platform fee, often per-workspace/user |
+| Auth/RBAC | Basic auth (2.x+), often needs a proxy | Enterprise IAM integrated |
+| Vendor lock-in | None — open format, portable | Tighter coupling to platform APIs |
+| Scaling ops | You own DB tuning, backups, HA | Handled by provider |
+| Customization | Full control over deployment topology | Limited to platform's exposed config |
+
+The practical decision is rarely "MLflow vs. nothing" — it's whether the
+operational burden of running your own tracking server justifies the savings
+and portability versus a managed offering that already solves scaling and
+auth, at the cost of platform lock-in.

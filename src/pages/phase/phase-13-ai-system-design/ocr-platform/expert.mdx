@@ -1,0 +1,102 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "OCR Platform"
+level: expert
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "ocr-platform"
+estReadTime: 12
+resources:
+  - type: docs
+    title: "AWS Textract — How it works"
+    url: "https://docs.aws.amazon.com/textract/latest/dg/how-it-works.html"
+  - type: docs
+    title: "Google Cloud Document AI — Overview"
+    url: "https://cloud.google.com/document-ai/docs/overview"
+---
+
+## A note on sourcing
+
+Commercial OCR platforms (AWS Textract, Google Document AI, Azure Document
+Intelligence) don't publish full internal architectures. This reasons from
+their public docs, from well-established document-AI research (layout-aware
+transformers, detection+recognition pipelines), and from the hard constraints
+any high-accuracy, high-throughput document pipeline must satisfy.
+
+## Problem 1: throughput vs. accuracy is tunable per document class
+
+Not all documents deserve the same compute budget. A one-page receipt for a
+consumer expense app and a 50-page legal contract for a compliance workflow
+have wildly different accuracy requirements and acceptable latency. Mature
+platforms route documents through **different pipeline configurations** —
+cheaper/faster models for high-volume low-stakes documents, heavier
+multi-pass pipelines (with LM post-correction, multiple detection passes,
+mandatory human review) for high-stakes ones — rather than running every
+document through the maximum-accuracy path by default, which would be
+prohibitively expensive at scale.
+
+## Problem 2: layout understanding beyond reading order
+
+Real documents routinely defy simple top-to-bottom, left-to-right reading:
+multi-column layouts, tables with merged/spanning cells, forms with fields
+whose labels are visually separated from their values (a checkbox far to the
+left of its label), and stamps/signatures overlapping printed text. Purely
+sequence-based text recognition (treat the page as one long string) fails on
+all of these. State-of-the-art approaches jointly model **text content and
+2D spatial layout** — architectures that embed each token's position on the
+page alongside its textual content, so the model can learn structural
+patterns (this text is inside a table cell; this is a field label; this
+value belongs to that label) rather than relying on reading order alone. The
+practical cost is that these layout-aware models are heavier and require
+position-annotated training data, which is expensive to collect and label at
+scale.
+
+## Problem 3: handling out-of-distribution documents gracefully
+
+A model trained mostly on Western invoices and typed Latin-script text will
+degrade — sometimes silently, with high confidence scores that don't reflect
+reality — on handwritten forms, non-Latin scripts, or unfamiliar layouts. The
+dangerous failure mode isn't a low-confidence miss (that can be routed to
+human review); it's a **confidently wrong** extraction, e.g. misreading a
+handwritten "7" as "1" with high model confidence, which slips through
+automated validation. Mitigations include calibrating confidence scores
+against held-out error rates per document type (rather than trusting raw
+softmax scores), and maintaining separate accuracy monitoring per document
+category/locale so a regression on one document type doesn't hide in an
+aggregate accuracy metric.
+
+## Problem 4: cost of ground truth and continuous evaluation
+
+Unlike many ML systems, OCR accuracy is unusually easy to *misjudge* from
+aggregate metrics — character-level accuracy can look excellent while
+field-level extraction accuracy (which is what actually matters to a
+downstream business process) is much worse, because a single misread
+character can invalidate an entire field (a wrong digit in an account
+number). This requires field-level, not just character-level, evaluation
+against real labeled documents, and a pipeline for continuously collecting
+new labeled examples — including the low-confidence cases sent to human
+review, which are simultaneously your hardest examples and your best source
+of new training/eval data.
+
+## Problem 5: privacy and data residency for sensitive documents
+
+OCR platforms frequently process highly sensitive documents — IDs, medical
+records, financial statements. This constrains architecture choices beyond
+pure accuracy/latency trade-offs: processing may need to happen within a
+specific data residency boundary (region-locked infrastructure, see
+"Multi-Region Deployment" in this phase), documents and extracted data may
+need strict retention/deletion policies, and any human-review step
+introduces a data-access surface that needs its own audit logging and access
+controls — a compliance requirement that shapes the system architecture as
+much as any accuracy concern.
+
+## Trade-off summary
+
+| Concern | Cheap/fast approach | High-accuracy approach | Cost |
+|---|---|---|---|
+| Pipeline depth | Single detect+recognize pass | Multi-pass + LM post-correction + validation | Latency & compute per document |
+| Layout handling | Sequential reading-order text extraction | Layout-aware joint text+position model | Heavier model, harder training data |
+| Confidence handling | Trust raw model confidence scores | Calibrate confidence against held-out error rates | Ongoing evaluation infrastructure |
+| Out-of-distribution docs | One general-purpose model for everything | Per-document-type routing/specialized models | Routing complexity, more models to maintain |
+| Low-confidence extractions | Return as-is | Route to human review queue | Human labor cost, added latency for flagged docs |
+| Sensitive documents | Single global processing region | Region-locked processing + audit logging | Infra duplication, compliance overhead |

@@ -1,0 +1,25 @@
+---
+import nav from "../data/roadmap-nav.json";
+
+interface Props {
+  activePhaseSlug?: string;
+}
+
+const { activePhaseSlug } = Astro.props as Props;
+---
+<nav class="sidebar" aria-label="Roadmap navigation">
+  <a class="sidebar-brand" href="/">🐊 <span>Crocodile</span></a>
+  {nav.phases.map((phase) => (
+    <div class="sidebar-phase">
+      <a
+        class={`sidebar-phase-link ${phase.slug === activePhaseSlug ? "active" : ""}`}
+        href={`/phase/${phase.slug}/`}
+      >
+        {phase.id}. {phase.name}
+      </a>
+    </div>
+  ))}
+  <div class="sidebar-phase" style="margin-top: 1rem;">
+    <a class="sidebar-phase-link" href="/search/">🔎 Search</a>
+  </div>
+</nav>

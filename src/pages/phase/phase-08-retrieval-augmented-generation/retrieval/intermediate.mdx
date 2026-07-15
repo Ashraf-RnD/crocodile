@@ -1,0 +1,114 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Retrieval"
+level: intermediate
+phaseSlug: "phase-08-retrieval-augmented-generation"
+phaseName: "Retrieval-Augmented Generation"
+topicSlug: "retrieval"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "LangChain — Build a RAG app"
+    url: "https://python.langchain.com/docs/tutorials/rag/"
+  - type: docs
+    title: "Qdrant — Vector search filtering"
+    url: "https://qdrant.tech/documentation/concepts/filtering/"
+---
+
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## A production retrieval pipeline is more than "top-k by cosine similarity"
+
+Naive semantic search — embed the query, find the k nearest chunks, hand them to the
+LLM — works as a demo but breaks down in production for predictable reasons: it
+retrieves confident-but-wrong matches, ignores metadata like recency or access
+permissions, and picks a fixed `k` regardless of how many chunks are actually
+relevant. Real systems add filtering, query transformation, and multi-stage retrieval
+around that core similarity search.
+
+<Mermaid client:visible code={`flowchart LR
+  Q["User query"] --> T["Query transform (optional)"]
+  T --> E["Embed query"]
+  E --> S["Vector search + metadata filter"]
+  S --> C["Candidate chunks (top-k)"]
+  C --> R["Rerank (optional)"]
+  R --> G["Pass to LLM for generation"]`} />
+
+## Metadata filtering alongside vector search
+
+Pure vector similarity has no concept of access control, recency, or document type —
+it will happily retrieve a confidential HR document for a customer support query if
+the embedding is close enough. Production retrievers combine vector search with
+structured filters:
+
+```python
+from qdrant_client import QdrantClient
+from qdrant_client.models import Filter, FieldCondition, MatchValue
+
+client = QdrantClient(url="http://localhost:6333")
+
+results = client.query_points(
+    collection_name="docs",
+    query=query_vector,
+    query_filter=Filter(
+        must=[
+            FieldCondition(key="department", match=MatchValue(value="support")),
+            FieldCondition(key="visibility", match=MatchValue(value="public")),
+        ]
+    ),
+    limit=5,
+)
+```
+
+This filter runs *during* the ANN search (not as a slow post-filter over the full
+result set), which matters — post-filtering after retrieving top-k can return fewer
+than `k` results if most of the nearest neighbors get filtered out.
+
+## Query transformation: the query users type isn't always the best search query
+
+Users ask short, underspecified, or conversational questions. Two common fixes:
+
+```python
+# HyDE (Hypothetical Document Embeddings): ask an LLM to draft a plausible answer,
+# then embed *that* instead of the raw question — a hypothetical answer often
+# resembles the real answer passage more closely than the question does
+hypothetical_answer = llm.invoke(f"Write a short passage answering: {query}").content
+search_vector = embed_model.encode(hypothetical_answer)
+
+# Multi-query expansion: generate several reworded variants of the query and
+# retrieve for each, then merge/dedupe results — hedges against one bad phrasing
+variants = llm.invoke(f"Generate 3 alternate phrasings of this question: {query}").content
+all_results = [retrieve(v) for v in variants.split("\n")]
+```
+
+Both trade an extra LLM call at query time for materially better recall on vague or
+conversational queries — worth it for user-facing chat, often unnecessary overhead for
+narrow, well-specified API-driven search.
+
+## Multi-stage retrieval: over-fetch, then narrow
+
+A very common production pattern is retrieving more candidates than you need from the
+cheap first-stage vector search (e.g. top-50), then narrowing down with a more
+expensive but more accurate second stage — a cross-encoder reranker (covered in its
+own topic) or an LLM-based relevance filter:
+
+```python
+candidates = client.query_points(collection_name="docs", query=query_vector, limit=50)
+reranked = reranker.rank(query, [c.payload["text"] for c in candidates.points])
+top_chunks = reranked[:5]  # what actually goes into the LLM prompt
+```
+
+Wide-then-narrow beats going straight for top-5 from vector search alone, because
+embedding similarity is a fast, approximate signal — it reliably gets *relevant*
+documents into the top-50, but is much less reliable at fine-grained ordering within
+that set, which is exactly what a reranker is good at.
+
+## Choosing `k`
+
+A fixed `k` (retrieve exactly 5, always) is simple but wrong for corpora where the
+number of genuinely relevant chunks varies per query. Some teams use a similarity
+*threshold* instead of (or alongside) a fixed `k` — only include chunks above a
+minimum score, up to some cap — to avoid stuffing irrelevant filler into the prompt
+just to hit a fixed count, which both wastes context budget and can measurably degrade
+LLM answer quality (a well-documented effect where irrelevant context dilutes attention
+to the actually-relevant passage).

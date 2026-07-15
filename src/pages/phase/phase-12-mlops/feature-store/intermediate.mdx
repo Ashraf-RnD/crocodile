@@ -1,0 +1,98 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Feature Store"
+level: intermediate
+phaseSlug: "phase-12-mlops"
+phaseName: "MLOps"
+topicSlug: "feature-store"
+estReadTime: 10
+resources:
+  - type: docs
+    title: "Feast — Point-in-Time Joins"
+    url: "https://docs.feast.dev/getting-started/concepts/point-in-time-joins"
+  - type: docs
+    title: "Tecton — Feature Platform Architecture"
+    url: "https://www.tecton.ai/feature-platform/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Point-in-time correctness: the subtle bug feature stores prevent
+
+Naively joining features to training labels by matching on `user_id` alone
+introduces **label leakage** — the join might pull a feature value computed
+*after* the label's timestamp, giving the model information it wouldn't have
+had at actual prediction time. A feature store's `get_historical_features`
+performs a **point-in-time join**: for each labeled example, it looks up the
+feature value as it existed at that example's timestamp, not the latest
+value.
+
+```python
+# entity_df has one row per (user_id, event_timestamp, label)
+training_df = store.get_historical_features(
+    entity_df=entity_df,
+    features=[
+        "user_transaction_stats:avg_transaction_amount_30d",
+        "user_transaction_stats:transaction_count_7d",
+    ],
+).to_df()
+```
+
+<Mermaid client:visible code={`flowchart LR
+  A["Label event at T=June 5"] --> B{"Point-in-time join"}
+  C["Feature value at T=June 3"] -->|correct: known before label| B
+  D["Feature value at T=June 8"] -->|excluded: happened after label| B
+  B --> E["Training row uses only pre-label feature values"]`} />
+
+Without this, a model can appear to perform extremely well in offline
+evaluation (because it's implicitly "seeing the future") and then perform
+much worse in production once that leaked information is unavailable —
+one of the most common causes of a model that looked great in testing and
+disappointing in production.
+
+## Batch and streaming feature computation
+
+Real feature stores support features computed from both slow-moving batch
+sources and fast-moving streaming sources feeding the same online store:
+
+```python
+from feast import FeatureView, KafkaSource, FileSource
+
+# Batch: recomputed nightly from a data warehouse
+batch_source = FileSource(path="s3://warehouse/user_stats.parquet")
+
+# Streaming: updated continuously from a Kafka topic of live events
+stream_source = KafkaSource(
+    kafka_bootstrap_servers="kafka:9092",
+    topic="transaction_events",
+    timestamp_field="event_timestamp",
+)
+```
+
+A common production pattern: slow-changing demographic features come from a
+nightly batch job, while "transactions in the last 5 minutes" comes from a
+streaming aggregation — both land in the same online store so a single
+`get_online_features` call at inference time can combine them transparently.
+
+## Materialization: pushing batch features into the online store
+
+Defining a feature and computing it are different steps. **Materialization**
+is the job that runs the feature's transformation logic and writes results
+into the low-latency online store, typically on a schedule:
+
+```bash
+feast materialize-incremental $(date -u +"%Y-%m-%dT%H:%M:%S")
+```
+
+This is usually wired into the same Airflow DAG that handles retraining —
+materialize fresh features, then train, ensuring the online store used for
+serving reflects data at least as fresh as what training used.
+
+## Feature reuse across teams
+
+The organizational payoff of a feature store, beyond training-serving
+consistency, is **feature reuse**: once "user's 30-day average transaction
+amount" is defined and registered, any team building a new model can reuse it
+without re-deriving the same SQL from scratch, and everyone building on it
+benefits automatically if the definition is later fixed or improved — a
+shared feature catalog rather than every model owning its own duplicated,
+slowly-diverging feature engineering code.

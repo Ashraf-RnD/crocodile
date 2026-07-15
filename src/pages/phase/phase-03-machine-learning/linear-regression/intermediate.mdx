@@ -1,0 +1,133 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Linear Regression"
+level: intermediate
+phaseSlug: "phase-03-machine-learning"
+phaseName: "Machine Learning"
+topicSlug: "linear-regression"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "scikit-learn: Ordinary Least Squares"
+    url: "https://scikit-learn.org/stable/modules/linear_model.html#ordinary-least-squares"
+  - type: docs
+    title: "scikit-learn: Pipeline and Composite Estimators"
+    url: "https://scikit-learn.org/stable/modules/compose.html"
+---
+
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## From one feature to many
+
+Real problems rarely have a single predictor. Predicting house price from square footage alone
+ignores bedrooms, age, location, and more. Multiple linear regression extends the same idea to
+several features at once: instead of one slope, the model learns one coefficient per feature.
+
+```python
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error, r2_score
+
+rng = np.random.default_rng(42)
+n = 500
+
+sqft = rng.normal(1800, 500, n).clip(400, 4000)
+bedrooms = rng.integers(1, 6, n)
+age = rng.normal(20, 10, n).clip(0, 80)
+distance_to_city_km = rng.normal(15, 8, n).clip(0.5, 50)
+
+# Synthetic "true" relationship plus noise
+price = (
+    50_000
+    + 120 * sqft
+    + 8_000 * bedrooms
+    - 900 * age
+    - 1_500 * distance_to_city_km
+    + rng.normal(0, 15_000, n)
+)
+
+X = np.column_stack([sqft, bedrooms, age, distance_to_city_km])
+y = price
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+model = LinearRegression()
+model.fit(X_train, y_train)
+
+y_pred = model.predict(X_test)
+print("R^2:", r2_score(y_test, y_pred))
+print("RMSE:", mean_squared_error(y_test, y_pred) ** 0.5)
+```
+
+## Why scaling and pipelines matter
+
+Here `sqft` ranges in the thousands while `bedrooms` ranges from 1-5. Plain `LinearRegression`
+is scale-invariant for prediction (the coefficients absorb the scale difference), but scaling
+still matters the moment you: compare coefficient magnitudes to judge feature importance, add
+regularization (Ridge/Lasso are scale-sensitive), or use gradient-based solvers. Wrapping
+preprocessing and the model in a `Pipeline` also prevents data leakage — the scaler is fit only
+on training data, then applied to test data.
+
+```python
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+
+pipe = Pipeline([
+    ("scaler", StandardScaler()),
+    ("model", LinearRegression()),
+])
+
+pipe.fit(X_train, y_train)
+y_pred = pipe.predict(X_test)
+print("R^2 (scaled):", r2_score(y_test, y_pred))
+```
+
+<Mermaid client:visible code={`flowchart LR
+  A[Raw features] --> B[train_test_split]
+  B --> C[StandardScaler.fit on train]
+  C --> D[LinearRegression.fit]
+  D --> E[predict on test]
+  E --> F[mean_squared_error / r2_score]`} />
+
+## Multicollinearity and residuals
+
+If two features are highly correlated (say, `sqft` and `num_rooms`), the model struggles to
+attribute the effect to either one individually — coefficients become unstable and their signs
+can flip with small changes in the data, even though overall predictions may still look fine.
+Check with a correlation matrix or variance inflation factor (VIF) before trusting individual
+coefficients for interpretation.
+
+Residual analysis (`y_test - y_pred`) is your diagnostic tool:
+
+```python
+residuals = y_test - y_pred
+
+# A rough visual check (in a notebook):
+# plt.scatter(y_pred, residuals)
+# plt.axhline(0, color="red")
+```
+
+A healthy fit shows residuals scattered randomly around zero with no pattern. A curved pattern
+means the true relationship isn't linear; a funnel shape (residuals spreading out as predictions
+grow) means heteroscedasticity — variance in the errors isn't constant, which violates one of
+OLS's core assumptions and undermines confidence intervals even if point predictions stay usable.
+
+## When plain linear regression breaks down
+
+- **Multicollinearity** inflates coefficient variance — consider Ridge regression, which shrinks
+  correlated coefficients together instead of letting them fight for credit.
+- **Too many features relative to samples**, or a need for automatic feature selection — Lasso
+  drives unneeded coefficients to exactly zero.
+- **Outliers** — ordinary least squares minimizes squared error, so a handful of extreme points
+  can dominate the fit. Inspect and consider robust alternatives or outlier removal.
+- **Extrapolation** — a model trained on houses between 400 and 4,000 sq ft has no basis for
+  predicting a 10,000 sq ft mansion; the line keeps going, but the relationship it learned may not
+  hold that far outside the training range.
+- **Assuming linearity** — if price actually grows with the square of some feature, or plateaus,
+  a straight line will systematically under- or over-predict at the extremes. Check residual plots
+  and consider polynomial features or a different model family.
+
+Ridge and Lasso are covered in depth elsewhere — for now, treat them as linear regression's
+regularized siblings: same core idea, with a penalty term added to the loss that trades a little
+bias for a lot less variance.

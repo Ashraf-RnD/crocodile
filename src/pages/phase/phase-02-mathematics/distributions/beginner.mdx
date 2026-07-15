@@ -1,0 +1,63 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Distributions"
+level: beginner
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "distributions"
+estReadTime: 7
+resources:
+  - type: video
+    title: "StatQuest — The Normal Distribution, clearly explained"
+    url: "https://www.youtube.com/watch?v=rzFX5NWojp0"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## A distribution describes all possible outcomes at once
+
+A probability distribution tells you, for every possible value a random variable
+could take, how likely that value is. Instead of one number ("70% chance of rain"),
+it's the whole shape: which outcomes are common, which are rare.
+
+## The normal (Gaussian) distribution
+
+The most important distribution in ML — the classic "bell curve." Defined by just two
+numbers: the **mean** (center) and **standard deviation** (spread).
+
+<Mermaid client:visible code={`flowchart TB
+  Mean["mean (μ) = center of the bell"] --- Std["std dev (σ) = how wide the bell is"]
+  Std --> Shape["Together they fully define the curve's shape"]`} />
+
+```python
+import numpy as np
+samples = np.random.normal(loc=0, scale=1, size=1000)  # mean=0, std=1
+print(samples.mean(), samples.std())  # roughly 0.0 and 1.0
+```
+
+Neural network weights are typically **initialized** by sampling from a normal (or
+uniform) distribution — this is why you'll see `nn.init.normal_()` calls throughout
+PyTorch model code.
+
+## The uniform distribution
+
+Every outcome in a range is equally likely — no "center of gravity" at all.
+
+```python
+uniform_samples = np.random.uniform(low=0, high=1, size=1000)
+```
+
+Used for random initialization, random sampling of hyperparameters, and dropout masks
+(each neuron has a uniform chance of being dropped).
+
+## Try it yourself
+
+If you sample 1000 numbers from `np.random.normal(loc=100, scale=15)`, roughly what
+range will most (about 95%) of the values fall in?
+
+<details>
+<summary>Solution</summary>
+
+Roughly `[70, 130]` — about 2 standard deviations (2×15=30) on either side of the mean
+(100). This "68-95-99.7 rule" for normal distributions is worth memorizing: ~68% of
+values fall within 1 std dev, ~95% within 2, ~99.7% within 3.
+</details>

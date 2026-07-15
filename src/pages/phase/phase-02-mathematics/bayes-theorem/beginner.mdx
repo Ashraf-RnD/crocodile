@@ -1,0 +1,60 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Bayes Theorem"
+level: beginner
+phaseSlug: "phase-02-mathematics"
+phaseName: "Mathematics"
+topicSlug: "bayes-theorem"
+estReadTime: 7
+resources:
+  - type: video
+    title: "3Blue1Brown — Bayes theorem"
+    url: "https://www.youtube.com/watch?v=HZGCoVF3YvM"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Flipping conditional probability around
+
+Bayes' theorem lets you compute `P(A | B)` when you actually know `P(B | A)` instead —
+a very common situation. It's built from the conditional probability formula, applied
+in both directions:
+
+```
+P(A | B) = P(B | A) · P(A) / P(B)
+```
+
+## The disease-test example, solved
+
+From the previous lesson: 10% of patients have a disease (`P(disease) = 0.10`). The
+test is positive 90% of the time if you have it (`P(positive | disease) = 0.90`), and
+5% of the time if you don't (`P(positive | no disease) = 0.05`). Given a positive
+test, what's `P(disease | positive)`?
+
+```python
+p_disease = 0.10
+p_positive_given_disease = 0.90
+p_positive_given_healthy = 0.05
+
+p_healthy = 1 - p_disease
+p_positive = (p_positive_given_disease * p_disease
+              + p_positive_given_healthy * p_healthy)
+
+p_disease_given_positive = (p_positive_given_disease * p_disease) / p_positive
+print(p_disease_given_positive)  # 0.667 — only 67%, not 90%!
+```
+
+<Mermaid client:visible code={`flowchart TB
+  Prior["Prior: P(disease) = 10%"] --> Evidence["Positive test result"]
+  Evidence --> Posterior["Posterior: P(disease | positive) = 67%"]
+  Note["Test seems 90% accurate, but base rate matters a lot"]`} />
+
+Even with a "90% accurate" test, a positive result only means 67% chance of disease —
+because the disease is rare, false positives from the large healthy population add up.
+This is the single most important intuition Bayes' theorem gives you: **always account
+for the base rate**, not just the test's individual accuracy.
+
+## Vocabulary
+
+- **Prior** — `P(A)`, what you believed before seeing evidence
+- **Likelihood** — `P(B | A)`, how likely the evidence is if A is true
+- **Posterior** — `P(A | B)`, your updated belief after seeing evidence

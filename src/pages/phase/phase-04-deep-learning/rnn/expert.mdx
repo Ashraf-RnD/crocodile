@@ -1,0 +1,90 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "RNN"
+level: expert
+phaseSlug: "phase-04-deep-learning"
+phaseName: "Deep Learning"
+topicSlug: "rnn"
+estReadTime: 12
+resources:
+  - type: article
+    title: "On the difficulty of training RNNs (Pascanu et al.)"
+    url: "https://arxiv.org/abs/1211.5063"
+  - type: article
+    title: "Attention Is All You Need"
+    url: "https://arxiv.org/abs/1706.03762"
+---
+
+## Why vanilla RNNs vanish: the math
+
+Backpropagation through time (BPTT) unrolls the recurrence and applies the chain
+rule across every time step. The gradient of the loss with respect to an early
+hidden state involves a product of Jacobians, one per time step:
+`dh_T/dh_0 = product of (dh_t/dh_{t-1})` for `t = 1..T`. Each factor's magnitude
+depends on the recurrent weight matrix's largest eigenvalue and the activation's
+derivative (bounded by 1 for tanh, and typically well below 1 through most of its
+range). Multiplying many such factors together drives the product toward zero
+exponentially in sequence length — this is not a training bug but an exact
+mathematical consequence of the recurrence structure, which is why it affects
+*every* vanilla RNN regardless of hyperparameters, only becoming worse with longer
+sequences.
+
+## BPTT truncation as a practical necessity
+
+Full BPTT over a sequence of length `T` costs `O(T)` memory (one set of activations
+per time step) and `O(T)` sequential compute that cannot be parallelized across time
+(each step depends on the previous hidden state). **Truncated BPTT** caps the
+backward pass to a fixed window of recent steps, trading gradient accuracy for
+bounded memory and the ability to train on very long or streaming sequences. This is
+a real accuracy/resource trade-off: truncation means the model provably cannot learn
+dependencies longer than the truncation window, which is often the actual cause of
+"the model isn't learning long-range structure" rather than an architecture
+limitation.
+
+## Gradient clipping: necessary, not optional
+
+Because RNN gradients can also *explode* (the same eigenvalue argument, but greater
+than 1), essentially all production RNN training clips gradient norm before the
+optimizer step:
+
+```python
+loss.backward()
+torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+optimizer.step()
+```
+
+Unlike vanishing gradients (a structural limitation that clipping cannot fix),
+exploding gradients are a numerical instability that clipping directly and reliably
+addresses — this is why clip_grad_norm_ appears in nearly every RNN/LSTM training
+script but is far less common in transformer training code, where the failure mode
+is different.
+
+## Why transformers displaced RNNs for most sequence modeling
+
+The sequential dependency in an RNN (`h_t` requires `h_{t-1}`) fundamentally
+prevents parallelizing computation across the time dimension during training —
+every step waits on the previous one. Transformers replace recurrence with
+self-attention, which computes all positions' representations in parallel
+(at the cost of `O(n^2)` attention compute instead of RNN's `O(n)`). At the scale of
+modern datasets and hardware, that parallelism advantage dominates: transformers
+train dramatically faster per wall-clock hour despite doing more total FLOPs, and
+attention gives a direct (not vanishing) gradient path between any two positions
+regardless of distance. RNNs remain competitive only where sequence length is
+modest, training parallelism matters less than inference-time streaming, or O(n)
+compute is a hard constraint transformers can't meet.
+
+## Comparing sequence modeling approaches
+
+| Approach | Training parallelism | Long-range gradient path | Inference cost per new token | Typical modern use |
+|---|---|---|---|---|
+| Vanilla RNN | None (sequential) | Vanishes exponentially with distance | O(1), constant memory | Rarely used standalone today |
+| LSTM/GRU | None (sequential) | Better via gating, still degrades at long range | O(1), constant memory | Streaming/edge, small-scale time series |
+| Transformer (full attention) | Full (all positions at once) | Direct, no vanishing | O(n) without caching, O(1) with KV-cache | Default for large-scale NLP/sequence tasks |
+| State-space models (S4/Mamba) | Mostly parallel (via convolution/scan) | Long-range by design | O(1), constant state | Emerging alternative for very long sequences |
+
+## A pragmatic takeaway
+
+Choosing an RNN over a transformer today is usually a deliberate systems decision
+(constant memory streaming inference, small model footprint) rather than a modeling
+one — the underlying accuracy ceiling for genuinely long-range dependencies almost
+always favors attention-based or state-space alternatives.

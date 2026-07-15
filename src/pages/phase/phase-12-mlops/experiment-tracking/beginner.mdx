@@ -1,0 +1,80 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Experiment Tracking"
+level: beginner
+phaseSlug: "phase-12-mlops"
+phaseName: "MLOps"
+topicSlug: "experiment-tracking"
+estReadTime: 6
+resources:
+  - type: article
+    title: "Why Track ML Experiments? (Neptune.ai)"
+    url: "https://neptune.ai/blog/experiment-tracking"
+  - type: docs
+    title: "MLflow — Tracking Concepts"
+    url: "https://mlflow.org/docs/latest/tracking.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The problem it solves
+
+Training a model isn't a one-shot process — it's dozens or hundreds of
+attempts with different data, hyperparameters, and code. Without a system,
+answering "which run got the best result, and how did I get it?" means
+digging through terminal scrollback or a folder of oddly-named files like
+`model_v3_final_ACTUALLY_final.pkl`.
+
+**Experiment tracking** is the practice (and the category of tools like
+MLflow and Weights & Biases) of recording, for every training run:
+
+- **Parameters** — what you configured (learning rate, model architecture)
+- **Metrics** — what happened (accuracy, loss, F1 score)
+- **Artifacts** — what came out (the model file, plots, logs)
+- **Metadata** — who ran it, when, on what code/data version
+
+### A minimal example
+
+```python
+import mlflow
+
+with mlflow.start_run():
+    mlflow.log_param("learning_rate", 0.01)
+    mlflow.log_param("model", "random_forest")
+
+    accuracy = train_and_evaluate()
+
+    mlflow.log_metric("accuracy", accuracy)
+```
+
+Do this for every run, and you get a searchable, comparable history for free
+— no manual notes needed.
+
+### The mental model
+
+<Mermaid client:visible code={`flowchart LR
+  A["Run 1: lr=0.01 → acc=0.85"] --> D["Tracking store"]
+  B["Run 2: lr=0.001 → acc=0.91"] --> D
+  C["Run 3: lr=0.1 → acc=0.72"] --> D
+  D --> E["Dashboard: sort by accuracy, pick the winner"]`} />
+
+The value compounds over time: three months from now, when someone asks "why
+did we choose this learning rate," the answer is a query away instead of
+lost to memory.
+
+## Try it yourself
+
+You ran a model with `n_estimators=50` and got `f1_score=0.81`. Write the
+experiment-tracking code to log this run.
+
+<details>
+<summary>Solution</summary>
+
+```python
+import mlflow
+
+with mlflow.start_run():
+    mlflow.log_param("n_estimators", 50)
+    mlflow.log_metric("f1_score", 0.81)
+```
+
+</details>

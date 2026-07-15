@@ -1,0 +1,76 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "FLUX"
+level: beginner
+phaseSlug: "phase-09-multimodal-ai"
+phaseName: "Multimodal AI"
+topicSlug: "flux"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "FLUX.1 GitHub repository (Black Forest Labs)"
+    url: "https://github.com/black-forest-labs/flux"
+  - type: docs
+    title: "FLUX.1-schnell model card"
+    url: "https://huggingface.co/black-forest-labs/FLUX.1-schnell"
+---
+
+## A newer, sharper image generator
+
+**FLUX** is a text-to-image model from Black Forest Labs — a team founded by some of
+the original researchers behind Stable Diffusion. It uses a newer architecture
+(a diffusion transformer, instead of the older UNet design) and is widely regarded as
+one of the strongest open-weight image generators available, especially for prompt
+accuracy and rendering readable text inside images.
+
+Think of it as Stable Diffusion's successor built by the same lineage of researchers —
+same basic idea (denoise from noise into an image), meaningfully better execution.
+
+### Your first FLUX image
+
+```python
+from diffusers import FluxPipeline
+import torch
+
+pipe = FluxPipeline.from_pretrained(
+    "black-forest-labs/FLUX.1-schnell",
+    torch_dtype=torch.bfloat16,
+).to("cuda")
+
+image = pipe(
+    "a neon sign that reads 'OPEN 24 HOURS' above a diner",
+    num_inference_steps=4,   # schnell is distilled for very few steps
+    guidance_scale=0.0,
+).images[0]
+image.save("diner.png")
+```
+
+`FLUX.1-schnell` is a distilled variant built for speed — it produces good results in
+just a handful of steps, which is why `num_inference_steps` is so low compared to a
+typical Stable Diffusion call.
+
+## Try it yourself
+
+FLUX also ships a higher-quality, slower variant (`FLUX.1-dev`) that isn't step-distilled
+and uses a real `guidance_scale`. Try switching the model and settings to use it.
+
+<details>
+<summary>Solution</summary>
+
+```python
+pipe = FluxPipeline.from_pretrained(
+    "black-forest-labs/FLUX.1-dev",
+    torch_dtype=torch.bfloat16,
+).to("cuda")
+
+image = pipe(
+    "a neon sign that reads 'OPEN 24 HOURS' above a diner",
+    num_inference_steps=28,
+    guidance_scale=3.5,
+).images[0]
+```
+
+`dev` trades speed for quality — more steps, real guidance scale tuning, generally
+sharper and more prompt-accurate results than `schnell`.
+
+</details>

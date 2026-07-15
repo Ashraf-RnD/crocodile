@@ -1,0 +1,68 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "PaddleOCR"
+level: intermediate
+phaseSlug: "phase-09-multimodal-ai"
+phaseName: "Multimodal AI"
+topicSlug: "paddleocr"
+estReadTime: 8
+resources:
+  - type: docs
+    title: "PP-OCR pipeline overview"
+    url: "https://paddlepaddle.github.io/PaddleOCR/main/en/ppocr/overview.html"
+  - type: docs
+    title: "PP-Structure — document layout & tables"
+    url: "https://paddlepaddle.github.io/PaddleOCR/main/en/ppstructure/overview.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The PP-OCR pipeline under the hood
+
+`PaddleOCR()` isn't one model — it's three chained models, each independently
+swappable:
+
+<Mermaid client:visible code={`flowchart LR
+  A[Input image] --> B["Detection model (DB)\nfinds text boxes"]
+  B --> C["Angle classifier\nrotates boxes upright"]
+  C --> D["Recognition model (SVTR/CRNN)\nreads text in each box"]
+  D --> E[Text + boxes + confidence]`} />
+
+- **Detection (DB — Differentiable Binarization)**: treats "where is text" as a
+  segmentation problem, producing a probability map that's thresholded into text
+  region polygons — this is what lets it handle curved and rotated text, unlike
+  Tesseract's connected-component approach.
+- **Angle classification**: a lightweight classifier that flags boxes rotated 180°
+  (common with scanned documents fed in upside-down) and corrects them before
+  recognition.
+- **Recognition**: a sequence model (CRNN or the newer SVTR transformer) that reads
+  the cropped, straightened text region character by character.
+
+## Swapping languages and models
+
+Production teams rarely use the default English model as-is. PaddleOCR ships
+pretrained detection + recognition pairs for 80+ languages, selected via `lang`:
+
+```python
+# Bulk-process scanned Chinese invoices
+ocr_zh = PaddleOCR(use_angle_cls=True, lang="ch")
+
+# Batch process a directory
+import glob
+
+results = {}
+for path in glob.glob("invoices/*.jpg"):
+    results[path] = ocr_zh.ocr(path)
+```
+
+For document-heavy pipelines (not just single text lines), the companion project
+**PP-Structure** adds table and layout detection on top of PP-OCR — it segments a page
+into title/text/table/figure regions first, then runs OCR only where it matters and
+reconstructs tables as actual rows/columns instead of a flat text blob.
+
+## Batching for throughput
+
+Running `.ocr()` once per image in a loop under-uses the GPU. For high-volume
+pipelines, PaddleOCR's underlying predictors accept batched input, and most production
+setups wrap the pipeline behind a queue (Celery/RQ) so a GPU worker can batch requests
+from multiple concurrent uploads rather than processing one image per inference call —
+the same batching pattern used for any GPU-bound inference service.

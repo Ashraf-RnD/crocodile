@@ -1,0 +1,130 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "DBSCAN"
+level: expert
+phaseSlug: "phase-03-machine-learning"
+phaseName: "Machine Learning"
+topicSlug: "dbscan"
+estReadTime: 12
+resources:
+  - type: docs
+    title: "scikit-learn: DBSCAN and HDBSCAN"
+    url: "https://scikit-learn.org/stable/modules/clustering.html#hdbscan"
+  - type: article
+    title: "Campello, Moulavi & Sander: HDBSCAN"
+    url: "https://link.springer.com/chapter/10.1007/978-3-642-37456-2_14"
+---
+
+## Complexity and spatial indexing
+
+The naive formulation of DBSCAN computes pairwise distances between every
+point to find each point's `eps`-neighborhood, which costs `O(n^2)`. In
+practice, scikit-learn's `DBSCAN` builds a spatial index — a **KD-tree** or
+**ball tree** (`algorithm='kd_tree'` / `'ball_tree'`, or `'auto'` to let it
+choose) — so each neighborhood query costs roughly `O(log n)` instead of
+`O(n)`, bringing the overall algorithm to about `O(n log n)` for
+low-to-moderate dimensional data.
+
+```python
+from sklearn.cluster import DBSCAN
+
+# 'auto' picks kd_tree/ball_tree for low-dim numeric data,
+# and falls back to brute force for sparse input or precomputed distances
+db = DBSCAN(eps=0.5, min_samples=10, algorithm="auto", n_jobs=-1)
+```
+
+That speedup erodes as dimensionality grows. Tree-based spatial indexes rely
+on being able to prune large regions of the search space cheaply; that
+pruning power degrades as dimensionality increases; past roughly 15-20
+dimensions the trees provide little benefit over brute force, and DBSCAN
+effectively falls back toward `O(n^2)` behavior. This is compounded by a
+statistical issue, not just a computational one: the **curse of
+dimensionality** means that in high-dimensional space, distances between
+points tend to concentrate — the ratio between the nearest and farthest
+point distances approaches 1, so a single `eps` radius stops meaningfully
+separating "close" from "far." This is why DBSCAN on raw high-dimensional
+embeddings (e.g. 768-dim sentence embeddings) often produces one giant
+cluster, all noise, or unstable results depending on `eps` — the neighborhood
+concept itself is breaking down, not just the runtime.
+
+## The single global `eps` limitation
+
+DBSCAN's density threshold is global: one `eps` and one `min_samples` apply
+everywhere in the dataset. This is a correct implementation of a coherent
+idea — "connected regions above a density threshold are clusters" — but it
+assumes that threshold is meaningful uniformly across the space. When
+clusters genuinely differ in density (a tight cluster of 500 points next to
+a diffuse cluster of 500 points spread over 5x the area), any single `eps`
+either:
+
+- fragments or erases the sparse cluster (if `eps` is tuned to the dense
+  cluster), or
+- merges the dense cluster with noise or neighboring clusters (if `eps` is
+  tuned to the sparse cluster).
+
+There is no fix within DBSCAN itself — it is a direct consequence of the
+"one global density threshold" design, not a tuning mistake.
+
+**HDBSCAN** (Hierarchical DBSCAN) relaxes exactly this constraint. Instead of
+cutting the dataset at one density level, it builds a hierarchy of clusters
+across *all* density levels (via a mutual-reachability distance and a
+minimum spanning tree), then condenses that hierarchy and extracts the
+clusters that are most *stable* across a range of density thresholds. In
+effect, `min_samples` still controls local density sensitivity, but `eps` is
+no longer a single fixed cutoff — HDBSCAN searches over it. This lets it
+recover clusters of different densities in the same dataset, something plain
+DBSCAN structurally cannot do.
+
+```python
+from sklearn.cluster import HDBSCAN
+
+hdb = HDBSCAN(min_cluster_size=15, min_samples=5)
+labels = hdb.fit_predict(X)  # varying-density clusters recovered without one global eps
+```
+
+`HDBSCAN` has been available directly in scikit-learn since version 1.3; for
+older environments, the standalone `hdbscan` package (McInnes et al.)
+provides the same algorithm plus soft-clustering membership scores.
+
+## Trade-off summary
+
+| | DBSCAN | K-Means | HDBSCAN | Gaussian Mixture |
+|---|---|---|---|---|
+| Cluster shape assumption | Arbitrary (density-connected) | Convex / roughly spherical | Arbitrary (density-connected) | Elliptical (Gaussian) |
+| Must specify cluster count | No | Yes (`k`) | No | Yes (`n_components`), or select via BIC/AIC |
+| Outlier / noise handling | Explicit (`-1` label) | None — every point assigned | Explicit, with soft membership scores | None by default (low-probability points possible but not a first-class label) |
+| Varying-density clusters | Poor (single global `eps`) | Poor (assumes similar spread) | Good (multi-scale density) | Moderate (covariance per component) |
+| Time complexity | `O(n log n)` with indexing, `O(n^2)` worst case / high-dim | `O(n * k * i)`, very scalable | `O(n log n)` typical, more overhead than DBSCAN | `O(n * k * i)`, similar to K-Means |
+| Sensitive to feature scaling | Yes | Yes | Yes | Yes |
+| Deterministic given params | Yes | No (init-dependent, use `n_init`) | Yes | No (init-dependent) |
+
+## Production concerns
+
+**Anomaly / outlier detection.** DBSCAN's noise label makes it a natural
+unsupervised anomaly detector: fit on "normal" traffic and treat new points
+falling outside any core point's `eps`-neighborhood as anomalies. In
+streaming or online settings, scikit-learn's `DBSCAN` doesn't support
+incremental fitting directly — a common production pattern is periodic
+batch refits on a sliding window, or using `NearestNeighbors` fitted on the
+last known cluster structure to classify new points against it without a
+full refit.
+
+**Re-tuning as data drifts.** Because `eps` encodes an assumption about the
+scale of "normal" density in your feature space, any distributional shift
+(seasonality, new user segments, a change in an upstream feature pipeline)
+invalidates a previously-tuned `eps`. Treat `eps`/`min_samples` as model
+parameters subject to the same monitoring discipline as a supervised model's
+thresholds — track the noise fraction and cluster count over time, and
+alert when they drift outside historical bounds, rather than assuming a
+one-time offline tuning holds indefinitely.
+
+**High-dimensional embeddings.** For clustering on embeddings (text, image,
+user behavior vectors), DBSCAN is rarely applied directly to raw
+high-dimensional vectors for the reasons above. The typical pipeline is:
+reduce dimensionality first (PCA for linear structure, UMAP for
+nonlinear/manifold structure — UMAP is more common ahead of HDBSCAN since it
+tends to preserve local density relationships better than PCA), then run
+DBSCAN/HDBSCAN on the reduced space (commonly 2-50 dimensions rather than
+hundreds). Validate that the reduction step itself isn't destroying the
+density structure you care about — visualize and sanity-check on a labeled
+subset if one exists before trusting cluster assignments in production.

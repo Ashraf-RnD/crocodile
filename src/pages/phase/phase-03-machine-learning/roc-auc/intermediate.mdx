@@ -1,0 +1,105 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "ROC-AUC"
+level: intermediate
+phaseSlug: "phase-03-machine-learning"
+phaseName: "Machine Learning"
+topicSlug: "roc-auc"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "scikit-learn: roc_curve"
+    url: "https://scikit-learn.org/stable/modules/generated/sklearn.metrics.roc_curve.html"
+  - type: docs
+    title: "scikit-learn: RocCurveDisplay"
+    url: "https://scikit-learn.org/stable/modules/generated/sklearn.metrics.RocCurveDisplay.html"
+---
+
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Building the ROC curve
+
+The **ROC curve** (Receiver Operating Characteristic) plots the true positive rate (recall)
+against the false positive rate as the decision threshold sweeps from 1 down to 0. Every
+point on the curve is "if I set the threshold here, this is my recall and this is my false
+alarm rate."
+
+```python
+from sklearn.metrics import roc_curve, RocCurveDisplay
+
+probs = clf.predict_proba(X_test)[:, 1]
+fpr, tpr, thresholds = roc_curve(y_test, probs)
+
+RocCurveDisplay.from_predictions(y_test, probs)
+```
+
+<Mermaid client:visible code={`flowchart LR
+  A[Sweep threshold from 1.0 to 0.0] --> B[Compute TPR, FPR at each threshold]
+  B --> C[Plot TPR vs FPR as a curve]
+  C --> D[AUC = area under that curve]`} />
+
+`roc_auc_score` is exactly the area under this curve — a single number summarizing ranking
+quality across every threshold on the curve, without committing to any one of them.
+
+```python
+from sklearn.metrics import roc_auc_score
+
+auc = roc_auc_score(y_test, probs)
+print(f"AUC: {auc:.3f}")
+```
+
+## Multiclass ROC-AUC
+
+For more than two classes, `roc_auc_score` needs a strategy for reducing multiple binary
+comparisons into one number:
+
+```python
+from sklearn.metrics import roc_auc_score
+
+# probs_multi: shape (n_samples, n_classes) from predict_proba
+auc_ovr = roc_auc_score(y_test, probs_multi, multi_class="ovr", average="macro")
+auc_ovo = roc_auc_score(y_test, probs_multi, multi_class="ovo", average="macro")
+```
+
+`multi_class='ovr'` (one-vs-rest) computes AUC for each class against all others and
+averages; `'ovo'` (one-vs-one) averages AUC over every pair of classes. `ovr` is more common
+in practice and scales better with a large number of classes.
+
+## In cross-validation
+
+ROC-AUC is a standard scoring metric for model selection, especially useful because it
+doesn't depend on picking a threshold before you've even chosen a model:
+
+```python
+from sklearn.model_selection import cross_val_score
+
+scores = cross_val_score(clf, X, y, cv=5, scoring="roc_auc")
+print(f"Mean AUC across folds: {scores.mean():.3f} (+/- {scores.std():.3f})")
+```
+
+## The imbalance pitfall
+
+ROC-AUC can look deceptively good on heavily imbalanced datasets. The false positive rate
+`FP / (FP + TN)` has a huge denominator when negatives vastly outnumber positives — so even
+a large *absolute* number of false positives barely moves the FPR, making the curve (and
+therefore the AUC) look better than the model's practical usefulness would suggest.
+
+```python
+from sklearn.datasets import make_classification
+from sklearn.metrics import roc_auc_score, average_precision_score
+
+# 99% negative, 1% positive — like real-world fraud detection
+X_imb, y_imb = make_classification(
+    n_samples=5000, weights=[0.99, 0.01], random_state=0
+)
+X_tr, X_te, y_tr, y_te = train_test_split(X_imb, y_imb, stratify=y_imb, random_state=0)
+clf_imb = LogisticRegression().fit(X_tr, y_tr)
+probs_imb = clf_imb.predict_proba(X_te)[:, 1]
+
+print(f"ROC-AUC: {roc_auc_score(y_te, probs_imb):.3f}")
+print(f"PR-AUC (average precision): {average_precision_score(y_te, probs_imb):.3f}")
+```
+
+The two numbers frequently diverge sharply on imbalanced data — PR-AUC is more sensitive to
+how the model handles the rare positive class, which is usually the class that actually
+matters in these problems.

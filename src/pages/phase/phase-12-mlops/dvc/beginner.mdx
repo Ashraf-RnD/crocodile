@@ -1,0 +1,86 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "DVC"
+level: beginner
+phaseSlug: "phase-12-mlops"
+phaseName: "MLOps"
+topicSlug: "dvc"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "DVC — Get Started"
+    url: "https://dvc.org/doc/start"
+  - type: video
+    title: "DVC in 5 minutes"
+    url: "https://www.youtube.com/watch?v=UbL7VUpv1Bs"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Git for data
+
+Git is great at tracking code, but terrible at tracking large files — a 5GB
+dataset committed to Git bloats the repository forever, and Git has no idea
+how to diff a CSV or a model checkpoint meaningfully.
+
+**DVC (Data Version Control)** solves this by keeping large files *out* of
+Git, while still giving you Git-like commands (`add`, `commit`, `checkout`) to
+version them. Git tracks a tiny pointer file; the actual data lives in
+external storage (S3, GCS, or even a local folder).
+
+### Versioning your first dataset
+
+```bash
+git init
+dvc init
+
+dvc add data/train.csv
+git add data/train.csv.dvc data/.gitignore
+git commit -m "Add v1 of training data"
+```
+
+`dvc add` moves `train.csv` into DVC's cache and creates a small
+`train.csv.dvc` file containing a hash pointer — that's the file Git actually
+tracks:
+
+```yaml
+# train.csv.dvc
+outs:
+  - md5: 8d7e9f3a1b2c...
+    size: 52428800
+    path: train.csv
+```
+
+### Getting data back later
+
+```bash
+git checkout v1-experiment   # switches Git to an old commit
+dvc checkout                  # pulls the matching data version
+```
+
+<Mermaid client:visible code={`flowchart LR
+  A["train.csv (5GB)"] -->|dvc add| B["Moved to DVC cache"]
+  B --> C["train.csv.dvc (tiny pointer file)"]
+  C -->|git add + commit| D["Git repo (tracks pointer only)"]
+  B -->|dvc push| E["Remote storage — S3/GCS"]`} />
+
+Anyone who clones the repo gets the pointer files instantly (they're tiny),
+then runs `dvc pull` to download the actual data from remote storage — just
+like `git pull`, but for gigabytes of files.
+
+## Try it yourself
+
+You have a `model.pkl` file (200MB) you want to version alongside your code
+without bloating the Git repo. What two commands do you run?
+
+<details>
+<summary>Solution</summary>
+
+```bash
+dvc add model.pkl
+git add model.pkl.dvc .gitignore
+git commit -m "Track model v1 with DVC"
+```
+
+`model.pkl` itself never enters Git — only the small `.dvc` pointer file does.
+
+</details>

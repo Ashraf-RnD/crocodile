@@ -1,0 +1,106 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Confusion Matrix"
+level: intermediate
+phaseSlug: "phase-03-machine-learning"
+phaseName: "Machine Learning"
+topicSlug: "confusion-matrix"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "scikit-learn: ConfusionMatrixDisplay"
+    url: "https://scikit-learn.org/stable/modules/generated/sklearn.metrics.ConfusionMatrixDisplay.html"
+  - type: docs
+    title: "scikit-learn: confusion_matrix"
+    url: "https://scikit-learn.org/stable/modules/generated/sklearn.metrics.confusion_matrix.html"
+---
+
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Visualizing with `ConfusionMatrixDisplay`
+
+In a real workflow you almost always want to see the matrix rendered, not just the raw
+array — `ConfusionMatrixDisplay` builds directly on a fitted estimator or raw predictions:
+
+```python
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import ConfusionMatrixDisplay
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, stratify=y, random_state=42
+)
+clf = LogisticRegression(max_iter=1000).fit(X_train, y_train)
+
+ConfusionMatrixDisplay.from_estimator(clf, X_test, y_test)
+# or, if you already have predictions:
+# ConfusionMatrixDisplay.from_predictions(y_test, y_pred)
+```
+
+Remember the axis convention: **rows = actual class, columns = predicted class**. It's easy
+to misread a rendered matrix if you assume the opposite — always check the axis labels
+scikit-learn draws on the plot rather than assuming.
+
+<Mermaid client:visible code={`flowchart TB
+  A[Actual class row] --> B{Predicted class column}
+  B -->|matches diagonal| C[Correct prediction]
+  B -->|off-diagonal| D[Specific misclassification]`} />
+
+## Multi-class confusion matrices
+
+For `N` classes, the confusion matrix is `N x N`. The diagonal is always "correct"; every
+off-diagonal cell tells you a specific confusion — which class the model mistook for
+which:
+
+```python
+from sklearn.datasets import load_digits
+from sklearn.svm import SVC
+from sklearn.metrics import confusion_matrix
+
+digits = load_digits()
+X_train, X_test, y_train, y_test = train_test_split(
+    digits.data, digits.target, test_size=0.2, random_state=0
+)
+clf = SVC().fit(X_train, y_train)
+y_pred = clf.predict(X_test)
+
+cm = confusion_matrix(y_test, y_pred)
+print(cm.shape)  # (10, 10) — one row/column per digit class 0-9
+```
+
+Scanning the off-diagonal cells for the largest values is a standard debugging step — e.g.
+discovering that digit `4` and `9` are frequently confused points directly at which classes
+need more training data, better features, or a closer look at labeling quality.
+
+## Normalized confusion matrices
+
+Raw counts are hard to compare across classes with very different support (number of true
+examples). Normalizing converts counts into rates:
+
+```python
+from sklearn.metrics import confusion_matrix
+
+# normalize='true': each row (actual class) sums to 1 — shows per-class recall pattern
+cm_recall_view = confusion_matrix(y_test, y_pred, normalize="true")
+
+# normalize='pred': each column (predicted class) sums to 1 — shows per-class precision pattern
+cm_precision_view = confusion_matrix(y_test, y_pred, normalize="pred")
+
+# normalize='all': every cell divided by the total sample count
+cm_overall_view = confusion_matrix(y_test, y_pred, normalize="all")
+```
+
+`normalize='true'` is usually the most useful default for imbalanced problems: it directly
+shows what fraction of each true class was correctly classified, independent of how many
+examples that class actually had.
+
+## Common pitfalls
+
+- **Misreading axes** — assuming columns are actual and rows are predicted (or vice versa)
+  flips the interpretation of every off-diagonal cell. Always confirm the convention rather
+  than guessing.
+- **Comparing raw counts across imbalanced classes** — a class with 10x more examples will
+  naturally have larger raw numbers everywhere; normalize before comparing.
+- **Only looking at the diagonal** — the diagonal tells you overall correctness (related to
+  accuracy), but the actual diagnostic value of a confusion matrix is in the off-diagonal
+  pattern of *which* mistakes are happening.

@@ -1,0 +1,78 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Segment Anything"
+level: beginner
+phaseSlug: "phase-09-multimodal-ai"
+phaseName: "Multimodal AI"
+topicSlug: "segment-anything"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "Segment Anything (Meta AI) project page"
+    url: "https://segment-anything.com/"
+  - type: docs
+    title: "segment-anything GitHub repository"
+    url: "https://github.com/facebookresearch/segment-anything"
+---
+
+## Segmenting by pointing, not labeling
+
+Traditional segmentation models are trained on one fixed set of classes — you get
+"person," "car," "road" and nothing else. **Segment Anything (SAM)**, from Meta AI,
+works completely differently: you give it a *prompt* — a point, a box, or a rough mask —
+and it finds the exact pixel boundary of whatever object is at that location, with
+zero retraining, for literally any object.
+
+Think of it like the "magic wand" tool in Photoshop, but far smarter: you click once on
+an object and it understands the object's true outline, even for objects it's never
+been specifically trained to recognize.
+
+### Your first click-to-segment
+
+```python
+from segment_anything import sam_model_registry, SamPredictor
+import cv2
+
+sam = sam_model_registry["vit_b"](checkpoint="sam_vit_b.pth")
+predictor = SamPredictor(sam)
+
+image = cv2.imread("dog.jpg")
+image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+predictor.set_image(image)
+
+# click roughly on the dog's body
+input_point = [[400, 300]]
+input_label = [1]  # 1 = foreground point
+
+masks, scores, _ = predictor.predict(
+    point_coords=input_point,
+    point_labels=input_label,
+)
+print(f"best mask confidence: {scores.max():.2f}")
+```
+
+`masks` is a stack of candidate masks (SAM returns multiple guesses when a click is
+ambiguous — did you mean the dog, or just its collar?), ranked by `scores`.
+
+## Try it yourself
+
+Add a second point that's clearly *outside* the object (a background point, labeled
+`0`) to help SAM exclude a nearby object it might otherwise include.
+
+<details>
+<summary>Solution</summary>
+
+```python
+input_point = [[400, 300], [50, 50]]
+input_label = [1, 0]  # foreground, background
+
+masks, scores, _ = predictor.predict(
+    point_coords=input_point,
+    point_labels=input_label,
+)
+```
+
+Background points act like a "not this" hint — SAM uses them to sharpen the boundary
+when a single foreground point is ambiguous.
+
+</details>

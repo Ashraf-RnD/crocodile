@@ -1,0 +1,95 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Encoder"
+level: intermediate
+phaseSlug: "phase-06-transformers"
+phaseName: "Transformers"
+topicSlug: "encoder"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "PyTorch — torch.nn.TransformerEncoder"
+    url: "https://pytorch.org/docs/stable/generated/torch.nn.TransformerEncoder.html"
+  - type: docs
+    title: "Hugging Face — BertModel"
+    url: "https://huggingface.co/docs/transformers/en/model_doc/bert"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Stacking encoder layers with PyTorch's built-in module
+
+For real projects you'll typically use `nn.TransformerEncoder`, which stacks
+identical `nn.TransformerEncoderLayer`s for you:
+
+```python
+import torch
+import torch.nn as nn
+
+encoder_layer = nn.TransformerEncoderLayer(
+    d_model=512, nhead=8, dim_feedforward=2048,
+    dropout=0.1, batch_first=True, norm_first=True,  # pre-LN, see note below
+)
+encoder = nn.TransformerEncoder(encoder_layer, num_layers=6)
+
+x = torch.randn(4, 20, 512)          # batch=4, seq_len=20, d_model=512
+padding_mask = torch.zeros(4, 20, dtype=torch.bool)  # True = ignore this position
+padding_mask[:, 15:] = True          # pretend the last 5 tokens are padding
+
+out = encoder(x, src_key_padding_mask=padding_mask)
+print(out.shape)  # torch.Size([4, 20, 512])
+```
+
+`norm_first=True` selects **pre-layer-norm** (normalize before the sublayer, not
+after) — this is the variant almost all modern Transformer implementations use
+because it produces more stable gradients in deep stacks, letting you train 12, 24,
+or more layers reliably without the careful learning-rate warmup the original
+post-LN design required.
+
+<Mermaid client:visible code={`flowchart TB
+  Tokens["Token IDs"] --> Embed["Embedding + Positional Encoding"]
+  Embed --> L1["Encoder layer 1"]
+  L1 --> L2["Encoder layer 2"]
+  L2 --> Ldots["... N layers"]
+  Ldots --> Out["Final hidden states (per-token)"]
+  Out --> Pool["[CLS] token / pooled output"]
+  Out --> Tok2["Per-token outputs (for NER, QA)"]`} />
+
+## Using a pretrained encoder in practice: Hugging Face
+
+You rarely train an encoder from scratch — you load a pretrained one and fine-tune it:
+
+```python
+from transformers import AutoTokenizer, AutoModel
+
+tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+model = AutoModel.from_pretrained("bert-base-uncased")
+
+inputs = tokenizer("The movie was surprisingly good.", return_tensors="pt")
+outputs = model(**inputs)
+
+last_hidden_state = outputs.last_hidden_state   # (1, seq_len, 768) — per-token vectors
+cls_embedding = last_hidden_state[:, 0, :]       # the [CLS] token, often used as a
+                                                  # whole-sentence summary vector
+print(last_hidden_state.shape)
+```
+
+For classification you'd typically add a small linear head on top of the `[CLS]`
+embedding (or use `AutoModelForSequenceClassification`, which does this for you) and
+fine-tune the whole stack on your labeled data.
+
+## Two encoder outputs, two use cases
+
+| Output | Shape | Typical use |
+|---|---|---|
+| `last_hidden_state[:, 0, :]` (`[CLS]`) | `(batch, d_model)` | Whole-sequence tasks: sentiment, topic classification |
+| `last_hidden_state` (all tokens) | `(batch, seq_len, d_model)` | Per-token tasks: NER, question answering (span extraction) |
+
+## Why the encoder half matters beyond BERT
+
+Encoder stacks aren't only used standalone (BERT-style) — they also form half of
+**encoder-decoder** models (T5, the original Transformer, BART). In that setting, the
+encoder processes the source sequence once, and its output feeds into every decoder
+layer via cross-attention. Understanding the encoder in isolation is therefore a
+prerequisite for understanding both encoder-only classification models and the
+translation/summarization-style encoder-decoder architectures covered later in this
+phase.

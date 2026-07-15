@@ -1,0 +1,72 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "GPU Computing"
+level: beginner
+phaseSlug: "phase-04-deep-learning"
+phaseName: "Deep Learning"
+topicSlug: "gpu-computing"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "PyTorch — CUDA semantics"
+    url: "https://pytorch.org/docs/stable/notes/cuda.html"
+  - type: video
+    title: "Why GPUs are fast for deep learning"
+    url: "https://www.youtube.com/watch?v=LMS0aQoBsIY"
+---
+
+## A CPU is a few experts; a GPU is thousands of workers
+
+A CPU has a handful of powerful cores good at complex, sequential tasks — like a
+small team of experts who can each handle very different jobs. A GPU has thousands
+of simpler cores, all doing the *same* simple operation on different pieces of data
+at once — like a warehouse of workers who can all multiply two numbers together
+simultaneously.
+
+Neural networks are made almost entirely of matrix multiplications: the same simple
+operation, repeated millions of times, on independent chunks of data. That's exactly
+the kind of work GPUs are built for, which is why training on a GPU can be 10-100x
+faster than on a CPU.
+
+### Moving tensors to the GPU
+
+By default, PyTorch tensors live on the CPU. You have to explicitly move them:
+
+```python
+import torch
+
+print(torch.cuda.is_available())   # True if a CUDA GPU is present
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+x = torch.randn(1000, 1000)
+x = x.to(device)          # move the tensor to the GPU (if available)
+
+model = torch.nn.Linear(1000, 10)
+model = model.to(device)  # models need moving too
+
+y = model(x)               # this now runs on the GPU
+```
+
+A tensor on the CPU and a tensor on the GPU **cannot** be used together directly —
+you'll get an error until both live on the same device. This is one of the first
+errors every PyTorch beginner hits, and it's expected: the framework is protecting
+you from an operation that would otherwise silently be extremely slow or impossible.
+
+### Try it yourself
+
+Write code that creates a `10x10` random tensor, moves it to the GPU if one is
+available, and prints which device it ended up on.
+
+<details>
+<summary>Solution</summary>
+
+```python
+import torch
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+x = torch.randn(10, 10).to(device)
+print(x.device)
+```
+
+</details>

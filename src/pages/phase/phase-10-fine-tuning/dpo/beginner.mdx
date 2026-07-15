@@ -1,0 +1,114 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "DPO"
+level: beginner
+phaseSlug: "phase-10-fine-tuning"
+phaseName: "Fine-tuning"
+topicSlug: "dpo"
+estReadTime: 7
+resources:
+  - type: docs
+    title: "Hugging Face TRL — DPOTrainer quickstart"
+    url: "https://huggingface.co/docs/trl/main/en/dpo_trainer"
+  - type: article
+    title: "Hugging Face — Preference tuning LLMs with DPO"
+    url: "https://huggingface.co/blog/pref-tuning"
+---
+
+## Preference tuning without the reinforcement learning machinery
+
+You just learned that [RLHF](/phase/phase-10-fine-tuning/rlhf-concepts/beginner) uses
+human preference rankings to train a reward model, then uses reinforcement learning to
+optimize a language model against that reward model. That's powerful, but it needs
+four models running together and a genuinely tricky RL training loop to get right.
+
+**DPO (Direct Preference Optimization)** gets a similar result — a model that prefers
+better responses — with a much simpler recipe: skip the separate reward model and the
+RL loop entirely, and instead train directly on `(prompt, chosen response, rejected
+response)` triples using an ordinary supervised loss.
+
+This lesson (Phase 10) is about *how to actually run DPO* in practice. If you want to
+understand the math and the research story behind why DPO works, that's covered
+separately in the Research Literacy phase's paper-analysis lesson on DPO — here we're
+focused on using it as a tool.
+
+### What a DPO dataset looks like
+
+```python
+example = {
+    "prompt": "Explain photosynthesis to a 5-year-old.",
+    "chosen": "Plants eat sunlight! They use it, plus water and air, to make their own food and grow.",
+    "rejected": "Photosynthesis is the biochemical process by which chlorophyll-containing organisms convert light energy into chemical energy, synthesizing carbohydrates from carbon dioxide and water.",
+}
+```
+
+For a given prompt, you provide a response you *want* the model to prefer (`chosen`)
+and one you want it to move away from (`rejected`). No reward model, no RL — just
+labeled comparisons.
+
+### A minimal DPO training run
+
+```python
+from trl import DPOTrainer, DPOConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from datasets import Dataset
+
+model = AutoModelForCausalLM.from_pretrained("gpt2")
+tokenizer = AutoTokenizer.from_pretrained("gpt2")
+tokenizer.pad_token = tokenizer.eos_token
+
+dataset = Dataset.from_list([
+    {
+        "prompt": "Explain photosynthesis to a 5-year-old.",
+        "chosen": "Plants eat sunlight! They use it to grow big and strong.",
+        "rejected": "Photosynthesis is a complex biochemical energy conversion process.",
+    },
+])
+
+trainer = DPOTrainer(
+    model=model,
+    args=DPOConfig(output_dir="./dpo-out", per_device_train_batch_size=1),
+    train_dataset=dataset,
+    processing_class=tokenizer,
+)
+trainer.train()
+```
+
+`DPOTrainer` handles everything else internally: it keeps a frozen copy of the starting
+model as a reference, computes the DPO loss comparing how much more likely the trained
+model makes the `chosen` response versus the `rejected` one (relative to the reference
+model), and backpropagates like any normal supervised training step.
+
+### Where DPO fits
+
+DPO is almost always run **after** SFT, on top of an already-instruction-tuned model —
+it sharpens preferences between already-reasonable responses, it doesn't teach the
+model to follow instructions from scratch.
+
+## Try it yourself
+
+You're building a coding assistant and want it to prefer concise code over
+over-commented, verbose code. Write one `(prompt, chosen, rejected)` example that would
+teach this preference.
+
+<details>
+<summary>Solution</summary>
+
+```python
+example = {
+    "prompt": "Write a function that returns the square of a number.",
+    "chosen": "def square(x):\n    return x * x",
+    "rejected": (
+        "def square(x):\n"
+        "    # This function takes a number x\n"
+        "    # and returns its square value\n"
+        "    result = x * x  # multiply x by itself\n"
+        "    return result  # return the computed result\n"
+    ),
+}
+```
+
+Both responses are *correct* — DPO isn't about right vs. wrong here, it's about
+teaching the model to prefer one valid style over another.
+
+</details>

@@ -1,0 +1,82 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Weaviate"
+level: beginner
+phaseSlug: "phase-08-retrieval-augmented-generation"
+phaseName: "Retrieval-Augmented Generation"
+topicSlug: "weaviate"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "Weaviate — Quickstart"
+    url: "https://weaviate.io/developers/weaviate/quickstart"
+  - type: docs
+    title: "Weaviate — Python client"
+    url: "https://weaviate.io/developers/weaviate/client-libraries/python"
+---
+
+## A vector database that can embed for you
+
+**Weaviate** is an open-source vector database with a distinctive feature for
+beginners: it can call an embedding model *for you*, as part of storing and
+searching data, instead of requiring you to embed text yourself before every insert
+and query. You still choose which embedding model to use — Weaviate just handles
+calling it.
+
+## Running Weaviate locally
+
+```python
+# pip install weaviate-client
+import weaviate
+from weaviate.classes.config import Configure
+
+client = weaviate.connect_to_local()  # assumes a local Weaviate instance (e.g. via Docker)
+
+articles = client.collections.create(
+    name="Article",
+    vector_config=Configure.Vectors.text2vec_transformers(),  # embeds automatically
+)
+```
+
+A **collection** in Weaviate (like Qdrant's collection or a database table) groups
+objects that share a schema and an embedding configuration.
+
+## Storing and searching without embedding it yourself
+
+```python
+articles = client.collections.get("Article")
+
+articles.data.insert_many([
+    {"text": "Our refund policy allows returns within 30 days."},
+    {"text": "To reset your password, go to Settings."},
+    {"text": "Standard shipping takes 5-7 business days."},
+])
+
+response = articles.query.near_text(query="How long until my order ships?", limit=2)
+
+for obj in response.objects:
+    print(obj.properties["text"])
+```
+
+Notice there's no explicit `model.encode(...)` call anywhere — Weaviate's configured
+vectorizer embeds both the inserted text and the query text automatically, behind the
+`near_text` call. This is convenient for getting started, though production systems
+often still choose to embed explicitly (with more control over the exact model and
+batching), which Weaviate also supports.
+
+## Try it yourself
+
+If Weaviate can auto-embed your text, why might you still want to bring your own
+already-computed vectors sometimes, instead of relying on the built-in vectorizer?
+
+<details>
+<summary>Solution</summary>
+
+Bringing your own vectors gives you full control over exactly which embedding model
+runs, its version, and how it's configured (batching, normalization, fine-tuning) —
+important once retrieval quality matters enough to tune the embedding step
+deliberately, or if you need consistency with vectors already computed elsewhere in
+your pipeline (e.g. the same embeddings used for a different search index). Weaviate
+supports both: automatic vectorization for convenience, or `near_vector` search with
+vectors you computed yourself for full control.
+</details>

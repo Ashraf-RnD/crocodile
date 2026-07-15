@@ -1,0 +1,72 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Cursor"
+level: beginner
+phaseSlug: "phase-13-ai-system-design"
+phaseName: "AI System Design"
+topicSlug: "cursor"
+estReadTime: 6
+resources:
+  - type: article
+    title: "Cursor — How Cursor indexes codebases (blog)"
+    url: "https://cursor.com/blog"
+  - type: docs
+    title: "Cursor Docs — Codebase Indexing"
+    url: "https://docs.cursor.com/context/codebase-indexing"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## A code editor with an AI pair programmer built in
+
+Cursor is a fork of VS Code with AI woven directly into the editing
+experience, rather than bolted on as a sidebar plugin. Three features define
+it: inline autocomplete that predicts multi-line edits (not just the next
+few words), a chat panel that can see and edit your files directly, and an
+"agent" mode that can plan and carry out multi-step changes across your
+codebase — creating files, running terminal commands, and fixing errors it
+introduced, with your approval at each step.
+
+<Mermaid client:visible code={`flowchart LR
+  You["You describe a change or start typing"] --> Context["Cursor gathers context:<br/>open files, cursor position, relevant code"]
+  Context --> Model["LLM proposes an edit or full diff"]
+  Model --> Preview["Shown as a diff in the editor"]
+  Preview --> Decision{"You accept?"}
+  Decision -->|yes| Apply["Change applied to your files"]
+  Decision -->|no| Discard["Rejected, nothing changes"]`} />
+
+## Why it needs to "know" your codebase
+
+A generic LLM has never seen your private repository. For Cursor to suggest
+a change that actually fits — using your existing helper functions, matching
+your naming conventions, not breaking a function used ten files away — it
+needs to find and include the *relevant* pieces of your codebase in what it
+sends to the model. Cursor builds a local index of your project (roughly:
+turning chunks of your code into a searchable representation) so that when
+you ask it something, it can pull in the handful of files that actually
+matter instead of guessing blind.
+
+## Predict-and-diff, not just chat
+
+The signature Cursor experience is the multi-line "Tab" completion: instead
+of just finishing your current line, it predicts the *next edit* you're
+likely to make — sometimes several lines away from your cursor — and shows it
+as a diff you can accept with one keystroke. This only works because the
+suggestion is fast: if it took several seconds to appear, it would break your
+flow instead of helping it.
+
+## Try it yourself
+
+If Cursor's agent mode can run terminal commands and edit multiple files on
+its own, what's one reason it still shows you a diff and asks for approval
+before applying changes, instead of just doing it silently?
+
+<details>
+<summary>Solution</summary>
+
+Because an LLM can be confidently wrong — it might delete code it
+misunderstood, introduce a bug, or make a change far larger than what you
+actually wanted. Showing the diff and requiring approval keeps a human in the
+loop as a safety check before anything irreversible happens, which matters
+enormously more here than in, say, a chat answer, because the "output" is
+executable code and shell commands with real side effects on your machine.
+</details>

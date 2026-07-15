@@ -1,0 +1,81 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Stable Diffusion"
+level: intermediate
+phaseSlug: "phase-09-multimodal-ai"
+phaseName: "Multimodal AI"
+topicSlug: "stable-diffusion"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "Diffusers — Image-to-image pipeline"
+    url: "https://huggingface.co/docs/diffusers/using-diffusers/img2img"
+  - type: docs
+    title: "Diffusers — LoRA fine-tuning"
+    url: "https://huggingface.co/docs/diffusers/training/lora"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Why "stable" diffusion: working in latent space
+
+Generating images by denoising directly in pixel space (say, 512x512x3 values) is
+extremely expensive. Stable Diffusion's key efficiency trick is doing the denoising in
+a much smaller **latent space** instead — a compressed representation — and only
+decoding back to pixels at the very end:
+
+<Mermaid client:visible code={`flowchart LR
+  A["Text prompt"] --> B["Text encoder (CLIP)"]
+  B --> C["UNet: denoise in latent space\n(repeated N steps)"]
+  D["Random noise\n(in latent space)"] --> C
+  C --> E["VAE decoder"]
+  E --> F["Final image (pixels)"]`} />
+
+- **Text encoder (CLIP)**: converts your prompt into embeddings the UNet can condition
+  on at every denoising step.
+- **UNet**: the actual diffusion model — repeatedly predicts and removes a bit of noise
+  from the latent representation, guided by the text embedding.
+- **VAE (Variational Autoencoder)**: compresses images into latent space (during
+  training) and decompresses the final denoised latent back into a real image (at
+  generation time). Working in this compressed ~64x64 latent space instead of full
+  512x512 pixels is most of why Stable Diffusion can run on a consumer GPU at all.
+
+## Image-to-image: starting from a real image, not noise
+
+Instead of starting from pure random noise, `img2img` starts the denoising process from
+a *partially noised* version of an existing image — letting you steer an existing photo
+toward a new style while preserving its overall structure:
+
+```python
+from diffusers import StableDiffusionImg2ImgPipeline
+
+pipe = StableDiffusionImg2ImgPipeline.from_pretrained(
+    "runwayml/stable-diffusion-v1-5", torch_dtype=torch.float16
+).to("cuda")
+
+result = pipe(
+    prompt="a lighthouse in the style of Van Gogh",
+    image=init_image,
+    strength=0.6,  # how much to deviate from the original image
+).images[0]
+```
+
+Lower `strength` stays closer to the original image's layout; higher values give the
+model more freedom to change it, approaching pure text-to-image generation as
+`strength` approaches 1.0.
+
+## LoRA: cheap fine-tuning for a custom style or subject
+
+Fully fine-tuning a diffusion model's billions of parameters for a custom style (a
+specific character, art style, or product) is expensive. **LoRA** (Low-Rank Adaptation)
+trains a tiny set of additional weights instead, then merges them into the base model
+at inference time:
+
+```python
+pipe.load_lora_weights("path/to/custom_style_lora")
+image = pipe("a lighthouse, custom_style").images[0]
+```
+
+LoRA adapters are typically a few MB to a couple hundred MB (versus multiple GB for the
+base model), which is why the Stable Diffusion community can share thousands of
+specialized style/character adapters — retraining the whole model per style would be
+infeasible for individual hobbyists.

@@ -1,0 +1,86 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Autograd"
+level: intermediate
+phaseSlug: "phase-04-deep-learning"
+phaseName: "Deep Learning"
+topicSlug: "autograd"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "PyTorch — Autograd mechanics"
+    url: "https://pytorch.org/docs/stable/notes/autograd.html"
+  - type: docs
+    title: "PyTorch — torch.no_grad"
+    url: "https://pytorch.org/docs/stable/generated/torch.no_grad.html"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The dynamic computation graph
+
+Every time you run tensor operations with `requires_grad=True` involved, PyTorch
+builds a **dynamic computation graph** — one that's constructed fresh on every
+forward pass, as opposed to frameworks that compile a static graph ahead of time.
+Each tensor's `.grad_fn` points to the operation that produced it, forming a chain
+back to the original leaf tensors (your inputs and parameters).
+
+```python
+x = torch.tensor(2.0, requires_grad=True)
+y = x * 3
+z = y ** 2
+
+print(z.grad_fn)                # <PowBackward0>
+print(z.grad_fn.next_functions) # points back to y's MulBackward0
+```
+
+<Mermaid client:visible code={`flowchart RL
+  z["z = y^2"] -->|grad_fn: PowBackward| y["y = x * 3"]
+  y -->|grad_fn: MulBackward| x["x (leaf, requires_grad=True)"]`} />
+
+Because the graph is rebuilt every forward pass, you can freely use Python control
+flow (`if`, loops with variable length) inside your model — the graph simply
+reflects whatever path execution actually took, unlike static-graph frameworks that
+need the same shape/branching every run.
+
+## Turning gradient tracking off
+
+Not every tensor operation needs gradients — inference, evaluation, and data
+preprocessing don't. `torch.no_grad()` disables graph construction, saving both
+memory (no need to store intermediate activations) and compute:
+
+```python
+model.eval()
+with torch.no_grad():
+    predictions = model(x)     # no graph built, faster + less memory
+```
+
+`.detach()` does something narrower: it returns a new tensor that shares the same
+data but is disconnected from the graph, useful when you want to use a value without
+letting gradients flow through that specific path (e.g., target networks in RL).
+
+## Accumulation and why you call `zero_grad()`
+
+Gradients **accumulate** by default — each `.backward()` call *adds* to `.grad`
+rather than replacing it. This is intentional (it supports gradient accumulation
+across mini-batches for effectively larger batch sizes) but means every standard
+training loop must explicitly reset gradients before each step:
+
+```python
+for x, y in dataloader:
+    optimizer.zero_grad()          # reset, or grads pile up across steps
+    loss = criterion(model(x), y)
+    loss.backward()                # accumulate gradients into .grad
+    optimizer.step()               # use .grad to update parameters
+```
+
+Forgetting `zero_grad()` is one of the most common bugs in hand-written training
+loops — the model appears to train but converges wrong, because gradients from
+previous batches keep contaminating the current update.
+
+## `retain_graph` and calling backward twice
+
+By default, the graph is freed immediately after `.backward()` to save memory —
+you can't call it twice on the same graph. `retain_graph=True` keeps it alive, which
+is occasionally needed (e.g., computing gradients w.r.t. two different losses that
+share a forward pass), but retaining graphs unnecessarily is a common cause of
+memory leaks in custom training loops.

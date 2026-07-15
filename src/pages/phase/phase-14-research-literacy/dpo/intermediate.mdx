@@ -1,0 +1,92 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "DPO"
+level: intermediate
+phaseSlug: "phase-14-research-literacy"
+phaseName: "Research Literacy"
+topicSlug: "dpo"
+estReadTime: 10
+resources:
+  - type: article
+    title: "Direct Preference Optimization (original paper)"
+    url: "https://arxiv.org/abs/2305.18290"
+  - type: docs
+    title: "Hugging Face TRL — DPOTrainer"
+    url: "https://huggingface.co/docs/trl/dpo_trainer"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+_This lesson covers how DPO's loss is derived and computed. For a hands-on
+fine-tuning walkthrough, see Phase 10: Fine-tuning._
+
+## The reparameterization trick
+
+RLHF's reward modeling stage fits a reward function `r(x, y)` to preference
+data under the Bradley-Terry model, then optimizes a policy `π` against that
+reward with a KL penalty toward a reference policy `π_ref`, to keep the tuned
+model from drifting too far from its starting behavior. DPO's key insight is
+that, for this particular KL-constrained reward-maximization objective, the
+**optimal policy has a closed-form relationship to the reward**:
+
+```
+r(x, y) = β log( π(y|x) / π_ref(y|x) ) + constant
+```
+
+In other words, the reward is implicitly defined by how much more likely the
+*policy itself* makes a response compared to the reference model. Substituting
+this back into the Bradley-Terry preference model produces a loss expressed
+**entirely in terms of the policy's own probabilities** — no separate reward
+model needed at all.
+
+## The DPO loss
+
+```
+L_DPO = -log σ( β [ log π(y_w|x)/π_ref(y_w|x) − log π(y_l|x)/π_ref(y_l|x) ] )
+```
+
+where `y_w` is the preferred ("winning") response, `y_l` is the dispreferred
+("losing") response, `σ` is the sigmoid function, and `β` controls how strongly
+the policy is allowed to deviate from the reference model. This is literally
+a binary classification loss — "is the preferred response more likely, relative
+to the reference model, than the dispreferred one?" — applied directly on top
+of the language model's own token probabilities.
+
+```python
+import torch
+import torch.nn.functional as F
+
+def dpo_loss(policy_logps_w, policy_logps_l, ref_logps_w, ref_logps_l, beta=0.1):
+    policy_logratio = policy_logps_w - policy_logps_l
+    ref_logratio = ref_logps_w - ref_logps_l
+    logits = beta * (policy_logratio - ref_logratio)
+    return -F.logsigmoid(logits).mean()
+```
+
+Both `policy_logps` (from the model being trained) and `ref_logps` (from a
+frozen copy of the starting model) are just the sum of log-probabilities the
+model assigns to each token in the response — quantities any language model
+already computes during a normal forward pass.
+
+<Mermaid client:visible code={`flowchart LR
+  Data["(prompt, preferred response, dispreferred response)"] --> Policy["Policy model: log P(preferred), log P(dispreferred)"]
+  Data --> Ref["Frozen reference model: log P(preferred), log P(dispreferred)"]
+  Policy --> Loss["DPO loss: push policy to favor preferred relative to reference"]
+  Ref --> Loss
+  Loss --> Update["Standard gradient descent update"]`} />
+
+## Why no reward model or RL loop is needed
+
+Because the reward is mathematically absorbed into the policy's own
+probability ratios, training reduces to a supervised-learning-style
+objective computed directly from two forward passes (policy and frozen
+reference) over pairs of responses — no reward model to train separately, no
+sampling rollouts from the policy during training, and no PPO-style
+value-function estimation or clipping. This is what makes DPO's training loop
+resemble ordinary supervised fine-tuning far more than it resembles
+reinforcement learning.
+
+## Data requirement
+
+DPO needs the same kind of data RLHF's reward model needs: pairs of responses
+to the same prompt, with a human (or AI) preference label indicating which one
+is better — no numeric reward scores required, just relative comparisons.

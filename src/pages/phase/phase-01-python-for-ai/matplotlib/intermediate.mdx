@@ -1,0 +1,112 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Matplotlib"
+level: intermediate
+phaseSlug: "phase-01-python-for-ai"
+phaseName: "Python for AI"
+topicSlug: "matplotlib"
+estReadTime: 9
+resources:
+  - type: docs
+    title: "Matplotlib — The Object-Oriented API (Axes/Figure)"
+    url: "https://matplotlib.org/stable/users/explain/quick_start.html#a-note-on-the-object-oriented-api-vs-the-pyplot-api"
+  - type: article
+    title: "Real Python — Matplotlib Guide"
+    url: "https://realpython.com/python-matplotlib-guide/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Two APIs: `pyplot` vs. object-oriented
+
+The `plt.plot(...)` style (**pyplot API**) is convenient for quick, single-chart
+scripts, but it implicitly tracks "the current figure/axes," which breaks down once
+you need multiple subplots or want to build reusable plotting functions. The
+**object-oriented API** — explicitly creating `Figure` and `Axes` objects — is what
+production plotting code actually uses.
+
+```python
+import matplotlib.pyplot as plt
+import numpy as np
+
+fig, ax = plt.subplots(figsize=(8, 5))
+
+epochs = np.arange(1, 11)
+train_loss = 1 / epochs + 0.1
+val_loss = 1 / epochs + 0.15 + np.random.normal(0, 0.02, size=10)
+
+ax.plot(epochs, train_loss, label="train loss")
+ax.plot(epochs, val_loss, label="val loss")
+ax.set_xlabel("Epoch")
+ax.set_ylabel("Loss")
+ax.set_title("Training vs. validation loss")
+ax.legend()
+fig.savefig("loss_curve.png", dpi=150, bbox_inches="tight")
+```
+
+Everything is a method on `ax`, not a bare `plt.` call — this is what lets you pass
+`ax` around to helper functions and build multi-panel figures cleanly.
+
+## Multiple subplots for comparing runs
+
+A very common AI workflow: comparing several training runs, or several metrics from
+one run, side by side.
+
+```python
+fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+axes[0].plot(epochs, train_loss, label="train")
+axes[0].plot(epochs, val_loss, label="val")
+axes[0].set_title("Loss")
+axes[0].legend()
+
+accuracy = 1 - val_loss / 2
+axes[1].plot(epochs, accuracy, color="green")
+axes[1].set_title("Validation accuracy")
+
+fig.tight_layout()
+fig.savefig("metrics.png")
+```
+
+<Mermaid client:visible code={`flowchart LR
+  F["fig, axes = plt.subplots(1, 2)"] --> A0["axes[0]: loss plot"]
+  F --> A1["axes[1]: accuracy plot"]
+  A0 --> Save["fig.savefig()"]
+  A1 --> Save`} />
+
+## Visualizing model outputs directly
+
+Beyond metrics, matplotlib is how you inspect actual model inputs/outputs — images,
+attention maps, confusion matrices.
+
+```python
+import numpy as np
+
+confusion = np.array([[50, 3, 2], [4, 45, 1], [1, 2, 47]])
+labels = ["cat", "dog", "bird"]
+
+fig, ax = plt.subplots()
+im = ax.imshow(confusion, cmap="Blues")
+ax.set_xticks(range(len(labels)))
+ax.set_yticks(range(len(labels)))
+ax.set_xticklabels(labels)
+ax.set_yticklabels(labels)
+ax.set_xlabel("Predicted")
+ax.set_ylabel("Actual")
+
+for i in range(len(labels)):
+    for j in range(len(labels)):
+        ax.text(j, i, confusion[i, j], ha="center", va="center")
+
+fig.colorbar(im)
+fig.savefig("confusion_matrix.png")
+```
+
+This exact pattern — `imshow` plus text annotations — is how confusion matrices,
+attention weight grids, and feature-map visualizations are all rendered.
+
+## `plt.show()` vs. `savefig()` in real pipelines
+
+Interactive `plt.show()` is for notebooks; training scripts and pipelines that run
+headless (no display, e.g. on a remote GPU box or in CI) should always use
+`fig.savefig(path)` instead — calling `plt.show()` on a machine with no display
+backend either does nothing or raises an error.

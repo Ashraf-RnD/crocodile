@@ -1,0 +1,86 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Monitoring"
+level: beginner
+phaseSlug: "phase-12-mlops"
+phaseName: "MLOps"
+topicSlug: "monitoring"
+estReadTime: 6
+resources:
+  - type: docs
+    title: "Prometheus — Getting Started"
+    url: "https://prometheus.io/docs/prometheus/latest/getting_started/"
+  - type: article
+    title: "Monitoring Machine Learning Models in Production"
+    url: "https://christophergs.com/machine%20learning/2020/03/14/how-to-monitor-machine-learning-models/"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Watching a model after it ships
+
+Deploying a model isn't the finish line — it's the start of a new
+responsibility. Unlike a typical web app, an ML model can be "up" (responding
+to requests, no errors) while quietly making *wrong* predictions, and normal
+uptime monitoring won't catch that.
+
+ML monitoring generally covers two different layers:
+
+- **System health** — is the service up, how fast does it respond, is it
+  erroring (the same things you'd monitor for any web service)
+- **Model health** — are predictions still accurate, has the input data
+  changed, is the model behaving as expected
+
+### A minimal example: logging predictions for later review
+
+```python
+import logging
+import time
+
+logger = logging.getLogger("model_monitor")
+
+def predict(features):
+    start = time.time()
+    prediction = model.predict(features)
+    latency_ms = (time.time() - start) * 1000
+
+    logger.info({
+        "timestamp": time.time(),
+        "features": features,
+        "prediction": prediction,
+        "latency_ms": latency_ms,
+    })
+    return prediction
+```
+
+Every prediction gets logged with enough context to look back later and ask
+"what did the model see, and what did it say?" — the raw material any
+monitoring dashboard or drift check is built from.
+
+### The mental model
+
+<Mermaid client:visible code={`flowchart LR
+  A["Prediction request"] --> B["Model serves prediction"]
+  B --> C["Log: inputs, output, latency"]
+  C --> D["Dashboard: request rate, latency, error rate"]
+  C --> E["Later: compare predictions vs. actual outcomes"]`} />
+
+Without this logging, you only find out a model degraded when someone
+downstream complains — with it, you can catch a problem from a dashboard
+before it becomes a business incident.
+
+## Try it yourself
+
+You want to know if your model's average response time is getting slower
+over the past week. What two things do you need to have been logging all
+along?
+
+<details>
+<summary>Solution</summary>
+
+You need **timestamps** (to group by day/hour) and **latency measurements**
+per prediction (like `latency_ms` in the example above). Without both logged
+consistently from day one, there's no way to reconstruct a "response time
+over time" trend after the fact — this is why monitoring has to be built in
+from the start, not added retroactively once a problem is suspected.
+
+</details>

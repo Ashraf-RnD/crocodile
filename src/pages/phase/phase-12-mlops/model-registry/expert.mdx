@@ -1,0 +1,107 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "Model Registry"
+level: expert
+phaseSlug: "phase-12-mlops"
+phaseName: "MLOps"
+topicSlug: "model-registry"
+estReadTime: 12
+resources:
+  - type: article
+    title: "Model Governance in Regulated Industries"
+    url: "https://www.oreilly.com/library/view/introducing-mlops/9781492083283/"
+  - type: docs
+    title: "Vertex AI Model Registry"
+    url: "https://cloud.google.com/vertex-ai/docs/model-registry/introduction"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The registry is metadata, not a traffic router
+
+The single most consequential misunderstanding at production scale: a
+registry stage/alias flip is a **metadata write**, not an atomic traffic
+cutover. If serving replicas poll the registry on an interval or cache a
+loaded model in memory, promoting a new version creates a window where
+different replicas serve different model versions to different users
+simultaneously. For most use cases this transient inconsistency is harmless,
+but for anything requiring strict consistency (e.g. a fraud model where two
+requests in the same user session must be scored by the same model version
+for an audit trail to make sense), the registry must be paired with an
+explicit, coordinated rollout mechanism — a deployment orchestrator that
+waits for all replicas to confirm the new version loaded before considering
+promotion complete, not a passive "replicas will eventually pick it up."
+
+<Mermaid client:visible code={`flowchart TB
+  R["Registry: alias flipped to v15"] -.eventually consistent.-> S1["Replica A (refreshed, serving v15)"]
+  R -.eventually consistent.-> S2["Replica B (stale cache, still serving v14)"]
+  S1 --> U1["User request 1"]
+  S2 --> U2["User request 2 — same session, different model!"]`} />
+
+## Registry as the boundary between ML and platform ownership
+
+In mature ML orgs, the model registry is deliberately the interface boundary
+between the ML team (which owns training, evaluation, promotion decisions)
+and the platform/serving team (which owns deployment infrastructure,
+scaling, and uptime). This separation only works if the registry's contract
+is stable and well-specified: a versioned, immutable artifact with a
+resolvable URI and a documented input/output schema. When teams instead pass
+models around as ad hoc file paths or Slack messages ("the new model is at
+`s3://bucket/model_v2_final.pkl`"), the registry's governance value collapses
+— the whole point is that the platform team never needs to understand *how*
+a model was trained to safely deploy it, only that it conforms to the
+registry's contract.
+
+## Rollback semantics: registry rollback vs. data-dependent rollback
+
+A subtlety production teams miss: rolling back a model version in the
+registry is not always sufficient to roll back behavior, if the model
+depends on external state that has also changed — e.g. a feature store
+schema migration, or an embedding index rebuilt for the new model version. A
+naive rollback (repoint the alias to the old version) can fail or degrade
+silently if the old model now receives features in a format only the new
+model expects. Real rollback procedures for stateful ML systems need to
+version-pin the *entire serving context* (model version + feature schema
+version + any auxiliary index), not just the model artifact — the registry
+entry should carry compatibility metadata (`compatible_feature_schema_version`)
+that the deployment tooling checks before allowing a rollback, rather than
+assuming any two registered versions are interchangeable.
+
+## Governance and approval workflows
+
+Regulated deployments (finance, healthcare, insurance) frequently require
+a documented human sign-off before a model reaches production — the registry
+becomes the system of record for that approval:
+
+```python
+client.set_model_version_tag(name, version, "review_status", "pending")
+# ... human reviewer examines fairness/bias reports, model card ...
+client.set_model_version_tag(name, version, "review_status", "approved")
+client.set_model_version_tag(name, version, "approved_by", "jane.doe@company.com")
+client.set_model_version_tag(name, version, "approval_ticket", "MODEL-4521")
+
+# Promotion pipeline checks this tag before allowing the alias flip
+if client.get_model_version(name, version).tags.get("review_status") != "approved":
+    raise PermissionError("Cannot promote unapproved model version")
+```
+
+This pattern — encoding a governance gate as a required tag the promotion
+pipeline enforces programmatically — turns "someone should review this" from
+a process convention (frequently skipped under deadline pressure) into a
+technical control that cannot be bypassed without an explicit override.
+
+## Trade-offs across registry implementations
+
+| Concern | MLflow Registry | Cloud-native (Vertex/SageMaker) | Custom (registry-as-database) |
+|---|---|---|---|
+| Portability | High — open format, self-hostable | Low — tied to cloud provider | Highest — fully bespoke |
+| Governance/approval workflows | Manual via tags, no native gate | Some native approval features | Fully custom, matches org process exactly |
+| Setup/ops cost | Moderate (self-hosted) | None (managed) | High (build and maintain yourself) |
+| Multi-cloud/hybrid support | Good | Poor — single-cloud by design | Depends entirely on implementation |
+| Alias/traffic-routing integration | Manual (must build serving-side polling) | Tighter integration with provider's serving layer | Fully custom |
+
+The decision that matters most isn't the registry's feature list — it's
+whether your organization's compliance and rollback requirements demand
+guarantees (atomic multi-artifact rollback, enforced approval gates) that no
+off-the-shelf registry provides out of the box, in which case the registry
+becomes a thin layer you build governance logic around, not a finished
+governance system itself.
