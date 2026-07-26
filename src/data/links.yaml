@@ -1,0 +1,6 @@
+# Add useful links here as you come across them.
+# Each entry needs a topic and a url; notes is optional.
+links:
+  - topic: LLM Guides
+    url: https://llmguides.ai/learn/what-are-tokens/
+    notes: Guides for understanding LLM.
