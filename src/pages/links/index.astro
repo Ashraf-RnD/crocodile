@@ -1,0 +1,19 @@
+---
+import Base from "../../layouts/Base.astro";
+import Sidebar from "../../components/Sidebar.astro";
+import LinksManager from "../../components/LinksManager.tsx";
+---
+<Base title="Links">
+  <div class="app-shell">
+    <Sidebar />
+    <main class="main">
+      <h1>Links</h1>
+      <p style="color: var(--text-muted); font-size: 0.85rem;">
+        Add useful links as you find them, or edit <code>src/data/links.yaml</code> directly.
+        Adding from the form below only works while the dev server is running.
+      </p>
+
+      <LinksManager client:load />
+    </main>
+  </div>
+</Base>
