@@ -1,0 +1,114 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "LLM Fundamentals"
+level: intermediate
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "llm-fundamentals"
+estReadTime: 9
+resources:
+  - type: article
+    title: "Anthropic — How does Claude work?"
+    url: "https://www.anthropic.com/research"
+  - type: docs
+    title: "OpenAI — Tokenizer tool"
+    url: "https://platform.openai.com/tokenizer"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## The architecture in one paragraph: transformers and attention
+
+Modern LLMs are built on the **transformer** architecture. Its key idea is
+**self-attention**: for every token, the model computes how much every *other* token in
+the input should influence its understanding of this one. This is why "it" in "the
+trophy didn't fit in the suitcase because **it** was too big" can correctly resolve to
+"the trophy" — attention lets the model weigh the relevance of every earlier word when
+interpreting each new one, regardless of distance. That's the mechanism underneath
+things that look like "understanding context."
+
+<Mermaid client:visible code={`flowchart TB
+  A["Input tokens"] --> B["Embedding: token -> vector of numbers"]
+  B --> C["Self-attention layers\n(each token weighs every other token)"]
+  C --> D["Feed-forward layers\n(per-token transformation)"]
+  D --> E["Repeat for N layers"]
+  E --> F["Predict probability\nfor next token"]`} />
+
+Training is where the billions of parameters get their values: the model is shown huge
+amounts of text and repeatedly asked to predict the next token, with its internal
+numbers nudged slightly every time it's wrong. Do that trillions of times and the
+patterns of language, facts, and reasoning get encoded into those numbers.
+
+## Tokenization: how text becomes numbers
+
+Models can't operate on raw text — they operate on numbers. **Tokenization** is the
+step that converts text into a sequence of integer IDs, using a fixed vocabulary (often
+50,000-200,000 possible tokens) built ahead of time from a huge text corpus using an
+algorithm like **byte-pair encoding (BPE)**, which merges the most frequently
+co-occurring character pairs into single tokens. That's why common words are one token,
+but rare words, typos, or non-English text often split into several:
+
+```python
+import tiktoken
+
+enc = tiktoken.encoding_for_model("gpt-4o-mini")
+
+print(enc.encode("the"))            # 1 token — extremely common
+print(enc.encode("tokenization"))   # likely 2+ tokens — less common as a whole word
+print(enc.encode("你好"))            # non-English text often costs more tokens per character
+```
+
+This has a real consequence: **the same idea can cost different amounts depending on
+language and phrasing.** Non-English text and unusual vocabulary (jargon, product
+names, code identifiers) tend to consume more tokens per unit of meaning, which
+directly affects both cost and how much fits in the context window.
+
+## The context window is a hard token budget
+
+The **context window** is the maximum number of tokens a model can process in a single
+request — input plus output combined. It's not "memory" in the sense of the model
+recalling past conversations on its own; every previous message you want the model to
+"remember" has to be resent as input tokens on every single call.
+
+```python
+# Every call re-sends the full conversation history as input tokens —
+# nothing is retained by the model between calls.
+messages = [
+    {"role": "user", "content": "My name is Alex."},
+    {"role": "assistant", "content": "Nice to meet you, Alex!"},
+    {"role": "user", "content": "What's my name?"},  # only answerable because
+                                                       # the history above was resent
+]
+```
+
+This is why long conversations get expensive quickly (you're re-paying for the whole
+history every turn) and why techniques like summarizing or trimming older messages —
+covered in the Context Management and Memory lessons — become necessary once a
+conversation grows past a certain length.
+
+## Why output is generated one token at a time (and why that's slow)
+
+Generation is **autoregressive**: each output token is predicted using every token that
+came before it (the prompt *and* everything generated so far), then appended, then used
+to predict the next one. This sequential dependency is why longer responses take
+proportionally longer to generate — there's no way to compute token 500 without having
+already produced tokens 1 through 499, which is also why streaming responses (showing
+tokens as they're generated) feels so much more responsive than waiting for the whole
+answer.
+
+### Try it yourself
+
+A prompt has a 2,000-token system prompt, an 8,000-token retrieved document, and a
+50-token user question. The model's context window is 8,192 tokens. What happens, and
+what's the fix?
+
+<details>
+<summary>Solution</summary>
+
+2,000 + 8,000 + 50 = 10,050 tokens, which exceeds the 8,192-token window — the request
+will either error out or the document will get silently truncated, depending on the
+API. The fix is to reduce what you send: retrieve a smaller, more targeted chunk of the
+document instead of the whole thing (see the RAG phase's Chunking lesson), summarize
+the system prompt, or switch to a model with a larger context window if the full
+document genuinely needs to be present at once.
+
+</details>

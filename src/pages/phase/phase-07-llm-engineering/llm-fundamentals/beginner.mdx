@@ -1,0 +1,104 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "LLM Fundamentals"
+level: beginner
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "llm-fundamentals"
+estReadTime: 6
+resources:
+  - type: article
+    title: "OpenAI — What is a Large Language Model?"
+    url: "https://help.openai.com/en/articles/6783457-what-is-chatgpt"
+  - type: video
+    title: "3Blue1Brown — But what is a GPT?"
+    url: "https://www.youtube.com/watch?v=wjZofJX0v4M"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Think of it like the world's best autocomplete
+
+An LLM (Large Language Model) is a program that has read an enormous amount of text —
+books, articles, code, conversations — and learned, statistically, what word is likely
+to come next given the words that came before it. That's it at the core. "The capital
+of France is ___" gets completed with "Paris" not because the model "knows" geography
+the way you do, but because in everything it read, "Paris" overwhelmingly followed that
+pattern of words.
+
+What makes this feel like intelligence is scale: when a model has seen trillions of
+words of text and has billions of internal parameters (adjustable numbers) to encode
+patterns, "predict the next word" turns out to be powerful enough to answer questions,
+write code, summarize documents, and hold a conversation — because doing all of that
+well *requires* an accurate model of language, facts, and reasoning patterns.
+
+<Mermaid client:visible code={`flowchart LR
+  A["Your prompt"] --> B["Model predicts\nmost likely next word"]
+  B --> C["Word added to the text"]
+  C --> B
+  C --> D["Repeat until done\n(a full response)"]`} />
+
+## How it actually generates a response
+
+The model doesn't write your whole answer in one shot. It generates one small piece of
+text at a time, adds that piece to the conversation so far, and then predicts the next
+piece based on everything before it — including what it just generated. This loop
+repeats until the model decides the response is complete (or hits a length limit).
+
+```python
+from openai import OpenAI
+client = OpenAI()
+
+response = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "What is a large language model?"}],
+)
+print(response.choices[0].message.content)
+```
+
+Behind that one API call, the model is silently doing the "predict the next piece,
+repeat" loop dozens or hundreds of times before the full answer comes back to you.
+
+## Tokens: the actual unit the model works with
+
+The model doesn't see words the way you do — it sees **tokens**, which are small
+chunks of text (often a word, part of a word, or a piece of punctuation). "Learning" as
+a single word might become two tokens: `Learn` and `ing`. This chunking lets the model
+handle any word — even ones it's never seen, like a typo or a made-up name — by
+breaking it into familiar pieces.
+
+```python
+import tiktoken
+
+enc = tiktoken.encoding_for_model("gpt-4o-mini")
+tokens = enc.encode("Learning about tokens is fun!")
+print(tokens)              # e.g. [greek-looking numeric IDs]
+print(len(tokens))         # how many tokens this text costs
+print(enc.decode(tokens))  # back to the original text
+```
+
+Tokens matter to you as a builder for two very practical reasons:
+
+1. **Cost** — LLM APIs charge per token, both for what you send (input) and what the
+   model sends back (output). A longer prompt or a longer answer costs more.
+2. **Limits** — every model has a maximum number of tokens it can handle in one
+   request (its "context window"). If your prompt plus the expected response would
+   exceed that, it either gets cut off or rejected.
+
+A rough rule of thumb for English text: **1 token ≈ 4 characters ≈ ¾ of a word.** So
+100 words is roughly 130-150 tokens.
+
+### Try it yourself
+
+Without running any code, estimate how many tokens this sentence is: `"The quick brown
+fox jumps over the lazy dog."` (9 words).
+
+<details>
+<summary>Solution</summary>
+
+Using the ≈¾-word-per-token rule of thumb: 9 words ÷ 0.75 ≈ 12 tokens. If you run it
+through `tiktoken`, you'd find it's close — common short words are usually one token
+each, so simple sentences often land near one token per word rather than the average.
+The rule of thumb is for *estimating cost quickly*, not for exact counts — always
+measure precisely before you rely on a number in production.
+
+</details>

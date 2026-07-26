@@ -1,0 +1,128 @@
+---
+layout: ../../../../layouts/Lesson.astro
+title: "LLM Fundamentals"
+level: expert
+phaseSlug: "phase-07-llm-engineering"
+phaseName: "LLM Engineering"
+topicSlug: "llm-fundamentals"
+estReadTime: 11
+resources:
+  - type: article
+    title: "OpenAI — Pricing (per-token cost by model)"
+    url: "https://openai.com/api/pricing/"
+  - type: docs
+    title: "Anthropic — Extended thinking"
+    url: "https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking"
+---
+import Mermaid from "../../../../components/Mermaid.tsx";
+
+## Decoding: the model outputs a distribution, not an answer
+
+At every generation step, the model doesn't produce a single next token — it produces a
+probability distribution over the entire vocabulary (every possible token, each with a
+likelihood). A **sampling strategy** decides which token actually gets picked from that
+distribution, and this decision materially changes output quality and determinism:
+
+- **Temperature** scales the distribution before sampling. Near 0, the model almost
+  always picks the highest-probability token (deterministic, repetitive, best for
+  extraction/classification tasks). Higher values flatten the distribution, giving
+  lower-probability tokens a real chance of being picked (more varied, better for
+  creative tasks, riskier for factual ones).
+- **Top-p (nucleus sampling)** restricts sampling to the smallest set of tokens whose
+  cumulative probability exceeds `p`, cutting off the long tail of implausible tokens
+  regardless of how many there are.
+- **Top-k** simply restricts sampling to the `k` highest-probability tokens.
+
+```python
+response = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "Extract the invoice total as a number."}],
+    temperature=0,  # deterministic-leaning: for extraction, you want the same
+                    # answer every time, not creative variation
+)
+```
+
+This is also why **the same prompt can return different outputs on different runs** at
+nonzero temperature — a fact that matters enormously for testing and evals, since a
+naive "does the output exactly match" test will flake even when the model is behaving
+correctly.
+
+<Mermaid client:visible code={`flowchart LR
+  A["Logits (raw scores)\nfor every vocabulary token"] --> B["Softmax ->\nprobability distribution"]
+  B --> C["Temperature scales\nthe distribution"]
+  C --> D["Top-p / top-k\ntrims candidates"]
+  D --> E["Sample -> one token chosen"]`} />
+
+## Why the tokenizer is a fixed, model-specific artifact
+
+The tokenizer's vocabulary is trained once, ahead of time, on a representative corpus,
+and then frozen for the life of that model family — it is **not** something the model
+adapts at inference time. This has consequences that catch people off guard:
+
+- **Tokenizers differ across model families.** The same string produces a different
+  token count on GPT-4 vs. Claude vs. Llama, because each was trained with its own
+  vocabulary. Cost and context-window estimates from one provider don't transfer to
+  another — always re-measure with the target model's actual tokenizer.
+- **Numbers and code tokenize unintuitively.** Multi-digit numbers often split at
+  arbitrary boundaries (`12345` might become `123` + `45`), which is part of why LLMs
+  are historically weak at multi-digit arithmetic done "in one step" — the model isn't
+  seeing the number the way a calculator would.
+- **Trailing whitespace and casing change token boundaries.** `" hello"` and `"hello"`
+  can tokenize differently, which matters when you're programmatically constructing
+  prompts and comparing token counts, or building anything sensitive to exact
+  formatting (structured output parsers, prompt caching prefixes).
+
+## Context window growth is not free scaling
+
+Naively, self-attention costs grow **quadratically** with sequence length (every token
+attends to every other token), which is why early transformers had small context
+windows and why modern long-context models rely on architectural optimizations —
+sparse/local attention patterns, sliding windows, KV-cache reuse across turns, and
+techniques like grouped-query attention — rather than a brute-force parameter increase.
+As a builder, the practical implication is: a bigger context window is not a free pass
+to stuff in everything you might need. Longer inputs still cost proportionally more
+tokens, still increase latency (more to process before the first output token appears),
+and models still exhibit **positional recall bias** — information in the middle of a
+very long context is measurably more likely to be under-weighted than information near
+the start or end ("lost in the middle").
+
+## KV-caching: why the second half of a response streams faster
+
+During autoregressive generation, recomputing attention over the entire prompt from
+scratch for every single new token would be wasteful — the key/value projections for
+already-processed tokens don't change. Production inference engines cache these
+(the **KV cache**) so each new token only requires computing attention for the new
+token against the cached history, not reprocessing everything. This is also the
+mechanism behind provider-side **prompt caching**: if a request's prefix exactly
+matches a recent request's prefix, the provider can reuse cached computation for that
+shared prefix and only pay the compute cost for the new suffix — which is why
+stable-content-first prompt ordering (system prompt and static context before the
+variable user query) meaningfully cuts cost and latency at scale.
+
+### Trade-offs across generation configuration
+
+| Setting | Lower value | Higher value | When to prefer lower |
+|---|---|---|---|
+| Temperature | Deterministic, repetitive | Varied, more creative, riskier | Extraction, classification, structured output |
+| Top-p | Narrow candidate set | Wider candidate set | Anything requiring factual precision |
+| Max output tokens | Cheaper, faster, may truncate | More complete, costs more | Anything with a bounded expected answer length |
+
+### Try it yourself
+
+You're building an eval suite for a classification prompt and every test run produces a
+slightly different output even though the input is identical. What's the most likely
+cause, and what's the fix?
+
+<details>
+<summary>Solution</summary>
+
+The most likely cause is nonzero temperature (and/or top-p) causing the sampler to pick
+a different, non-top token on some runs. For a classification task, there's no need for
+sampling diversity — set `temperature=0` (and leave top-p at default or also minimize
+it) so the model deterministically picks the highest-probability token every time,
+making the eval suite reproducible. Note that even at `temperature=0`, some providers'
+infrastructure (e.g., load-balanced batched inference) can introduce tiny
+non-determinism — if you need byte-for-byte reproducibility, check the provider's
+documented guarantees rather than assuming temperature 0 means fully deterministic.
+
+</details>

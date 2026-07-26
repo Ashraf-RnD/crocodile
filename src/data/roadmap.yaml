@@ -147,6 +147,7 @@ roadmap:
       name: LLM Engineering
       duration: 4 weeks
       topics:
+        - LLM Fundamentals
         - Prompt Engineering
         - Function Calling
         - Structured Output
