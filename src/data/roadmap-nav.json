@@ -408,8 +408,13 @@
       "name": "LLM Engineering",
       "duration": "4 weeks",
       "objective": null,
-      "topicCount": 14,
+      "topicCount": 15,
       "topics": [
+        {
+          "slug": "llm-fundamentals",
+          "title": "LLM Fundamentals",
+          "category": null
+        },
         {
           "slug": "prompt-engineering",
           "title": "Prompt Engineering",
